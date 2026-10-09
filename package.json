@@ -1,0 +1,60 @@
+{
+  "name": "studyself",
+  "version": "0.1.0",
+  "private": true,
+  "license": "UNLICENSED",
+  "description": "Local-first knowledge workspace with reviewed folder-based synchronization",
+  "type": "module",
+  "main": "src/desktop/main.mjs",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "start": "npm run build && electron .",
+    "dev": "node src/server.mjs",
+    "check:project": "node scripts/check-project.mjs",
+    "test": "node --test tests/*.test.mjs",
+    "test:ui": "node scripts/test-ui.mjs",
+    "test:desktop": "node scripts/test-desktop.mjs",
+    "test:packaged": "node scripts/test-desktop.mjs --packaged",
+    "benchmark": "node scripts/benchmark.mjs",
+    "dist": "npm run build && electron-builder --win nsis --x64"
+  },
+  "devDependencies": {
+    "@tiptap/core": "^3.31.4",
+    "@tiptap/extension-table": "^3.31.4",
+    "@tiptap/starter-kit": "^3.31.4",
+    "dompurify": "^3.3.0",
+    "electron": "^42.0.0",
+    "electron-builder": "^26.0.0",
+    "esbuild": "^0.27.0",
+    "lucide": "^0.468.0",
+    "marked": "^17.0.0",
+    "playwright": "^1.58.0",
+    "turndown": "^7.2.4",
+    "turndown-plugin-gfm": "^1.0.2"
+  },
+  "build": {
+    "appId": "cn.studyself.desktop",
+    "productName": "StudySelf",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "src/core/**/*",
+      "src/desktop/**/*",
+      "dist/**/*",
+      "package.json"
+    ],
+    "asar": true,
+    "win": {
+      "target": "nsis",
+      "signAndEditExecutable": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "deleteAppDataOnUninstall": false,
+      "artifactName": "StudySelf-${version}-Setup.${ext}"
+    }
+  }
+}

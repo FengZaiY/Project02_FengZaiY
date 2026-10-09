@@ -1,0 +1,36 @@
+node_modules/
+dist/
+release/
+.local/
+.cache/
+artifacts/
+*.log
+
+# Local credentials and developer overrides
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.pfx
+*.p12
+AGENTS.override.md
+.codex-log/
+.codex/config.local.toml
+
+# User knowledge data, transport packets and independent backups
+*.sqlite
+*.sqlite-*
+*.db
+*.db-*
+*.ssync
+*.partial
+StudySelfSync/
+backups/
+
+# Editor and operating-system files
+.idea/
+.vscode/
+Thumbs.db
+Desktop.ini
+.DS_Store
