@@ -6,7 +6,6 @@ import { fileURLToPath } from 'node:url';
 import { Store } from '../src/core/store.mjs';
 import { FolderTransport, makePairingKey, importAttachment } from '../src/core/transport.mjs';
 import { BackupManager } from '../src/core/backup.mjs';
-import { ModelManager } from '../src/core/models.mjs';
 import { Service } from '../src/core/service.mjs';
 import { uuid, sha, canonical } from '../src/core/util.mjs';
 
@@ -151,14 +150,15 @@ test('small attachments transfer by content identity, not source paths', async t
   assert.equal(fs.readFileSync(local.path, 'utf8'), 'asset body');
   assert.notEqual(local.path, a.assetLocation(asset.id).path);
 });
-test('large attachment metadata remains readable and manual association verifies its hash', async t => {
+test('large attachments arrive completely and manual association still verifies identity', async t => {
   const { directory, a, b, sync } = setup(t);
   const input = path.join(directory, 'video.mp4');
   fs.writeFileSync(input, Buffer.alloc(17 * 1024 * 1024, 2));
   const asset = await importAttachment(a, input);
   const record = note(a, 'video notes', { assetIds: [asset.id] }); await sync();
   assert.equal(b.get(record.id).data.content, 'video notes');
-  assert.equal(b.assetLocation(asset.id), undefined);
+  assert.ok(b.assetLocation(asset.id));
+  assert.equal(sha(fs.readFileSync(b.assetLocation(asset.id).path)), asset.data.sha256);
   const wrong = path.join(directory, 'wrong.mp4'); fs.writeFileSync(wrong, 'bad');
   await assert.rejects(importAttachment(b, wrong, { expectedId: asset.id }), /does not match/);
   await importAttachment(b, input, { expectedId: asset.id, pinned: true });
@@ -228,42 +228,6 @@ test('cost aggregation deduplicates request IDs and keeps currencies separate', 
   assert.equal(usage.totals.CNY.requests, 1); assert.equal(usage.totals.USD.requests, 1);
   assert.equal(usage.realtime, false); assert.equal(usage.duplicates.length, 1);
 });
-test('model catalogs synchronize, but keys and installed-model state do not', async t => {
-  const { a, b, sync } = setup(t);
-  const manager = new ModelManager(a);
-  manager.configure({ id: 'deepseek', name: 'DeepSeek', protocol: 'openai', endpoint: 'https://api.deepseek.com', apiKey: 'private-key' });
-  const model = a.write({ type: 'model', data: { title: 'My model', providerId: 'deepseek', modelName: 'chosen-model' } });
-  await sync();
-  assert.equal(manager.availability(model.id).available, true);
-  assert.equal(new ModelManager(b).availability(model.id).available, false);
-  assert.equal(b.secret('api:deepseek'), null);
-});
-test('sensitive sources and domain scope block cloud prompts before any request', t => {
-  const { a } = setup(t);
-  const manager = new ModelManager(a, () => { throw new Error('Network should not be used'); });
-  manager.configure({ id: 'deepseek', name: 'DeepSeek', protocol: 'openai', endpoint: 'https://api.deepseek.com', apiKey: 'secret' });
-  const model = a.write({ type: 'model', data: { title: 'Cloud', providerId: 'deepseek', modelName: 'm' } });
-  const source = a.write({ type: 'source', data: { title: 'Private source', domain: 'AI', sensitive: true } });
-  const record = note(a, 'text', { sourceIds: [source.id] });
-  assert.throws(() => manager.estimate({ modelId: model.id, noteId: record.id, domain: 'AI', prompt: 'Explain' }), { code: 'SENSITIVE' });
-  assert.throws(() => manager.estimate({ modelId: model.id, noteId: record.id, domain: 'English', prompt: 'Explain' }), /domain/);
-});
-test('paid calls require preview, preserve actual usage separately, and never repeat request IDs', async t => {
-  const { a } = setup(t); let calls = 0;
-  const manager = new ModelManager(a, async () => {
-    calls++;
-    return new Response(JSON.stringify({ choices: [{ message: { content: 'Answer' } }], usage: { prompt_tokens: 12, completion_tokens: 5 } }));
-  });
-  manager.configure({ id: 'deepseek', name: 'DeepSeek', protocol: 'openai', endpoint: 'https://api.deepseek.com', apiKey: 'secret' });
-  const model = a.write({ type: 'model', data: { title: 'Cloud', providerId: 'deepseek', modelName: 'm', inputRate: 1, outputRate: 2, currency: 'CNY' } });
-  const input = { modelId: model.id, domain: 'AI', prompt: 'Explain', callId: uuid() };
-  await assert.rejects(manager.ask(input), { code: 'CONFIRM_COST' });
-  const result = await manager.ask({ ...input, estimateShown: true });
-  assert.equal(result.answer, 'Answer'); assert.equal(result.billedCost, null);
-  assert.equal(a.usage().totals.CNY.inputTokens, 12);
-  await assert.rejects(manager.ask({ ...input, estimateShown: true }), { code: 'DUPLICATE_CALL' });
-  assert.equal(calls, 1);
-});
 test('importing tasks does not call models or resume a different device worker', async t => {
   const { a, b, sync } = setup(t);
   const task = a.write({ type: 'task', data: { title: 'Home task', ownerDevice: a.deviceId, modelId: uuid(), status: 'running' } });
@@ -288,20 +252,6 @@ test('explicit stale branch save retains the newer edit instead of overwriting i
   const branch = a.write({ id: base.id, type: 'note', data: { ...base.data, content: 'unsaved local edit' }, parents: base.heads, allowBranch: true });
   assert.equal(branch.conflict, true);
   assert.deepEqual(new Set(branch.versions.map(e => e.data.content)), new Set(['arrived remotely', 'unsaved local edit']));
-});
-test('custom provider metadata synchronizes without local endpoint or secret', async t => {
-  const { a, b, sync } = setup(t);
-  const manager = new ModelManager(a);
-  manager.configure({ id: 'private_gateway', name: 'My gateway', protocol: 'openai', endpoint: 'https://gateway.example.test/v1', apiKey: 'do-not-share' });
-  const model = a.write({ type: 'model', data: { title: 'Private model', providerId: 'private_gateway', modelName: 'model' } });
-  await sync();
-  const remote = new ModelManager(b);
-  const provider = remote.providers().find(p => p.id === 'private_gateway');
-  assert.equal(provider.name, 'My gateway');
-  assert.equal(provider.endpoint, '');
-  assert.equal(provider.hasKey, false);
-  assert.equal(remote.availability(model.id).available, false);
-  assert.ok(!JSON.stringify(b.allEvents()).includes('gateway.example.test'));
 });
 test('backup restore is local, not a fabricated remote receipt', async t => {
   const { directory, a, b, tb } = setup(t);
@@ -332,18 +282,6 @@ test('a formerly pending malformed child does not block unrelated valid revision
   assert.equal(b.get(parent.id).data.content, 'original');
   assert.equal(b.summary().pendingParents, 0);
 });
-test('failed model requests are never automatically retried and unknown costs stay unknown', async t => {
-  const { a } = setup(t); let calls = 0;
-  const manager = new ModelManager(a, async () => { calls++; throw new Error('Connection interrupted'); });
-  manager.configure({ id: 'deepseek', name: 'DeepSeek', protocol: 'openai', endpoint: 'https://api.deepseek.com', apiKey: 'secret' });
-  const model = a.write({ type: 'model', data: { title: 'Cloud', providerId: 'deepseek', modelName: 'm' } });
-  const input = { modelId: model.id, domain: 'AI', prompt: 'hello', callId: uuid(), estimateShown: true };
-  await assert.rejects(manager.ask(input), { code: 'CONFIRM_COST' });
-  await assert.rejects(manager.ask({ ...input, confirmed: true }), /interrupted/);
-  await assert.rejects(manager.ask({ ...input, confirmed: true }), { code: 'DUPLICATE_CALL' });
-  assert.equal(calls, 1);
-  assert.equal(a.list({ type: 'task' })[0].data.status, 'failed_cost_unknown');
-});
 test('restart labels only this device interrupted tasks and does not execute them', t => {
   const { directory } = setup(t);
   const profile = path.join(directory, 'restart');
@@ -354,7 +292,7 @@ test('restart labels only this device interrupted tasks and does not execute the
   const restarted = new Service(profile, { fetcher: () => { throw new Error('Unexpected network'); } });
   assert.equal(restarted.store.get(own.id).data.status, 'interrupted_cost_unknown');
   assert.equal(restarted.store.get(foreign.id).data.status, 'running');
-  assert.equal(restarted.state().usage.unsettledTasks, 1);
+  assert.equal(restarted.models, undefined);
   restarted.close();
 });
 test('restoring an older backup never rolls back a newer local head', async t => {
@@ -366,17 +304,6 @@ test('restoring an older backup never rolls back a newer local head', async t =>
   await new BackupManager(b).restore(backup.directory);
   assert.equal(b.get(base.id).data.content, 'newer local work');
   assert.equal(b.get(base.id).conflict, false);
-});
-test('Ollama cloud entries are not considered private local inference', async t => {
-  const { a } = setup(t);
-  const manager = new ModelManager(a, async url => new Response(JSON.stringify(url.endsWith('/tags')
-    ? { models: [{ name: 'example:cloud', size: 0, remote_host: 'https://example.test', details: {} }] }
-    : { models: [] })));
-  const model = a.write({ type: 'model', data: { title: 'Cloud through Ollama', providerId: 'ollama', modelName: 'example:cloud' } });
-  await manager.test('ollama');
-  const privateNote = note(a, 'private', { sensitive: true });
-  assert.equal(manager.availability(model.id).local, false);
-  assert.throws(() => manager.estimate({ modelId: model.id, domain: 'AI', prompt: 'explain', noteId: privateNote.id }), { code: 'SENSITIVE' });
 });
 test('content-deduplicated backup restores every stable attachment ID', async t => {
   const { directory, a, b } = setup(t);
@@ -399,4 +326,84 @@ test('backup cannot silently omit missing attachment declarations', async t => {
   fs.writeFileSync(manifestPath, JSON.stringify(manifest));
   await assert.rejects(new BackupManager(b).restore(result.directory), /omitted/);
   assert.equal(b.allEvents().length, 0);
+});
+
+test('fresh workspaces have no preset libraries and model metadata does not create one', t => {
+  const { a } = setup(t);
+  assert.deepEqual(a.libraries(), []);
+  a.write({ type: 'model', data: { title: 'Test', providerId: 'deepseek', modelName: 'mock' } });
+  assert.deepEqual(a.libraries(), []);
+  const library = a.saveLibrary({ title: '我的研究', description: '自建知识库' });
+  assert.equal(a.libraries().length, 1);
+  assert.equal(library.data.domain, library.id);
+  assert.throws(() => a.saveLibrary({ title: '  我的研究 ' }), /同名/);
+  assert.throws(() => a.saveLibrary({ title: ' ' }), /名称/);
+});
+test('library rename keeps note and conversation scopes stable and rejects stale edits', t => {
+  const { a } = setup(t);
+  const library = a.saveLibrary({ title: '学习资料' });
+  const record = note(a, 'kept', { domain: library.data.domain });
+  const conversation = a.write({ type: 'conversation', data: { title: '讨论', domain: library.data.domain, messages: [] } });
+  a.saveLibrary({ id: library.id, title: '我的专题', description: 'renamed', parents: library.heads });
+  assert.equal(a.get(record.id).data.domain, library.id);
+  assert.equal(a.get(conversation.id).data.domain, library.id);
+  assert.equal(a.history(record.id).length, 1);
+  assert.equal(a.libraries()[0].activeCount, 2);
+  assert.throws(() => a.saveLibrary({ id: library.id, title: 'stale', parents: library.heads }), { code: 'CONFLICT' });
+  const current = a.get(library.id);
+  assert.throws(() => a.write({ id: library.id, type: 'library', parents: current.heads,
+    data: { ...current.data, domain: 'changed' } }), /范围标识/);
+});
+test('legacy library discovery preserves records and converges across devices', async t => {
+  const { a, b, sync } = setup(t);
+  const old = note(a, 'old');
+  await sync();
+  const count = a.allEvents().length;
+  const first = a.libraries()[0], second = b.libraries()[0];
+  assert.equal(first.legacy, true);
+  assert.equal(first.id, second.id);
+  assert.equal(a.allEvents().length, count);
+  a.saveLibrary({ id: first.id, title: '自定义专题', parents: [] });
+  b.saveLibrary({ id: second.id, title: '另一台的名称', parents: [] });
+  await sync();
+  assert.equal(a.get(first.id).conflict, true);
+  assert.equal(a.get(old.id).data.domain, 'AI');
+  assert.equal(a.get(old.id).conflict, false);
+});
+test('empty library deletion and restore sync without deleting contents', async t => {
+  const { a, b, sync } = setup(t);
+  const library = a.saveLibrary({ title: '空库' });
+  await sync();
+  a.remove(library.id, library.heads);
+  await sync();
+  assert.equal(b.libraries()[0].deleted, true);
+  const deleted = b.get(library.id);
+  b.restoreVersion(library.id, deleted.heads[0], deleted.heads);
+  await sync();
+  assert.equal(a.get(library.id).deleted, false);
+  const record = note(a, 'keep', { domain: library.id });
+  assert.throws(() => a.remove(library.id, a.get(library.id).heads), /仍有资料/);
+  a.remove(record.id, record.heads);
+  assert.throws(() => a.remove(library.id, a.get(library.id).heads), /仍有资料/);
+});
+test('remote content arriving after a library deletion remains discoverable', async t => {
+  const { a, b, sync } = setup(t);
+  const library = a.saveLibrary({ title: '并发资料' });
+  await sync();
+  a.remove(library.id, library.heads);
+  const record = note(b, 'not lost', { domain: library.id });
+  await sync();
+  const entry = a.libraries().find(item => item.id === library.id);
+  assert.equal(entry.deleted, true);
+  assert.equal(entry.contentCount, 1);
+  assert.equal(a.get(record.id).data.content, 'not lost');
+});
+test('library metadata is included in backups without rewriting historical scopes', async t => {
+  const { directory, a, b } = setup(t);
+  const library = a.saveLibrary({ title: '研究手册', description: '保留说明' });
+  const record = note(a, 'body', { domain: library.id });
+  const backup = await new BackupManager(a).create(path.join(directory, 'backups'));
+  await new BackupManager(b).restore(backup.directory);
+  assert.equal(b.libraries()[0].data.description, '保留说明');
+  assert.equal(b.get(record.id).data.domain, library.id);
 });

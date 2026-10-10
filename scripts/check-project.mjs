@@ -13,8 +13,11 @@ const required = [
   'docs/plans/README.md', 'docs/decisions/README.md',
   'docs/decisions/0001-local-first-folder-sync.md',
   'src/core/store.mjs', 'src/core/service.mjs', 'src/core/transport.mjs',
-  'src/core/backup.mjs', 'src/core/models.mjs', 'src/desktop/main.mjs',
-  'src/desktop/preload.cjs', 'src/server.mjs', 'web/app.js', 'tests/core.test.mjs'
+  'src/core/current-sync.mjs', 'src/core/sync-state.mjs', 'src/core/resumable-files.mjs',
+  'src/core/agent-access.mjs', 'skills/studyself-organize/SKILL.md', 'src/desktop/main.mjs',
+  'src/desktop/preload.cjs', 'src/server.mjs', 'web/app.js', 'tests/core.test.mjs',
+  'src/core/rich-schema.mjs', 'src/core/rich-content.mjs', 'src/core/media.mjs',
+  'web/rich-editor.js', 'web/rich-canvas.js', 'web/rich.css', 'tests/rich.test.mjs', 'scripts/test-rich-ui.mjs'
 ];
 const read = name => fs.readFileSync(path.join(root, name), 'utf8');
 for (const name of required) {
@@ -32,6 +35,9 @@ const scripts = {
   'check:project': 'node scripts/check-project.mjs',
   test: 'node --test tests/*.test.mjs',
   'test:ui': 'node scripts/test-ui.mjs',
+  'test:libraries': 'node scripts/test-libraries-ui.mjs',
+  'test:agents': 'node scripts/test-agents-ui.mjs',
+  'test:rich': 'node scripts/test-rich-ui.mjs',
   'test:desktop': 'node scripts/test-desktop.mjs',
   'test:packaged': 'node scripts/test-desktop.mjs --packaged',
   benchmark: 'node scripts/benchmark.mjs'

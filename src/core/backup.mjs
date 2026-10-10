@@ -3,12 +3,18 @@ import path from 'node:path';
 import { uuid, now, sha, atomicWrite, check, inside, noSymlink, hashFile, outside } from './util.mjs';
 import { validateEvent } from './store.mjs';
 import { SMALL_ASSET_LIMIT } from './transport.mjs';
+import { GitVersions, SHARED, mergeControl } from './git-versions.mjs';
 
 export class BackupManager {
   constructor(store) { this.store = store; this.running = false; }
+  requireLocalBackup(destination) {
+    const folder = this.store.local('syncFolder');
+    check(!folder || outside(folder, destination) && outside(destination, folder), '独立备份目前为明文，请选择同步空间之外的本地目录');
+  }
   async create(destination, includeLarge = false) {
     check(!this.running, 'Backup is already running', 'BUSY');
     check(path.isAbsolute(destination), 'Choose an absolute backup directory');
+    this.requireLocalBackup(destination);
     noSymlink(destination);
     check(outside(this.store.directory, destination), 'Backup directory must be outside the local database directory');
     this.running = true;
@@ -21,6 +27,19 @@ export class BackupManager {
       atomicWrite(path.join(root, 'revisions.json'), text);
       const manifest = { format: 1, id, createdAt: now(), deviceName: this.store.getMeta('deviceName'),
         revisionsSha256: sha(text), revisions: events.length, assets: [], pending: [], localComplete: false, cloudVerified: false };
+      check(!this.store.local('v2Journal'), '请先恢复未完成的版本操作再备份');
+      const versions = new GitVersions(this.store);
+      manifest.gitVersions = [];
+      const frozen = versions.scopes().map(({ scope }) => ({ scope,
+        commits: [...new Set([versions.pointer(scope)?.commit, ...(this.store.local(`v2Recovered:${sha(scope)}`) || [])].filter(Boolean))] }));
+      for (const { scope, commits } of frozen) {
+        for (const commit of commits) {
+          const name = `git/${sha(scope)}-${commit}.bundle`, file = inside(root, name);
+          fs.mkdirSync(path.dirname(file), { recursive: true });
+          versions.bundle(scope, commit, null, file);
+          manifest.gitVersions.push({ scope, commit, path: name, sha256: await hashFile(file), size: fs.statSync(file).size });
+        }
+      }
       const allAssets = new Map(events.filter(e => e.type === 'asset').map(e => [e.data.sha256, e]));
       for (const event of allAssets.values()) {
         const file = this.store.assetLocation(event.entityId)?.path;
@@ -61,6 +80,7 @@ export class BackupManager {
   }
   async continue(root) {
     check(!this.running, 'Backup is already running', 'BUSY');
+    this.requireLocalBackup(root);
     this.running = true;
     try {
       const { manifest, events } = await this.verify(root);
@@ -135,13 +155,30 @@ export class BackupManager {
       noSymlink(file);
       check(fs.statSync(file).size === item.size && await hashFile(file) === item.sha256, 'Backup attachment checksum mismatch');
     }
-    return { manifest, events: ordered };
+    check(manifest.gitVersions === undefined || Array.isArray(manifest.gitVersions) && manifest.gitVersions.length <= 10000, 'Invalid Git backup manifest');
+    const gitSnapshots = [], git = new GitVersions(this.store), tips = new Set();
+    for (const item of manifest.gitVersions || []) {
+      check(typeof item.scope === 'string' && item.scope.length > 0 && item.scope.length <= 100
+        && /^[a-f0-9]{40}$/.test(item.commit) && /^[a-f0-9]{64}$/.test(item.sha256)
+        && item.path === `git/${sha(item.scope)}-${item.commit}.bundle`, 'Invalid Git backup path');
+      check(!tips.has(item.path), 'Duplicate Git backup tip'); tips.add(item.path);
+      const file = inside(root, item.path); noSymlink(file);
+      check(Number.isSafeInteger(item.size) && item.size > 0 && item.size <= 128 * 1024 * 1024
+        && fs.statSync(file).size === item.size && await hashFile(file) === item.sha256, 'Git backup checksum mismatch');
+      const snapshot = git.receiveBundle(item.scope, file, item.commit);
+      check(snapshot.events.every(event => byId.get(event.id)?.hash === event.hash), 'Git backup does not match revision history');
+      gitSnapshots.push({ ...item, snapshot });
+    }
+    return { manifest, events: ordered, gitSnapshots };
   }
   async restore(root) {
     check(!this.running, 'Backup operation is in progress', 'BUSY');
     this.running = true;
     try {
-      const { manifest, events } = await this.verify(root);
+      check(!this.store.local('v2Journal'), '请先恢复未完成的版本操作');
+      const { manifest, events, gitSnapshots } = await this.verify(root);
+      const git = new GitVersions(this.store);
+      for (const item of gitSnapshots) git.git(item.scope, ['update-ref', `refs/archives/${item.commit}`, item.commit]);
       // Stage verified, content-addressed files before committing revision history.
       for (const item of manifest.assets) {
         const destination = path.join(this.store.directory, 'objects', item.sha256);
@@ -165,8 +202,13 @@ export class BackupManager {
             this.store.bindAsset(event.entityId, path.join(this.store.directory, 'objects', event.data.sha256));
           }
         }
+        for (const item of gitSnapshots) {
+          const key = `v2Recovered:${sha(item.scope)}`;
+          this.store.local(key, [...new Set([...(this.store.local(key) || []), item.commit])]);
+          if (item.scope === SHARED) this.store.local('v2Control', mergeControl(git.control(), item.snapshot.control));
+        }
       });
-      return { imported, unavailableAssets: manifest.pending.length, cloudVerified: false };
+      return { imported, gitHistories: gitSnapshots.length, unavailableAssets: manifest.pending.length, cloudVerified: false };
     } finally { this.running = false; }
   }
 }

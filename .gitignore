@@ -25,6 +25,11 @@ AGENTS.override.md
 *.db-*
 *.ssync
 *.partial
+*.storage.json
+*.storage.json.lock
+.studyself-lock.json
+.studyself-incomplete.json
+.studyself-library.json
 StudySelfSync/
 backups/
 

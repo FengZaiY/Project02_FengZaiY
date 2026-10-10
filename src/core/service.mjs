@@ -1,61 +1,73 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import os from 'node:os';
 import { Store } from './store.mjs';
-import { FolderTransport, makePairingKey, importAttachment } from './transport.mjs';
-import { BackupManager } from './backup.mjs';
-import { ModelManager } from './models.mjs';
+import { makePairingKey, importAttachment } from './transport.mjs';
+import { CurrentSync } from './current-sync.mjs';
+import { AgentAccess } from './agent-access.mjs';
 import { uuid, check, now, atomicWrite } from './util.mjs';
+import { workspaceLock } from './workspace-lock.mjs';
+
+const sharedTab = tab => Object.fromEntries(['id', 'recordId', 'title', 'domain', 'scroll']
+  .filter(key => Object.hasOwn(tab, key)).map(key => [key, tab[key]]));
 
 export class Service {
   constructor(directory, options = {}) {
-    this.store = new Store(directory, options);
-    this.transport = new FolderTransport(this.store);
-    this.backup = new BackupManager(this.store);
-    this.models = new ModelManager(this.store, options.fetcher);
-    this.timer = null;
-    this.idleCheck = options.idleCheck;
-    for (const task of this.store.list({ type: 'task' })) {
-      if (task.data.ownerDevice === this.store.deviceId && task.data.status === 'running' && !task.conflict) {
-        this.store.write({ id: task.id, type: 'task', parents: task.heads, data: { ...task.data, status: 'interrupted_cost_unknown' } });
+    this.releaseLock = workspaceLock(directory);
+    this.storage = options.storage;
+    try {
+      this.store = new Store(directory, options);
+      this.transport = new CurrentSync(this.store);
+      this.agents = new AgentAccess(this.store);
+      this.timer = null;
+      this.idleCheck = options.idleCheck;
+      for (const task of this.store.list({ type: 'task' })) {
+        if (task.data.ownerDevice === this.store.deviceId && task.data.status === 'running' && !task.conflict) {
+          this.store.write({ id: task.id, type: 'task', parents: task.heads, data: { ...task.data, status: 'interrupted_cost_unknown' } });
+        }
       }
-    }
+    } catch (error) { this.store?.close(); this.releaseLock(); throw error; }
   }
-  startTimer() {
-    this.timer = setInterval(() => {
-      if (this.transport.config().enabled && !this.transport.running) this.transport.cycle().catch(error => {
-        this.store.local('syncLastReport', { finishedAt: now(), errors: [{ message: error.message }], cloudUploadVerified: false });
-      });
-      if (this.idleCheck && this.store.local('idleBackup') && this.idleCheck() >= 120 && !this.backup.running) {
-        const pending = (this.store.local('backups') || []).find(item => item.deferredLarge > 0);
-        if (pending) this.backup.continue(pending.directory).catch(error => this.store.local('idleBackupError', error.message));
-      }
-    }, 15000);
-    this.timer.unref();
+  startTimer() {}
+  close() {
+    if (this.closed) return;
+    this.closed = true;
+    if (this.timer) clearInterval(this.timer);
+    this.agents.close(); this.store.close(); this.releaseLock();
   }
-  close() { if (this.timer) clearInterval(this.timer); this.store.close(); }
   state() {
-    const tasks = this.store.list({ type: 'task' });
-    return { ...this.store.summary(), sync: this.transport.config(), providers: this.models.providers(),
-      backups: this.store.local('backups') || [], usage: { ...this.store.usage(),
-        unsettledTasks: tasks.filter(task => ['failed_cost_unknown', 'interrupted_cost_unknown'].includes(task.data.status)).length },
-      recentTasks: tasks.slice(0, 20),
+    return { ...this.store.summary(), libraries: this.store.directories.describe(this.store.libraries()), sync: this.transport.config(),
       workspace: this.store.local('workspace') || { tabs: [], selectedTab: null },
-      capabilities: { memoryBytes: os.totalmem(), cpus: os.cpus().length, platform: os.platform(), gpu: '请在 Ollama 中核验实际占用' },
-      idleBackup: { supported: !!this.idleCheck, enabled: !!this.store.local('idleBackup'), error: this.store.local('idleBackupError') },
-      version: '0.1.0', localDataDirectory: this.store.directory };
+      version: '0.1.1', localDataDirectory: this.store.directory };
   }
   async call(method, input = {}) {
     switch (method) {
+      case 'storageStatus': return this.storage?.status() || { directory: this.store.directory, unavailable: true };
+      case 'storageInspect':
+      case 'storageSchedule':
+      case 'storageCancel':
+        check(this.storage, '请重新启动应用以启用本地存储设置');
+        return this.storage[({ storageInspect: 'inspect', storageSchedule: 'schedule', storageCancel: 'cancel' })[method]](input);
       case 'state': return this.state();
+      case 'agentStatus': return this.agents.status();
+      case 'agentConfigure': return this.agents.configure(input.enabled === true);
+      case 'agentGrant': return this.agents.createGrant(input);
+      case 'agentRevoke': return this.agents.revoke(input.id);
+      case 'agentPreferencesSave': return this.agents.savePreferences(input);
+      case 'agentSkill': return { files: this.agents.skillFiles(), preferences: this.agents.preferences() };
+      case 'librarySave': return this.store.saveLibrary(input);
+      case 'libraryDirectory': {
+        const record = this.store.libraries().find(item => item.id === input.id);
+        check(record, '知识库不存在');
+        return { directory: this.store.directories.ensure(record) };
+      }
       case 'records': {
-        const records = this.store.list(input);
+        const records = this.store.list(input).filter(record => !['model', 'provider', 'usage', 'task', 'agentPreferences'].includes(record.type));
         return input.preview ? records.map(record => ({ ...record, versions: [],
           data: { ...record.data, content: record.data.content?.slice(0, 1500), messages: record.data.messages?.slice(-1) } })) : records;
       }
       case 'record': return this.store.get(input.id);
       case 'save': {
-        check(!['usage', 'task'].includes(input.type), 'Task and cost records may only be created by a model request');
+        check(['note', 'draft', 'source', 'annotation', 'relation', 'proposal', 'workspace'].includes(input.type), '该类型不允许直接修改；内置聊天与模型管理已移除');
         return this.store.write({ ...input, allowBranch: false });
       }
       case 'saveBranch':
@@ -69,16 +81,31 @@ export class Service {
         check(Array.isArray(input.items) && input.items.length > 0, 'No proposed items');
         return this.store.write({ type: 'proposal', data: { title: input.title || '待确认整理方案', domain: input.domain || '通用',
           items: input.items.map(item => ({ id: uuid(), targetId: item.targetId || uuid(), parents: item.parents || [],
-            data: { title: item.title, content: item.content || '', domain: input.domain || '通用', tags: item.tags || [], sensitive: item.sensitive === true },
+            data: { title: item.title, content: item.content || '', domain: input.domain || '通用', tags: item.tags || [],
+              sourceIds: item.sourceIds || [], assetIds: item.assetIds || [], sensitive: item.sensitive === true },
             status: 'pending' })) } });
       }
       case 'syncConfigure': return this.transport.configure(input.folder, input.key);
       case 'pairingKey': return { key: this.store.secret('pairing') || makePairingKey() };
-      case 'sync': return this.transport.cycle();
-      case 'syncPause': this.store.local('syncEnabled', !input.paused); return this.transport.config();
+      case 'sync':
+      case 'syncScan': return this.transport.scan();
+      case 'syncStatus': return this.transport.status();
+      case 'syncPlan': return this.transport.plan(input);
+      case 'syncPublish': return this.transport.publish(input);
+      case 'syncImport': return this.transport.importLatest(input);
+      case 'syncCancel': return this.transport.cancel();
+      case 'syncConfirmBatch': return this.transport.confirmBatch(input);
+      case 'syncConfirmUpload': return this.transport.confirmUpload(input);
+      case 'deviceStatus': return this.transport.devices();
+      case 'deviceSetPrimary': return this.transport.setPrimary(input);
+      case 'deviceVerify': return this.transport.exclusive(() => this.transport.verifyPrimary());
+      case 'assetHydrate': return this.transport.hydrate(input);
+      case 'assetEvict': return this.transport.evict(input);
+      case 'syncPause': return this.transport.pause();
       case 'deviceName':
         check(typeof input.name === 'string' && input.name.trim().length > 0, 'Enter a device name');
-        this.store.setMeta('deviceName', input.name.slice(0, 100)); return this.state();
+        check(!this.transport.running, '请等待同步操作完成');
+        this.store.setMeta('deviceName', input.name.slice(0, 100)); this.transport.announce(); return this.state();
       case 'assetImport': return importAttachment(this.store, input.path, input);
       case 'assets': return this.store.list({ type: 'asset' }).map(record => {
         const local = this.store.assetLocation(record.id);
@@ -96,26 +123,16 @@ export class Service {
         check(asset.data.size <= 24 * 1024 * 1024, 'This attachment is too large for an inline preview');
         return { mime: asset.data.mime, data: fs.readFileSync(local.path).toString('base64'), filename: asset.data.filename };
       }
-      case 'backupCreate': return this.backup.create(input.directory, input.includeLarge === true);
-      case 'backupContinue': return this.backup.continue(input.directory);
-      case 'backupVerify': {
-        const result = await this.backup.verify(input.directory);
-        return { manifest: result.manifest, valid: true };
+      case 'workspaceSave': {
+        const workspace = { ...this.store.local('workspace'), ...input };
+        this.store.local('workspace', workspace); return workspace;
       }
-      case 'backupRestore': return this.backup.restore(input.directory);
-      case 'backupIdleEnable': this.store.local('idleBackup', input.enabled === true); return this.state().idleBackup;
-      case 'providerSave': return this.models.configure(input);
-      case 'providerTest': return this.models.test(input.id);
-      case 'models': return this.store.list({ type: 'model' }).map(model => ({ ...model, availability: this.models.availability(model.id) }));
-      case 'estimate': return this.models.estimate(input);
-      case 'ask': return this.models.ask(input);
-      case 'workspaceSave': this.store.local('workspace', input); return input;
       case 'workspacePublish': {
         const oldId = this.store.local('workspacePublicationId');
         const old = oldId && this.store.get(oldId);
         const record = this.store.write({ id: old?.id || uuid(), type: 'workspace', parents: old?.heads || [],
           data: { title: `${this.store.getMeta('deviceName')} · 工作区`, domain: '通用',
-            tabs: input.tabs || [], selectedTab: input.selectedTab, originDevice: this.store.deviceId } });
+            tabs: (input.tabs || []).map(sharedTab), selectedTab: input.selectedTab, originDevice: this.store.deviceId } });
         this.store.local('workspacePublicationId', record.id); return record;
       }
       case 'workspaceAdopt': {
@@ -123,7 +140,7 @@ export class Service {
         check(record?.type === 'workspace' && !record.conflict, 'Workspace not available');
         const current = this.store.local('workspace') || { tabs: [] };
         const known = new Set(current.tabs.map(t => t.id));
-        const incoming = (record.data.tabs || []).filter(t => !known.has(t.id));
+        const incoming = (record.data.tabs || []).filter(t => !known.has(t.id)).map(sharedTab);
         const result = { ...current, tabs: [...current.tabs, ...incoming] };
         this.store.local('workspace', result); return result;
       }
@@ -131,7 +148,7 @@ export class Service {
         const record = this.store.get(input.id);
         check(record && ['note', 'draft', 'source'].includes(record.type), 'Choose a text note');
         return { filename: `${record.data.title.replace(/[<>:"/\\|?*]/g, '_')}.md`,
-          text: `# ${record.data.title}\n\n${record.data.content || ''}\n\n---\n领域：${record.data.domain}\n标签：${record.data.tags.join(', ')}\n` };
+          text: `# ${record.data.title}\n\n${record.data.content || ''}\n\n---\n知识库：${this.store.libraries().find(item => item.data.domain === record.data.domain)?.data.title || record.data.domain}\n标签：${record.data.tags.join(', ')}\n` };
       }
       default: throw new Error('Unsupported operation');
     }

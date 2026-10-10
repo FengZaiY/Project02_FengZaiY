@@ -1,0 +1,402 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { DirectoryChannel, assetObjects, assetAAD, localAsset, sealBinary, validateAssets } from './sync-objects.mjs';
+import { describeAsset, assetChunk, diskSpace, receiveResumable } from './resumable-files.mjs';
+import { EMPTY_CONTROL, eventHeads, mergeControl, primaryRole, orderedEvents } from './sync-state.mjs';
+import { atomicWrite, canonical, check, hashFile, isHash, isId, noSymlink, now, outside, sha, uuid } from './util.mjs';
+
+const PART_BYTES = 2 * 1024 * 1024;
+const DEFAULT_BATCH = 256 * 1024 * 1024;
+const MIN_BATCH = 4 * 1024 * 1024 + 36;
+const MAX_MANIFEST = 32 * 1024 * 1024;
+const tick = () => new Promise(resolve => setImmediate(resolve));
+const manifestDigest = manifest => sha(canonical({ parts: manifest.parts, control: manifest.control, assets: manifest.assets }));
+
+export class CurrentSync {
+  constructor(store, options = {}) {
+    this.store = store; this.running = false; this.pauseRequested = false;
+    this.space = options.space || diskSpace; this.reserveBytes = options.reserveBytes ?? 64 * 1024 * 1024;
+    this.recoverLegacy(); this.announce();
+    const progress = this.progress();
+    if (progress?.state === 'running') this.saveProgress({ ...progress, state: 'paused', reason: '上次发布中断，可继续' });
+  }
+  config() {
+    const key = this.store.secret('pairing');
+    return { protocol: 3, configured: !!key && !!this.store.local('syncFolder'), enabled: false, manual: true,
+      folder: this.store.local('syncFolder') || '', channel: key ? sha(Buffer.from(key, 'hex')).slice(0, 16) : null,
+      attachmentMode: 'all-files', lastReport: this.store.local('v3LastReport'), cloudUploadVerified: false };
+  }
+  key(name) { return `v3:${this.config().channel || 'unconfigured'}:${name}`; }
+  value(name, value) { return arguments.length === 2 ? this.store.local(this.key(name), value) : this.store.local(this.key(name)); }
+  progress() { return this.value('progress'); }
+  saveProgress(value) { return this.value('progress', value); }
+  control() { return this.store.local('v3Control') || structuredClone(EMPTY_CONTROL); }
+  recoverLegacy() {
+    const journal = this.store.local('v2Journal');
+    if (journal) {
+      const events = orderedEvents(journal.snapshot.events, this.store);
+      const control = mergeControl(this.store.local('v2Control') || EMPTY_CONTROL, journal.snapshot.control || EMPTY_CONTROL);
+      this.store.transaction(() => {
+        if (journal.apply) {
+          for (const event of events) this.store.insert(event, true);
+          for (const [id, file] of journal.context?.bindings || []) this.store.bindAsset(id, file, this.store.assetLocation(id)?.pinned === 1);
+        }
+        this.store.local('v2Control', control);
+        this.store.local('retiredV2Journal', journal);
+        this.store.local('v2Journal', null);
+      });
+    }
+    if (!this.store.local('v3Control')) this.store.local('v3Control', mergeControl(EMPTY_CONTROL, this.store.local('v2Control') || EMPTY_CONTROL));
+  }
+  announce() {
+    const control = this.control(), name = this.store.getMeta('deviceName');
+    const last = control.devices.filter(item => item.deviceId === this.store.deviceId).sort((a, b) => a.at.localeCompare(b.at) || a.id.localeCompare(b.id)).at(-1);
+    if (last?.name === name) return;
+    control.devices.push({ id: uuid(), deviceId: this.store.deviceId, name, at: now() });
+    this.store.local('v3Control', control);
+  }
+  configure(folder, key) {
+    check(!this.running && !['ready', 'paused', 'blocked'].includes(this.progress()?.state), '请先完成或取消当前同步任务');
+    check(typeof folder === 'string' && path.isAbsolute(folder), '请选择绝对路径的同步目录');
+    check(typeof key === 'string' && /^[a-f0-9]{64}$/i.test(key), '配对密钥必须是 64 位十六进制');
+    const root = path.resolve(folder);
+    check(outside(this.store.directory, root) && outside(root, this.store.directory), '同步目录和工作目录不能互相包含');
+    noSymlink(root); fs.mkdirSync(root, { recursive: true });
+    this.store.local('syncFolder', root); this.store.setSecret('pairing', key.toLowerCase());
+    this.store.local('syncEnabled', false); return this.config();
+  }
+  channel() {
+    const config = this.config(); check(config.configured, '请先配置同步目录与配对密钥');
+    return new DirectoryChannel(path.join(config.folder, 'StudySelfSync', 'v3', config.channel), Buffer.from(this.store.secret('pairing'), 'hex'));
+  }
+  async exclusive(fn) {
+    check(!this.running, '同步操作正在进行', 'BUSY'); this.running = true; this.pauseRequested = false;
+    try { return await fn(); } finally { this.running = false; }
+  }
+  guardEditing() {
+    check(!(this.store.local('workspace')?.tabs || []).some(tab => tab.dirty), '请先保存未保存的笔记标签', 'UNSAVED');
+  }
+  status() {
+    const plan = this.value('plan'), latest = this.value('latest');
+    const pendingChanges = this.store.unexported().length;
+    const pendingControl = latest ? canonical(latest.control) !== canonical(this.control()) : true;
+    const progress = this.progress();
+    return { busy: this.running, config: this.config(), pendingChanges, pendingControl,
+      unpublished: pendingChanges || pendingControl ? 1 : 0, unconfirmed: latest && !latest.userConfirmedAt ? 1 : 0,
+      latest: latest ? { id: latest.id, at: latest.at, userConfirmedAt: latest.userConfirmedAt } : null,
+      job: plan ? { id: plan.manifest.id, at: plan.manifest.at, ...progress,
+        totalBytes: plan.totalBytes, estimatedAdditionalBytes: plan.additionalBytes, totalObjects: plan.objects.length,
+        freeBytesAtPlan: plan.freeBytes, reserveBytes: this.reserveBytes, batchBytes: plan.batchBytes,
+        estimatedBatches: plan.estimatedBatches } : null,
+      receives: this.store.db.prepare("SELECT value FROM local_config WHERE key LIKE 'v3Receive:%'").all()
+        .map(row => JSON.parse(row.value)).filter(Boolean) };
+  }
+  knownAssets() {
+    return [this.value('latest'), ...Object.values(this.value('remotes') || {})].flatMap(item => item?.assets || []);
+  }
+  async plan({ batchBytes = DEFAULT_BATCH } = {}) {
+    return this.exclusive(async () => {
+      this.guardEditing();
+      check(Number.isSafeInteger(batchBytes) && batchBytes >= MIN_BATCH && batchBytes <= 4 * 1024 ** 3, '批次大小须在 5 MiB 至 4 GiB 之间');
+      if (this.value('plan') && !['complete', 'cancelled'].includes(this.progress()?.state)) return this.status();
+      const channel = this.channel(), events = orderedEvents(this.store.allEvents(), this.store).sort((a, b) => a.id.localeCompare(b.id));
+      const parts = [], metadata = {}, objects = [];
+      let group = [], size = 2;
+      const flush = () => {
+        if (!group.length) return;
+        const text = canonical(group), hash = sha(text), name = `history-${hash}.ssobj`;
+        const part = { name, hash, size: Buffer.byteLength(text), count: group.length };
+        parts.push(part); metadata[name] = group;
+        objects.push({ kind: 'history', ...part }); group = []; size = 2;
+      };
+      for (const event of events) {
+        const length = Buffer.byteLength(canonical(event)) + 1;
+        if (size + length > PART_BYTES) flush();
+        group.push(event); size += length;
+      }
+      flush();
+      const known = new Map(this.knownAssets().map(asset => [asset.hash, asset])), assets = [];
+      for (const asset of assetObjects(events)) {
+        check(!this.pauseRequested, '空间预估已取消', 'PAUSED');
+        const descriptor = await describeAsset(this.store, asset, known.get(asset.hash));
+        const assetIndex = assets.length; assets.push(descriptor);
+        descriptor.chunks.forEach((chunk, index) => objects.push({ kind: 'asset', ...chunk, assetIndex, index, reusable: known.has(asset.hash) }));
+      }
+      const manifest = { format: 3, id: uuid(), deviceId: this.store.deviceId, deviceName: this.store.getMeta('deviceName'),
+        at: now(), parts, assets, control: mergeControl(EMPTY_CONTROL, this.control()) };
+      manifest.digest = manifestDigest(manifest);
+      if (this.value('latest')?.digest === manifest.digest) return { ...this.status(), unchanged: true };
+      const latestBytes = Buffer.byteLength(canonical(manifest)) + 36;
+      check(latestBytes <= MAX_MANIFEST, '文件索引超过当前单清单容量，请减少本批资料或联系维护者');
+      const freeBytes = this.space(channel.root).freeBytes, capacity = Math.min(batchBytes, Math.max(0, freeBytes - this.reserveBytes - latestBytes));
+      const additionalBytes = objects.filter(object => !object.reusable && !fs.existsSync(channel.file(object.name))).reduce((sum, object) => sum + object.size + 36, latestBytes);
+      const plan = { manifest, metadata, objects, totalBytes: objects.reduce((sum, object) => sum + object.size + 36, latestBytes),
+        additionalBytes, freeBytes, batchBytes, latestBytes, estimatedBatches: capacity >= MIN_BATCH ? Math.max(1, Math.ceil(additionalBytes / capacity)) : null };
+      this.store.transaction(() => {
+        this.value('plan', plan);
+        this.saveProgress({ state: 'ready', next: 0, generatedBytes: 0, confirmedThrough: 0, completedObjects: 0, reason: '' });
+      });
+      return this.status();
+    });
+  }
+  pause() {
+    this.pauseRequested = true;
+    const progress = this.progress();
+    if (progress && !this.running && !['complete', 'cancelled'].includes(progress.state)) this.saveProgress({ ...progress, state: 'paused', reason: '用户暂停' });
+    return this.status();
+  }
+  cancel() {
+    check(!this.running, '请先暂停并等待当前分块完成');
+    const progress = this.progress();
+    if (progress) this.saveProgress({ ...progress, state: 'cancelled', reason: '已取消；已有交接文件保留' });
+    return this.status();
+  }
+  confirmBatch({ confirmed }) {
+    check(confirmed === true && !this.running, '请等待本批生成完成并明确确认上传');
+    const progress = this.progress(); check(progress, '尚无发布批次');
+    this.saveProgress({ ...progress, confirmedThrough: progress.next, batchConfirmedAt: now() });
+    return this.status();
+  }
+  async publish({ batchBytes } = {}) {
+    if (!this.value('plan') || ['complete', 'cancelled'].includes(this.progress()?.state)) {
+      const result = await this.plan({ batchBytes });
+      if (result.unchanged) return result;
+    }
+    return this.exclusive(async () => {
+      this.guardEditing();
+      const plan = this.value('plan'), channel = this.channel(), progress = { ...this.progress(), state: 'running', reason: '' };
+      this.saveProgress(progress);
+      const save = (state, reason) => { Object.assign(progress, { state, reason }); this.saveProgress(progress); return this.status(); };
+      let batchBytes = 0;
+      try {
+        for (let i = progress.next; i < plan.objects.length; i++) {
+          if (this.pauseRequested) return save('paused', '用户暂停，已保留进度');
+          const object = plan.objects[i], asset = object.kind === 'asset' ? plan.manifest.assets[object.assetIndex] : null;
+          const aad = asset ? assetAAD(asset, object.index) : `v3:history:${object.hash}`;
+          const exists = fs.existsSync(channel.file(object.name));
+          if (exists) {
+            const data = channel.read(object.name, aad);
+            check(data.length === object.size && sha(data) === object.hash, '交接对象损坏，请重新下载或移开损坏副本');
+          } else if (!object.reusable) {
+            const required = object.size + 36;
+            if (batchBytes + required > plan.batchBytes) return save('paused', '本批已生成，确认客户端上传后可继续下一批');
+            if (this.space(channel.root).freeBytes - this.reserveBytes - plan.latestBytes < required) {
+              return save('blocked', '同步目录可用空间不足；可在百度客户端上传并仅释放本地副本后继续');
+            }
+            const data = asset ? await assetChunk(this.store, asset, object.index) : Buffer.from(canonical(plan.metadata[object.name]));
+            channel.write(object.name, data, aad); batchBytes += required;
+            progress.generatedBytes += required;
+          }
+          progress.next = i + 1; progress.completedObjects = i + 1;
+          this.saveProgress(progress); await tick();
+        }
+        // Missing newly generated objects are safe to reference only after the user confirms
+        // that batch was uploaded. This never claims an API-verified cloud upload.
+        for (let i = 0; i < plan.objects.length; i++) {
+          const object = plan.objects[i];
+          check(object.reusable || fs.existsSync(channel.file(object.name)) || i < progress.confirmedThrough,
+            '已生成分块不在本机，请确认对应批次已上传后再继续');
+        }
+        check(this.space(channel.root).freeBytes - this.reserveBytes >= plan.latestBytes, '空间不足，无法写入最新内容清单', 'SPACE');
+        const name = `current-${this.store.deviceId}.sscurrent`;
+        atomicWrite(channel.file(name), sealBinary(Buffer.from(canonical(plan.manifest)), channel.key, `v3:current:${this.store.deviceId}`));
+        this.store.transaction(() => {
+          this.value('latest', plan.manifest);
+          for (const events of Object.values(plan.metadata)) for (const event of events) this.store.db.prepare('UPDATE events SET exported=1 WHERE id=?').run(event.id);
+          this.saveProgress({ ...progress, state: 'complete', reason: '最新内容已生成，等待客户端上传', finishedAt: now() });
+        });
+        return this.status();
+      } catch (error) {
+        save('blocked', error.message); throw error;
+      }
+    });
+  }
+  validateManifest(manifest, deviceId) {
+    check(manifest?.format === 3 && isId(manifest.id) && manifest.deviceId === deviceId && isId(deviceId)
+      && typeof manifest.deviceName === 'string' && manifest.deviceName.length <= 100 && Number.isFinite(Date.parse(manifest.at)), '无效的最新内容清单');
+    check(Object.keys(manifest).sort().join() === 'assets,at,control,deviceId,deviceName,digest,format,id,parts', '清单含未知字段');
+    check(Array.isArray(manifest.parts) && manifest.parts.length <= 100000, 'Invalid history parts');
+    const names = new Set();
+    for (const part of manifest.parts) {
+      check(isHash(part.hash) && part.name === `history-${part.hash}.ssobj` && !names.has(part.name)
+        && Number.isSafeInteger(part.size) && part.size > 0 && part.size <= PART_BYTES
+        && Number.isSafeInteger(part.count) && part.count > 0, 'Invalid history part');
+      names.add(part.name);
+    }
+    validateAssets(manifest.assets); mergeControl(EMPTY_CONTROL, manifest.control);
+    check(manifest.digest === manifestDigest(manifest), '最新内容清单校验失败');
+    const seen = (this.value('seen') || {})[manifest.id];
+    check(!seen || seen === sha(canonical(manifest)), '已接收的同步内容发生变化');
+    return manifest;
+  }
+  loadCurrent(name) {
+    check(/^current-[a-f0-9-]{36}\.sscurrent$/.test(name), 'Invalid current file');
+    const deviceId = name.slice(8, -10);
+    return this.validateManifest(this.channel().json(name, `v3:current:${deviceId}`), deviceId);
+  }
+  scan() {
+    const channel = this.channel(), entries = [], errors = [], seen = this.value('seen') || {};
+    for (const name of channel.names('.sscurrent')) {
+      try {
+        const manifest = this.loadCurrent(name), missing = [];
+        for (const object of [...manifest.parts, ...manifest.assets.flatMap(asset => asset.chunks)]) {
+          const file = channel.file(object.name);
+          if (!fs.existsSync(file) || fs.statSync(file).size !== object.size + 36) missing.push(object.name);
+        }
+        entries.push({ id: manifest.id, deviceId: manifest.deviceId, deviceName: manifest.deviceName, at: manifest.at,
+          own: manifest.deviceId === this.store.deviceId, imported: !!seen[manifest.id], missing });
+      } catch (error) { errors.push({ file: name, message: error.message }); }
+    }
+    this.readReceipts(errors);
+    const report = { entries, errors, finishedAt: now(), cloudUploadVerified: false };
+    this.store.local('v3LastReport', { errors, finishedAt: report.finishedAt, availablePublications: entries.length });
+    return report;
+  }
+  async importLatest({ metadataOnly = false } = {}) {
+    return this.exclusive(async () => {
+      this.guardEditing();
+      const channel = this.channel(), incoming = [], union = new Map(), descriptors = new Map();
+      let control = this.control();
+      for (const name of channel.names('.sscurrent')) {
+        const manifest = this.loadCurrent(name), events = [];
+        for (const part of manifest.parts) {
+          const data = channel.read(part.name, `v3:history:${part.hash}`, PART_BYTES);
+          check(data.length === part.size && sha(data) === part.hash, '修改记录分块校验失败');
+          const group = JSON.parse(data.toString()); check(Array.isArray(group) && group.length === part.count, '修改记录数量不符'); events.push(...group);
+        }
+        orderedEvents(events, this.store);
+        check(canonical(assetObjects(events)) === canonical(manifest.assets.map(({ hash, size, ids }) => ({ hash, size, ids }))), '原件索引与修改记录不一致');
+        for (const event of events) {
+          check(!union.has(event.id) || union.get(event.id).hash === event.hash, '同步记录身份冲突'); union.set(event.id, event);
+        }
+        for (const asset of manifest.assets) {
+          const previous = descriptors.get(asset.hash);
+          check(!previous || canonical(previous.chunks) === canonical(asset.chunks), '原件分块身份冲突');
+          descriptors.set(asset.hash, { ...asset, ids: [...new Set([...(previous?.ids || []), ...asset.ids])].sort() });
+        }
+        control = mergeControl(control, manifest.control); incoming.push(manifest);
+      }
+      check(incoming.length, '尚未发现最新内容，请先在百度客户端下载');
+      const role = primaryRole(control);
+      check(!metadataOnly || role.primary && !role.conflict && role.primary !== this.store.deviceId, '仅已确定的非主力机可以只导入索引');
+      const current = assetObjects(eventHeads([...union.values()])), paths = new Map();
+      if (!metadataOnly) for (const asset of current) {
+        paths.set(asset.hash, await receiveResumable(channel, this.store, descriptors.get(asset.hash),
+          { space: this.space, reserveBytes: this.reserveBytes, paused: () => this.pauseRequested }));
+      }
+      this.guardEditing();
+      const events = orderedEvents([...union.values()], this.store);
+      let count = 0;
+      this.store.transaction(() => {
+        for (const event of events) {
+          if (this.store.insert(event, true)) count++;
+          this.store.db.prepare('DELETE FROM pending WHERE id=?').run(event.id);
+        }
+        this.store.local('v3Control', mergeControl(this.control(), control));
+        for (const [hash, file] of paths) for (const id of descriptors.get(hash).ids) this.store.bindAsset(id, file, this.store.assetLocation(id)?.pinned === 1);
+        const remotes = this.value('remotes') || {}, seen = this.value('seen') || {};
+        for (const manifest of incoming) { remotes[manifest.deviceId] = manifest; seen[manifest.id] = sha(canonical(manifest)); }
+        this.value('remotes', remotes); this.value('seen', seen); this.value('receivedAt', now());
+      });
+      let receiptWarning;
+      try { await this.verifyPrimary(); } catch (error) { receiptWarning = error.message; }
+      return { imported: count, unchanged: !count, metadataOnly, devices: incoming.length, receiptWarning };
+    });
+  }
+  confirmUpload({ id, confirmed }) {
+    check(!this.running && confirmed === true, '请在百度客户端确认上传完成');
+    const latest = this.value('latest'); check(latest && (!id || latest.id === id), '最新发布已变化，请刷新后确认');
+    latest.userConfirmedAt = now(); this.value('latest', latest);
+    const progress = this.value('progress');
+    if (progress?.state === 'complete' && this.value('plan')?.manifest.id === latest.id) {
+      progress.reason = '用户已确认本次上传'; this.value('progress', progress);
+    }
+    return this.status();
+  }
+  async currentFiles() {
+    const assets = assetObjects([...this.store.list({ type: 'asset' }), ...this.store.list({ type: 'asset', trash: true })].flatMap(record => record.versions));
+    const missing = [], available = [];
+    for (const asset of assets) (await localAsset(this.store, asset) ? available : missing).push(asset);
+    return { total: assets.length, available, missing, at: now() };
+  }
+  devices() {
+    const control = this.control(), role = primaryRole(control), devices = new Map(), remotes = this.value('remotes') || {};
+    for (const item of [...control.devices].sort((a, b) => a.at.localeCompare(b.at) || a.id.localeCompare(b.id))) devices.set(item.deviceId, item);
+    return { ...role, devices: [...devices.values()].map(item => ({ ...item, local: item.deviceId === this.store.deviceId,
+      primary: item.deviceId === role.primary, lastReceivedAt: remotes[item.deviceId] ? this.value('receivedAt') : null })),
+    completeness: this.store.local('v3Completeness') };
+  }
+  async setPrimary({ deviceId, parents, confirmed }) {
+    return this.exclusive(async () => {
+      check(confirmed === true && deviceId === this.store.deviceId, '必须在目标主力机上明确确认');
+      const control = this.control(), role = primaryRole(control);
+      check(Array.isArray(parents) && canonical([...parents].sort()) === canonical(role.heads.map(item => item.id).sort()), '主力角色已变化，请刷新');
+      const files = await this.currentFiles(); check(!files.missing.length, '当前资料未齐全，不能设为主力机');
+      control.roles.push({ id: uuid(), primary: deviceId, parents, at: now() });
+      this.store.local('v3Control', control); this.store.local('v3Completeness', { total: files.total, available: files.total, at: files.at });
+      return this.devices();
+    });
+  }
+  async verifyPrimary() {
+    const role = primaryRole(this.control()), files = await this.currentFiles();
+    this.store.local('v3Completeness', { total: files.total, available: files.available.length, missing: files.missing.length, at: files.at });
+    if (role.conflict || role.primary !== this.store.deviceId || files.missing.length || !this.config().configured) return { ...files, receipt: false };
+    const published = new Set(this.knownAssets().map(asset => asset.hash));
+    const hashes = files.available.map(asset => asset.hash).filter(hash => published.has(hash)).sort();
+    const digest = sha(canonical({ epoch: role.epoch, hashes }));
+    if (this.value('receiptDigest') === digest) return { ...files, receipt: true };
+    const receipt = { id: uuid(), deviceId: this.store.deviceId, epoch: role.epoch, hashes, at: now() };
+    this.channel().writeJson(`receipt-${receipt.id}.ssreceipt`, receipt, `v3:receipt:${receipt.id}`);
+    this.value('receiptDigest', digest);
+    return { ...files, receipt: true };
+  }
+  readReceipts(errors) {
+    const channel = this.channel(), receipts = this.value('receipts') || {};
+    for (const name of channel.names('.ssreceipt')) {
+      try {
+        const id = name.slice(8, -10), receipt = channel.json(name, `v3:receipt:${id}`);
+        check(receipt.id === id && isId(id) && isId(receipt.deviceId) && isId(receipt.epoch)
+          && Number.isFinite(Date.parse(receipt.at)) && Array.isArray(receipt.hashes) && receipt.hashes.every(isHash), 'Invalid file receipt');
+        check(!receipts[id] || canonical(receipts[id]) === canonical(receipt), 'Receipt collision'); receipts[id] = receipt;
+      } catch (error) { errors.push({ file: name, message: error.message }); }
+    }
+    this.value('receipts', receipts);
+  }
+  async hydrate({ id }) {
+    return this.exclusive(async () => {
+      const record = this.store.get(id); check(record?.type === 'asset', '请选择附件');
+      const asset = this.knownAssets().find(asset => asset.hash === record.data.sha256);
+      check(asset, '请先拉取最新文件索引');
+      const file = await receiveResumable(this.channel(), this.store, asset,
+        { space: this.space, reserveBytes: this.reserveBytes, paused: () => this.pauseRequested });
+      for (const assetId of asset.ids) if (this.store.get(assetId)) this.store.bindAsset(assetId, file, this.store.assetLocation(assetId)?.pinned === 1);
+      await this.verifyPrimary(); return { available: true };
+    });
+  }
+  async evict({ id, confirmed }) {
+    return this.exclusive(async () => {
+      this.guardEditing(); check(confirmed === true, '释放原件需要明确确认');
+      const role = primaryRole(this.control()); check(role.primary && !role.conflict, '请先确定唯一主力机');
+      check(role.primary !== this.store.deviceId, '主力机当前资料和回收站原件必须保留');
+      const record = this.store.get(id), local = this.store.assetLocation(id);
+      check(record?.type === 'asset' && local && fs.existsSync(local.path), '本机没有可释放的原件');
+      check(!record.conflict && !this.store.unexported().length, '存在冲突或尚未发布的修改，不能释放');
+      check(Object.values(this.value('receipts') || {}).some(receipt => receipt.deviceId === role.primary
+        && receipt.epoch === role.epoch && receipt.hashes.includes(record.data.sha256)), '尚未收到当前主力机对此原件的校验回执');
+      check(this.knownAssets().some(asset => asset.hash === record.data.sha256), '没有可恢复的原件索引');
+      const file = path.resolve(local.path); noSymlink(file);
+      const allowed = ['objects', 'received-objects'].map(folder => path.join(this.store.directory, folder, record.data.sha256));
+      allowed.push(this.store.directories.assetPath(record.data.domain, record.data.sha256));
+      check(allowed.some(value => path.resolve(value).toLowerCase() === file.toLowerCase()) && outside(this.config().folder, file), '只能释放系统托管原件');
+      const protectedFile = () => {
+        check(!Object.values(this.store.local('localFileLinks') || {}).some(value => path.resolve(value).toLowerCase() === file.toLowerCase()), '原件仍被本机文件链接引用');
+        const aliases = [...this.store.list({ type: 'asset' }), ...this.store.list({ type: 'asset', trash: true })]
+          .filter(asset => this.store.assetLocation(asset.id)?.path.toLowerCase() === file.toLowerCase());
+        check(!aliases.some(asset => asset.conflict || this.store.assetLocation(asset.id)?.pinned || this.store.activeAssetReads?.get(asset.id)), '原件有冲突、指定保留或正在使用的引用');
+      };
+      protectedFile(); check(await hashFile(file) === record.data.sha256, '原件已变化，拒绝释放');
+      protectedFile(); this.guardEditing(); check(!this.store.unexported().length, '校验期间产生新修改，原件未释放');
+      fs.unlinkSync(file); return { released: true, cloudDeleted: false };
+    });
+  }
+}

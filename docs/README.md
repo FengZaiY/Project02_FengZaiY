@@ -9,9 +9,9 @@
 
 ## 设计与验收
 
-- [架构说明](architecture.md)：版本图、传输、附件、模型和备份。
+- [架构说明](architecture.md)：修改历史、当前内容同步、原件断点与权限；退役格式单独标注。
 - [验证记录](verification.md)：带日期的实际测试结果。
-- [百度网盘双机验收](baidu-acceptance.md)：真实账号与设备上的验收步骤。
+- [同步验收与可选双机联调](baidu-acceptance.md)：StudySelf 自身的版本、完整性与恢复要求，以及按需进行的部署联调。
 - [计划目录](plans/README.md)：跨模块和多阶段任务。
 - [决策目录](decisions/README.md)：重大方案及其边界。
 

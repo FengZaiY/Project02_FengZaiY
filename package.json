@@ -1,6 +1,6 @@
 {
   "name": "studyself",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "license": "UNLICENSED",
   "description": "Local-first knowledge workspace with reviewed folder-based synchronization",
@@ -13,6 +13,11 @@
     "check:project": "node scripts/check-project.mjs",
     "test": "node --test tests/*.test.mjs",
     "test:ui": "node scripts/test-ui.mjs",
+    "test:libraries": "node scripts/test-libraries-ui.mjs",
+    "test:agents": "node scripts/test-agents-ui.mjs",
+    "test:rich": "node scripts/test-rich-ui.mjs",
+    "test:editor": "node scripts/test-editor-interactions.mjs",
+    "test:storage": "node scripts/test-storage-ui.mjs",
     "test:desktop": "node scripts/test-desktop.mjs",
     "test:packaged": "node scripts/test-desktop.mjs --packaged",
     "benchmark": "node scripts/benchmark.mjs",
@@ -20,17 +25,27 @@
   },
   "devDependencies": {
     "@tiptap/core": "^3.31.4",
+    "@tiptap/extension-highlight": "^3.31.4",
     "@tiptap/extension-table": "^3.31.4",
+    "@tiptap/extension-task-item": "^3.31.4",
+    "@tiptap/extension-task-list": "^3.31.4",
     "@tiptap/starter-kit": "^3.31.4",
     "dompurify": "^3.3.0",
     "electron": "^42.0.0",
     "electron-builder": "^26.0.0",
     "esbuild": "^0.27.0",
+    "katex": "^0.19.0",
+    "konva": "^10.7.1",
     "lucide": "^0.468.0",
-    "marked": "^17.0.0",
+    "mermaid": "^12.1.0",
     "playwright": "^1.58.0",
     "turndown": "^7.2.4",
     "turndown-plugin-gfm": "^1.0.2"
+  },
+  "overrides": {
+    "mermaid": {
+      "katex": "$katex"
+    }
   },
   "build": {
     "appId": "cn.studyself.desktop",
@@ -41,6 +56,7 @@
     "files": [
       "src/core/**/*",
       "src/desktop/**/*",
+      "skills/studyself-organize/**/*",
       "dist/**/*",
       "package.json"
     ],
@@ -56,5 +72,9 @@
       "deleteAppDataOnUninstall": false,
       "artifactName": "StudySelf-${version}-Setup.${ext}"
     }
+  },
+  "dependencies": {
+    "marked": "^17.0.6",
+    "parse5": "^8.0.1"
   }
 }

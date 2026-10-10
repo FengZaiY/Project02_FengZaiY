@@ -3,24 +3,29 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { randomBytes } from 'node:crypto';
-import { TYPES, PROVIDERS } from './catalog.mjs';
+import { TYPES, CONTENT_TYPES } from './catalog.mjs';
+import { richReferences } from './rich-content.mjs';
+import { LibraryDirectories, legacyLibraryId } from './library-directories.mjs';
 import { uuid, now, sha, canonical, check, isId, isHash, atomicWrite, encrypt, decrypt } from './util.mjs';
+const GLOBAL_SCOPE = '__all_libraries__';
 
 const COMMON = ['title', 'domain', 'tags', 'sensitive'];
 const FIELDS = {
   note: [...COMMON, 'content', 'format', 'sourceIds', 'assetIds'],
   draft: [...COMMON, 'content', 'format', 'sourceIds', 'assetIds'],
-  conversation: [...COMMON, 'messages', 'modelId'],
+  conversation: [...COMMON, 'messages', 'modelId', 'assetIds'],
   source: [...COMMON, 'content', 'format', 'url', 'assetIds'],
   annotation: [...COMMON, 'content', 'noteId', 'quote'],
   relation: [...COMMON, 'from', 'to', 'description'],
   proposal: [...COMMON, 'items', 'content'],
   workspace: [...COMMON, 'tabs', 'selectedTab', 'originDevice'],
   asset: [...COMMON, 'filename', 'size', 'sha256', 'mime', 'priority'],
+  library: [...COMMON, 'description'],
+  agentPreferences: [...COMMON, 'content'],
   provider: [...COMMON, 'providerId', 'protocol'],
   model: [...COMMON, 'providerId', 'modelName', 'inputRate', 'outputRate', 'currency', 'capabilities'],
-  usage: [...COMMON, 'callId', 'taskId', 'modelId', 'inputTokens', 'outputTokens', 'usageReported', 'estimatedCost', 'billedCost', 'currency', 'recordedAt'],
-  task: [...COMMON, 'content', 'modelId', 'ownerDevice', 'status', 'estimate', 'currency', 'sourceIds']
+  usage: [...COMMON, 'callId', 'taskId', 'modelId', 'inputTokens', 'outputTokens', 'usageReported', 'estimatedCost', 'billedCost', 'currency', 'recordedAt', 'pricing'],
+  task: [...COMMON, 'content', 'modelId', 'ownerDevice', 'status', 'estimate', 'currency', 'sourceIds', 'pricing']
 };
 
 export function cleanData(type, data) {
@@ -31,7 +36,11 @@ export function cleanData(type, data) {
   result.tags = Array.isArray(result.tags) ? [...new Set(result.tags.map(String))].slice(0, 100) : [];
   result.sensitive = result.sensitive === true;
   check(Buffer.byteLength(canonical(result)) <= 1024 * 1024, 'A single revision must be smaller than 1 MB');
-  if (['note', 'draft', 'source', 'annotation', 'task'].includes(type)) {
+  if (type === 'library') {
+    check(result.title.trim().length > 0 && result.title.length <= 100, '知识库名称须为 1 至 100 个字符');
+    check(typeof result.description === 'string' && result.description.length <= 2000, '知识库说明最多 2000 个字符');
+  }
+  if (['note', 'draft', 'source', 'annotation', 'task', 'agentPreferences'].includes(type)) {
     check(result.content === undefined || typeof result.content === 'string', 'Content must be text');
   }
   for (const field of ['sourceIds', 'assetIds']) {
@@ -46,6 +55,8 @@ export function cleanData(type, data) {
     check(typeof result.providerId === 'string' && typeof result.modelName === 'string', 'Model and provider are required');
     check(!/[?#@]/.test(result.providerId), 'Invalid provider ID');
     for (const field of ['inputRate', 'outputRate']) check(result[field] === undefined || (Number.isFinite(result[field]) && result[field] >= 0), 'Invalid model price');
+    if (Array.isArray(result.capabilities)) check(result.capabilities.length <= 20
+      && result.capabilities.every(value => typeof value === 'string' && value.length <= 100), 'Invalid model capabilities');
   }
   if (type === 'provider') {
     check(typeof result.providerId === 'string' && /^[a-zA-Z0-9_-]{1,80}$/.test(result.providerId), 'Invalid provider ID');
@@ -57,6 +68,25 @@ export function cleanData(type, data) {
     for (const field of ['estimatedCost', 'billedCost']) check(result[field] == null || (Number.isFinite(result[field]) && result[field] >= 0), 'Invalid cost');
   }
   if (type === 'task') check(isId(result.ownerDevice), 'Task owner is required');
+  if (['usage', 'task'].includes(type) && result.pricing !== undefined) {
+    const price = result.pricing;
+    check(price && ['auto', 'manual', 'unknown', 'local'].includes(price.status), 'Invalid price snapshot');
+    check(Object.keys(price).every(key => ['status', 'reason', 'currency', 'inputRate', 'outputRate', 'basis',
+      'sourceUrl', 'checkedAt', 'updatedAt'].includes(key)), 'Unexpected price snapshot fields');
+    for (const field of ['inputRate', 'outputRate']) check(price[field] === undefined ||
+      (Number.isFinite(price[field]) && price[field] >= 0), 'Invalid snapshot rate');
+    check(price.currency == null || ['CNY', 'USD'].includes(price.currency), 'Invalid snapshot currency');
+    for (const field of ['reason', 'basis', 'sourceUrl', 'checkedAt', 'updatedAt']) {
+      check(price[field] == null || (typeof price[field] === 'string' && price[field].length <= 1000), 'Invalid snapshot metadata');
+    }
+    if (['auto', 'manual'].includes(price.status)) {
+      check(Number.isFinite(price.inputRate) && Number.isFinite(price.outputRate) && price.currency, 'Incomplete price snapshot');
+    }
+    if (price.sourceUrl) {
+      const url = new URL(price.sourceUrl);
+      check(url.protocol === 'https:' && !url.username && !url.password && !url.search && !url.hash, 'Invalid price source');
+    }
+  }
   if (type === 'proposal') {
     check(Array.isArray(result.items) && result.items.length <= 100, 'Invalid proposal items');
     const ids = new Set();
@@ -89,6 +119,7 @@ export function validateEvent(event) {
 export class Store {
   constructor(directory, options = {}) {
     this.directory = path.resolve(directory);
+    this.directories = new LibraryDirectories(this);
     fs.mkdirSync(this.directory, { recursive: true });
     this.db = new DatabaseSync(path.join(this.directory, 'knowledge.sqlite'));
     this.db.exec(`
@@ -182,6 +213,9 @@ export class Store {
     const entity = this.db.prepare('SELECT type,json FROM events WHERE entity_id=? LIMIT 1').get(event.entityId);
     if (entity) {
       check(entity.type === event.type, 'Record type cannot change');
+      if (entity.type === 'library') {
+        check(JSON.parse(entity.json).data.domain === event.data.domain, '知识库范围标识不可更改');
+      }
       if (entity.type === 'asset') {
         const original = JSON.parse(entity.json).data;
         check(original.sha256 === event.data.sha256 && original.size === event.data.size, 'An attachment ID cannot refer to different file contents');
@@ -199,6 +233,11 @@ export class Store {
     return true;
   }
   writeRaw({ id = uuid(), type = 'note', data, parents = [], deleted = false, allowBranch = false }) {
+    check(!this.local('v2Journal'), '版本操作尚未恢复，请重启恢复后再编辑', 'RECOVERY_REQUIRED');
+    if (['note', 'draft', 'source'].includes(type)) {
+      const { assets } = richReferences(data);
+      if (assets.length) data = { ...data, assetIds: [...new Set([...(data.assetIds || []), ...assets])] };
+    }
     check(isId(id) && TYPES.includes(type), 'Invalid record');
     if (allowBranch) {
       check(parents.length > 0 && parents.every(parent => this.event(parent)?.entityId === id), 'A branch requires existing base revisions');
@@ -220,7 +259,53 @@ export class Store {
   remove(id, parents) {
     const record = this.get(id);
     check(record, 'Record not found');
+    if (record.type === 'library') {
+      const library = this.libraries().find(item => item.id === id);
+      check(!library?.contentCount, '知识库仍有资料（含回收站），请先迁移资料；不会连带删除内容');
+    }
     return this.write({ id, type: record.type, data: record.data, parents, deleted: true });
+  }
+  libraries() {
+    const records = [...this.list(), ...this.list({ trash: true })];
+    const libraries = records.filter(record => record.type === 'library');
+    const scopes = new Map();
+    for (const record of records.filter(record => CONTENT_TYPES.includes(record.type))) {
+      for (const scope of new Set(record.versions.map(version => version.data.domain))) {
+        if (scope === GLOBAL_SCOPE) continue;
+        const count = scopes.get(scope) || { active: 0, total: 0 };
+        count.total++;
+        if (!record.deleted) count.active++;
+        scopes.set(scope, count);
+      }
+    }
+    // Legacy catalogs are a read-only projection until the user explicitly edits one.
+    for (const scope of scopes.keys()) {
+      if (libraries.some(record => record.data.domain === scope)) continue;
+      const id = legacyLibraryId(scope);
+      libraries.push({ id, type: 'library', heads: [], versions: [], conflict: false, deleted: false,
+        legacy: true, data: { title: scope, domain: scope, description: '', tags: [], sensitive: false } });
+    }
+    return libraries.map(record => ({ ...record,
+      contentCount: scopes.get(record.data.domain)?.total || 0,
+      activeCount: scopes.get(record.data.domain)?.active || 0
+    })).sort((a, b) => a.data.title.localeCompare(b.data.title, 'zh-CN'));
+  }
+  saveLibrary({ id, title, description = '', parents = [] }) {
+    check(typeof title === 'string' && title.trim(), '请输入知识库名称');
+    const libraries = this.libraries();
+    const existing = id && libraries.find(record => record.id === id);
+    check(!id || existing, '知识库不存在');
+    check(!existing?.deleted, '请先恢复知识库');
+    check(!libraries.some(record => record.id !== id && !record.deleted
+      && record.data.title.normalize('NFKC').toLocaleLowerCase() === title.trim().normalize('NFKC').toLocaleLowerCase()), '已存在同名知识库');
+    const libraryId = existing?.id || uuid();
+    return this.transaction(() => {
+      this.writeRaw({ id: libraryId, type: 'library', parents,
+        data: { title: title.trim(), description, domain: existing?.data.domain || libraryId } });
+      const record = this.get(libraryId);
+      this.directories.ensure(record);
+      return record;
+    });
   }
   restoreVersion(id, revision, parents) {
     const event = this.event(revision);
@@ -302,6 +387,9 @@ export class Store {
       check(Array.isArray(itemIds) && itemIds.length > 0 && itemIds.every(id => record.data.items.some(i => i.id === id)), 'Select valid proposal items');
       const items = structuredClone(record.data.items);
       for (const item of items.filter(i => itemIds.includes(i.id) && i.status !== 'accepted')) {
+        check(item.data.domain !== GLOBAL_SCOPE, '请先为方案选择目标知识库');
+        const library = this.libraries().find(entry => entry.data.domain === item.data.domain);
+        check(!library || (!library.deleted && !library.conflict), '方案目标知识库已删除或存在冲突');
         this.writeRaw({ id: item.targetId, type: 'note', data: item.data, parents: item.parents });
         item.status = 'accepted';
       }
@@ -336,7 +424,7 @@ export class Store {
       counts: Object.fromEntries(TYPES.map(type => [type, stats.find(s => s.type === type)?.active || 0])),
       conflicts: stats.reduce((sum, s) => sum + s.conflicts, 0),
       trash: stats.reduce((sum, s) => sum + s.trash, 0), pendingParents: this.db.prepare('SELECT COUNT(*) AS n FROM pending').get().n,
-      unexported: this.db.prepare('SELECT COUNT(*) AS n FROM events WHERE exported=0').get().n, providers: PROVIDERS,
+      unexported: this.db.prepare('SELECT COUNT(*) AS n FROM events WHERE exported=0').get().n,
       domains: this.db.prepare("SELECT DISTINCT json_extract(e.json,'$.data.domain') AS name FROM heads h JOIN events e ON e.id=h.event_id").all().map(row => row.name),
       lastReceiptAt: this.getMeta('lastReceiptAt') || null };
   }

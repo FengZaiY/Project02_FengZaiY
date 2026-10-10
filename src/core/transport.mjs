@@ -1,9 +1,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { uuid, now, sha, canonical, encrypt, decrypt, atomicWrite, check, isId, isHash, hashFile, noSymlink, outside } from './util.mjs';
+import { uuid, now, sha, canonical, encrypt, decrypt, atomicWrite, check, isId, hashFile, noSymlink, outside } from './util.mjs';
+import { AssetTransfer, SMALL_ASSET_LIMIT } from './asset-transfer.mjs';
 
-export const SMALL_ASSET_LIMIT = 16 * 1024 * 1024;
+export { SMALL_ASSET_LIMIT } from './asset-transfer.mjs';
 const PACKET_LIMIT = 26 * 1024 * 1024;
 export const makePairingKey = () => randomBytes(32).toString('hex');
 
@@ -31,7 +32,7 @@ export class FolderTransport {
   }
   config() {
     return { folder: this.store.local('syncFolder') || '', configured: !!this.store.secret('pairing'),
-      enabled: this.store.local('syncEnabled') === true, lastReport: this.store.local('syncLastReport'),
+      enabled: this.store.local('syncEnabled') === true, lastReport: this.store.local('syncLastReport'), attachmentMode: 'all-files',
       channel: this.store.secret('pairing') ? sha(Buffer.from(this.store.secret('pairing'), 'hex')).slice(0, 16) : null };
   }
   root() {
@@ -51,7 +52,7 @@ export class FolderTransport {
   open(text) {
     const envelope = JSON.parse(text);
     const { format, kind, id, deviceId, box } = envelope;
-    check(format === 1 && ['events', 'receipt', 'asset'].includes(kind) && isId(id) && isId(deviceId), 'Invalid sync envelope');
+    check(format === 1 && ['events', 'receipt', 'asset', 'asset-chunk'].includes(kind) && isId(id) && isId(deviceId), 'Invalid sync envelope');
     const plain = decrypt(box, Buffer.from(this.store.secret('pairing'), 'hex'), canonical({ format, kind, id, deviceId }));
     const payload = JSON.parse(plain.toString('utf8'));
     return { ...envelope, payload };
@@ -64,45 +65,14 @@ export class FolderTransport {
     atomicWrite(file, text);
     return file;
   }
-  async publishAssets(report) {
-    for (const asset of this.store.list({ type: 'asset' })) {
-      const location = this.store.assetLocation(asset.id);
-      if (!location || !fs.existsSync(location.path) || asset.data.size > SMALL_ASSET_LIMIT || asset.conflict) continue;
-      const key = `assetPublished:${this.config().channel}:${asset.data.sha256}`;
-      if (this.store.local(key)) continue;
-      noSymlink(location.path);
-      check(fs.statSync(location.path).size === asset.data.size, 'Attachment size changed after import');
-      const data = await fs.promises.readFile(location.path);
-      check(sha(data) === asset.data.sha256, 'Attachment contents changed after import');
-      this.writePacket('asset', { sha256: asset.data.sha256, size: data.length, data: data.toString('base64') });
-      this.store.local(key, true);
-      report.assetsPublished++;
-    }
-  }
-  acceptAsset(payload) {
-    check(isHash(payload.sha256) && Number.isSafeInteger(payload.size) && payload.size >= 0 && payload.size <= SMALL_ASSET_LIMIT
-      && typeof payload.data === 'string', 'Invalid attachment packet');
-    const data = Buffer.from(payload.data, 'base64');
-    check(data.length === payload.size && sha(data) === payload.sha256, 'Attachment integrity verification failed');
-    const file = path.join(this.store.directory, 'objects', payload.sha256);
-    atomicWrite(file, data);
-    return file;
-  }
-  bindAvailableAssets() {
-    for (const asset of this.store.list({ type: 'asset' })) {
-      const file = path.join(this.store.directory, 'objects', asset.data.sha256);
-      if (fs.existsSync(file) && fs.statSync(file).size === asset.data.size && !this.store.assetLocation(asset.id)) {
-        this.store.bindAsset(asset.id, file);
-      }
-    }
-  }
   async cycle() {
     check(!this.running, 'Synchronization is already in progress', 'BUSY');
     check(this.config().enabled, 'Synchronization is paused');
     this.running = true;
     const report = { startedAt: now(), finishedAt: null, published: 0, imported: 0,
-      assetsPublished: 0, errors: [], waitingParents: 0, cloudUploadVerified: false };
+      assetsPublished: 0, assetChunksPublished: 0, assetsReceived: 0, errors: [], waitingParents: 0, cloudUploadVerified: false };
     try {
+      const assets = new AssetTransfer(this);
       const root = this.root();
       const outgoing = this.store.unexported();
       // Bound batches by bytes, not just record count, so a large note stays transferable.
@@ -123,7 +93,6 @@ export class FolderTransport {
         batch.push(event); bytes += size;
       }
       flush();
-      await this.publishAssets(report);
       for (const name of fs.readdirSync(root).filter(name => name.endsWith('.ssync')).sort()) {
         await new Promise(resolve => setImmediate(resolve));
         const file = path.join(root, name);
@@ -131,11 +100,25 @@ export class FolderTransport {
           noSymlink(file);
           const stat = fs.statSync(file);
           check(stat.isFile() && stat.size <= PACKET_LIMIT, 'Packet exceeds transfer limit');
+          const signature = `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
+          const cacheKey = `packetFile:${sha(file)}`, cached = this.store.local(cacheKey);
+          if (cached?.signature === signature) {
+            if (cached.deviceId === this.store.deviceId) continue;
+            const seen = this.store.db.prepare('SELECT hash FROM packets WHERE id=?').get(cached.id);
+            if (seen?.hash === cached.digest && (cached.kind !== 'asset'
+              || await assets.valid(assets.target(cached.sha256), cached))) continue;
+          }
           const text = fs.readFileSync(file, 'utf8'), digest = sha(text);
           const packet = this.open(text);
-          if (packet.deviceId === this.store.deviceId) continue;
+          const remember = () => this.store.local(cacheKey, { signature, digest, id: packet.id, kind: packet.kind,
+            deviceId: packet.deviceId, ...(packet.kind === 'asset' ? { sha256: packet.payload.sha256, size: packet.payload.size } : {}) });
+          if (packet.deviceId === this.store.deviceId) { remember(); continue; }
           const prior = this.store.db.prepare('SELECT hash FROM packets WHERE id=?').get(packet.id);
-          if (prior) { check(prior.hash === digest, 'Previously received packet was changed'); continue; }
+          if (prior) {
+            check(prior.hash === digest, 'Previously received packet was changed');
+            remember();
+            if (packet.kind !== 'asset' || await assets.valid(assets.target(packet.payload.sha256), packet.payload)) continue;
+          }
           if (packet.kind === 'events') {
             check(packet.payload && Array.isArray(packet.payload.events), 'Missing revisions');
             const result = this.store.importEvents(packet.payload.events);
@@ -144,15 +127,20 @@ export class FolderTransport {
           } else if (packet.kind === 'receipt') {
             check(Array.isArray(packet.payload.eventIds), 'Invalid acknowledgement');
             this.store.receipt(packet.payload.eventIds, packet.deviceId, packet.payload.at);
+          } else if (packet.kind === 'asset') {
+            assets.acceptLegacy(packet.payload); report.assetsReceived++;
           } else {
-            this.acceptAsset(packet.payload);
+            assets.acceptChunk(packet.payload, name, digest);
           }
-          this.store.db.prepare('INSERT INTO packets VALUES(?,?)').run(packet.id, digest);
+          if (!prior) this.store.db.prepare('INSERT INTO packets VALUES(?,?)').run(packet.id, digest);
+          remember();
         } catch (error) {
           report.errors.push({ file: name, message: error.message });
         }
       }
-      this.bindAvailableAssets();
+      await assets.finish(report);
+      await assets.bind(report);
+      await assets.publish(report);
       const received = this.store.db.prepare('SELECT id FROM events WHERE device_id<>? ORDER BY id').all(this.store.deviceId);
       const receiptDigest = sha(received.map(e => e.id).sort().join(','));
       if (received.length && this.store.local('lastReceiptDigest') !== receiptDigest) {
@@ -178,15 +166,16 @@ export async function importAttachment(store, input, { expectedId, pinned = fals
   check(stat.isFile(), 'Choose a regular file');
   const hash = await hashFile(file);
   const extension = path.extname(file).toLowerCase();
-  const mime = ({ '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp',
-    '.pdf': 'application/pdf', '.mp4': 'video/mp4', '.mp3': 'audio/mpeg', '.txt': 'text/plain', '.md': 'text/markdown' })[extension] || 'application/octet-stream';
+  const mime = ({ '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif', '.mov': 'video/quicktime',
+    '.pdf': 'application/pdf', '.mp4': 'video/mp4', '.webm': 'video/webm', '.mp3': 'audio/mpeg', '.wav': 'audio/wav',
+    '.txt': 'text/plain', '.md': 'text/markdown', '.csv': 'text/csv' })[extension] || 'application/octet-stream';
   let record;
   if (expectedId) {
     record = store.get(expectedId);
     check(record?.type === 'asset' && !record.conflict, 'Attachment metadata not found or conflicted');
     check(record.data.sha256 === hash && record.data.size === stat.size, 'This file does not match the requested attachment');
   }
-  const owned = path.join(store.directory, 'objects', hash);
+  const owned = store.directories.assetPath(record?.data.domain || domain, hash);
   fs.mkdirSync(path.dirname(owned), { recursive: true });
   if (!fs.existsSync(owned)) {
     const temp = `${owned}.${uuid()}.partial`;
