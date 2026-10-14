@@ -159,7 +159,16 @@ export class FolderTransport {
   }
 }
 
-export async function importAttachment(store, input, { expectedId, pinned = false, domain = '通用' } = {}) {
+const importQueues = new WeakMap();
+export function importAttachment(store, input, options = {}) {
+  const pending = (importQueues.get(store) || Promise.resolve()).catch(() => {}).then(() => importAttachmentSerial(store, input, options));
+  importQueues.set(store, pending);
+  pending.finally(() => { if (importQueues.get(store) === pending) importQueues.delete(store); }).catch(() => {});
+  return pending;
+}
+
+async function importAttachmentSerial(store, input, { expectedId, pinned = false, domain = '通用', folderId, duplicateMode = 'reuse' } = {}) {
+  check(['reuse', 'separate'].includes(duplicateMode), '重复资料处理方式无效');
   const file = path.resolve(input);
   noSymlink(file);
   const stat = fs.statSync(file);
@@ -175,6 +184,20 @@ export async function importAttachment(store, input, { expectedId, pinned = fals
     check(record?.type === 'asset' && !record.conflict, 'Attachment metadata not found or conflicted');
     check(record.data.sha256 === hash && record.data.size === stat.size, 'This file does not match the requested attachment');
   }
+  const reused = !expectedId && duplicateMode === 'reuse' && store.list({ type: 'asset' })
+    .filter(item => !item.conflict && item.data.domain === domain && item.data.sha256 === hash && item.data.size === stat.size)
+    .sort((a, b) => a.id.localeCompare(b.id))[0];
+  record ||= reused || undefined;
+  const before = record?.heads;
+  const local = record && store.assetLocation(record.id);
+  if (local && fs.existsSync(local.path)) {
+    noSymlink(local.path);
+    if (fs.statSync(local.path).size === stat.size && await hashFile(local.path) === hash) {
+      check(canonical(store.headIds(record.id)) === canonical(before), '资料已变化，请重新导入', 'CONFLICT');
+      if (pinned && !local.pinned) store.bindAsset(record.id, local.path, true);
+      return { ...record, reused: !!reused };
+    }
+  }
   const owned = store.directories.assetPath(record?.data.domain || domain, hash);
   fs.mkdirSync(path.dirname(owned), { recursive: true });
   if (!fs.existsSync(owned)) {
@@ -185,10 +208,12 @@ export async function importAttachment(store, input, { expectedId, pinned = fals
       await fs.promises.rename(temp, owned);
     } finally { if (fs.existsSync(temp)) fs.unlinkSync(temp); }
   }
+  check(fs.statSync(owned).size === stat.size && await hashFile(owned) === hash, '已有托管文件校验失败，未覆盖，请检查文件后重试');
+  if (record) check(canonical(store.headIds(record.id)) === canonical(before), '资料已变化，请重新导入', 'CONFLICT');
   record ||= store.write({ type: 'asset', data: {
-    title: path.basename(file), domain, tags: [], sensitive: false, filename: path.basename(file),
+    title: path.basename(file), domain, ...(folderId ? { folderId } : {}), tags: [], sensitive: false, filename: path.basename(file),
     size: stat.size, sha256: hash, mime, priority: stat.size > SMALL_ASSET_LIMIT ? 'large' : 'normal'
   } });
-  store.bindAsset(record.id, owned, pinned);
-  return record;
+  store.bindAsset(record.id, owned, pinned || local?.pinned === 1);
+  return { ...record, reused: !!reused };
 }

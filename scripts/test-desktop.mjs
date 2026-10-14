@@ -3,6 +3,7 @@ import electronPath from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
 import assert from 'node:assert/strict';
+import { docxFixture } from './fixtures/docx.mjs';
 
 const root = path.resolve('artifacts/desktop');
 fs.mkdirSync(root, { recursive: true });
@@ -36,7 +37,7 @@ try {
   const response = await fetch(`${data.access.url}/v1/rpc`, { method: 'POST', headers: { Authorization: `Bearer ${data.token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ method: 'record', input: { id: data.note.id } }) });
   assert.equal((await response.json()).value.data.title, '桌面启动验证');
   await page.reload();
-  await page.locator('.record-row', { hasText: '桌面启动验证' }).click();
+  await page.locator('[data-record]', { hasText: '桌面启动验证' }).click();
   await page.locator('.tiptap').waitFor();
   const imagePath = path.join(profile, 'native-image.png');
   const imageData = await page.evaluate(() => { const canvas = document.createElement('canvas'); canvas.width = 240; canvas.height = 140; const ctx = canvas.getContext('2d'); ctx.fillStyle = '#3a8197'; ctx.fillRect(0, 0, 240, 140); ctx.fillStyle = '#f4da78'; ctx.fillRect(30, 30, 180, 80); return canvas.toDataURL('image/png').split(',')[1]; });
@@ -74,7 +75,13 @@ try {
   assert.equal(await page.locator('.block-drag-preview').count(), 0);
   await page.waitForFunction(() => document.querySelector('[data-action=save]').dataset.status === 'saved');
   assert.match((await page.evaluate(id => window.desktop.call('record', { id }), data.note.id)).data.content, /data-ss-layout/);
-  await assert.rejects(page.evaluate(() => window.desktop.importFile(new File(['x'], 'synthetic.txt'), 'AI')), /无法读取/);
+  await assert.rejects(page.evaluate(() => window.desktop.importFile(new File(['x'], 'synthetic.txt'), 'AI')), /剪贴板/);
+  const pasted = await page.evaluate(async encoded => {
+    const image = new File([Uint8Array.from(atob(encoded), char => char.charCodeAt(0))], 'clipboard.png', { type: 'image/png' });
+    return window.desktop.importFile(image, 'AI');
+  }, imageData);
+  assert.equal(pasted.data.mime, 'image/png');
+  assert.equal(pasted.data.sha256, asset.data.sha256);
   await application.evaluate(({ dialog, shell }, file) => {
     globalThis.studyselfTestDialogs = { choose: dialog.showOpenDialog, message: dialog.showMessageBox, open: shell.openPath };
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [file] });
@@ -99,6 +106,33 @@ try {
   await assert.rejects(page.evaluate(() => window.desktop.call('bindLocalFile')), /只允许本机/);
   await assert.rejects(page.evaluate(() => window.desktop.call('openLocalFile', { id: '11111111-1111-1111-1111-111111111111' })), /尚未绑定/);
   await application.evaluate(({ dialog, shell }) => { const old = globalThis.studyselfTestDialogs; dialog.showOpenDialog = old.choose; dialog.showMessageBox = old.message; shell.openPath = old.open; });
+  await page.locator('[data-nav="assets"]').click();
+  const nativeThumbnail = page.locator(`[data-material-row="${asset.id}"] .material-thumbnail`);
+  await nativeThumbnail.scrollIntoViewIfNeeded();
+  await page.waitForFunction(id => document.querySelector(`[data-material-row="${id}"] .material-thumbnail`)?.dataset.thumbnailState === 'ready', asset.id);
+  assert.equal(await nativeThumbnail.locator('img').evaluate(el => el.naturalWidth), 240);
+  assert.ok((await nativeThumbnail.locator('img').getAttribute('src')).startsWith('studyself-media://asset/'));
+  await page.screenshot({ path: path.join(root, 'asset-thumbnails-native.png') });
+  const wordPath = path.join(profile, 'desktop-preview.docx');
+  fs.writeFileSync(wordPath, await docxFixture({ image: Buffer.from(imageData, 'base64') }));
+  const wordNote = await page.evaluate(async file => {
+    const asset = await window.desktop.call('assetImport', { path: file, domain: 'AI' });
+    return window.desktop.call('save', { type: 'note', data: { title: '桌面 Word 预览', domain: 'AI', format: 'html',
+      content: `<p><a href="studyself://asset/${asset.id}">Word 原资料</a></p>`, assetIds: [asset.id] } });
+  }, wordPath);
+  await page.locator('[data-nav="notes"]').click();
+  await page.locator(`[data-record="${wordNote.id}"]`).click();
+  if (await page.locator('[data-action=toggle-source]').getAttribute('aria-expanded') === 'true')
+    await page.locator('[data-action=toggle-source]').click();
+  await page.locator('.tiptap a').click();
+  await page.frameLocator('#modal iframe.docx-preview').getByRole('heading', { name: '学习资料阅读预览' }).waitFor();
+  assert.equal(await page.frameLocator('#modal iframe.docx-preview').locator('table td').count(), 4);
+  assert.equal(await page.locator('#modal iframe.docx-preview').getAttribute('sandbox'), '');
+  await page.screenshot({ path: path.join(root, 'docx-preview-native.png') });
+  await page.getByRole('button', { name: '关闭', exact: true }).click();
+  await page.locator('[data-nav="notes"]').click();
+  await page.locator(`[data-record="${data.note.id}"]`).click();
+  await page.locator('.tiptap').waitFor();
   const captured = await application.evaluate(async ({ BrowserWindow }) => {
     const image = await BrowserWindow.getAllWindows()[0].webContents.capturePage({}, { stayHidden: true, stayAwake: true });
     return image.toPNG().toString('base64');

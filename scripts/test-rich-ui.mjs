@@ -27,15 +27,24 @@ try {
   await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
   await page.locator('#insert-content').selectOption('callout');
   await page.locator('.tiptap aside[data-callout]').waitFor();
-  assert.equal(await page.locator('.tiptap > .layout-block > .layout-content > aside[data-callout]').count(), 1, 'Callout must move and resize with its outer layout container');
+  assert.equal(await page.locator('.tiptap > aside[data-callout]').count(), 1, 'Callout belongs directly in document flow');
+  assert.equal(await page.locator('.tiptap .layout-block').count(), 0);
   const end = async () => { await page.locator('.tiptap > p').last().click(); await page.keyboard.press('End'); await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve))); };
-  await end(); await page.locator('#insert-content').selectOption('table'); await page.locator('.tiptap td').last().click(); await page.locator('#table-action').selectOption('addRowAfter'); assert.equal(await page.locator('.tiptap tr').count(), 4);
+  await end(); await page.locator('#insert-content').selectOption('table'); await page.locator('#table-picker button[type=submit]').click(); await page.locator('.tiptap td').last().click(); await page.locator('#table-action').selectOption('addRowAfter'); assert.equal(await page.locator('.tiptap tr').count(), 4);
   await end(); await page.locator('#insert-content').selectOption('formula');
   await page.locator('#rich-form textarea').fill('\\frac{a^2+b^2}{c} = \\sqrt{x}'); await page.getByRole('button', { name: '保存内容块', exact: true }).click();
   await page.locator('.tiptap .katex').waitFor();
   const diagramValues = await page.locator('#insert-content option[value^="diagram:"]').evaluateAll(options => options.map(option => option.value));
   for (const value of diagramValues) {
     await end(); await page.locator('#insert-content').selectOption(value);
+    if (value === 'diagram:mindmap') {
+      await page.locator('.mm-topic').first().waitFor();
+      assert.ok(await page.locator('.mm-topic').count() > 1);
+      await page.screenshot({ path: path.join(root, 'diagram-mindmap.png') });
+      await page.getByRole('button', { name: '保存导图', exact: true }).click();
+      await page.waitForFunction(() => !document.querySelector('#modal').open);
+      continue;
+    }
     await page.locator('#rich-preview svg').waitFor({ timeout: 20000 });
     assert.equal(await page.locator('#rich-preview[data-error]').count(), 0, `Diagram failed: ${value}`);
     assert.ok(await page.locator('#rich-preview svg text').count() > 0, `Diagram labels missing: ${value}`);

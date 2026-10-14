@@ -6,6 +6,10 @@ import { CurrentSync } from './current-sync.mjs';
 import { AgentAccess } from './agent-access.mjs';
 import { uuid, check, now, atomicWrite } from './util.mjs';
 import { workspaceLock } from './workspace-lock.mjs';
+import { LocalHierarchy } from './local-hierarchy.mjs';
+import { AssetManagement } from './asset-management.mjs';
+import { previewTrash, emptyTrash } from './trash.mjs';
+import { previewAssetMerge, mergeAssets } from './asset-merge.mjs';
 
 const sharedTab = tab => Object.fromEntries(['id', 'recordId', 'title', 'domain', 'scroll']
   .filter(key => Object.hasOwn(tab, key)).map(key => [key, tab[key]]));
@@ -17,8 +21,14 @@ export class Service {
     try {
       this.store = new Store(directory, options);
       this.transport = new CurrentSync(this.store);
+      this.store.migrateNoteHierarchy();
       this.agents = new AgentAccess(this.store);
+      this.localHierarchy = new LocalHierarchy(this.store);
+      this.materials = new AssetManagement(this.store);
+      this.store.local('hierarchyEnabled', true);
+      this.store.local('hierarchyDirty', true);
       this.timer = null;
+      this.imports = new Set();
       this.idleCheck = options.idleCheck;
       for (const task of this.store.list({ type: 'task' })) {
         if (task.data.ownerDevice === this.store.deviceId && task.data.status === 'running' && !task.conflict) {
@@ -27,19 +37,44 @@ export class Service {
       }
     } catch (error) { this.store?.close(); this.releaseLock(); throw error; }
   }
-  startTimer() {}
+  startTimer() {
+    if (this.timer) return;
+    this.timer = setInterval(() => {
+      const status = this.localHierarchy.status();
+      if (!this.closed && !this.imports.size && status.enabled && status.pending && !status.busy && !this.transport.running && !status.errors?.length) {
+        this.organizeLocal({ verify: false });
+      }
+    }, 2500);
+    this.timer.unref?.();
+  }
+  organizeLocal({ verify = true } = {}) {
+    check(!this.transport.running && !this.localTask && !this.imports.size, '请等待当前同步、导入或目录整理完成');
+    this.localTask = this.localHierarchy.refresh({ enable: true, verify }).finally(() => { this.localTask = null; });
+    return this.localTask;
+  }
   close() {
     if (this.closed) return;
     this.closed = true;
     if (this.timer) clearInterval(this.timer);
-    this.agents.close(); this.store.close(); this.releaseLock();
+    this.agents.close();
+    const finish = () => { this.store.close(); this.releaseLock(); };
+    if (this.localTask || this.imports.size) return Promise.allSettled([this.localTask, ...this.imports]).finally(finish);
+    finish();
   }
   state() {
-    return { ...this.store.summary(), libraries: this.store.directories.describe(this.store.libraries()), sync: this.transport.config(),
+    const legacy = [...this.store.list({ type: 'folder' }), ...this.store.list({ type: 'folder', trash: true })];
+    const summary = this.store.summary();
+    summary.conflicts -= legacy.filter(item => item.conflict).length;
+    summary.trash -= legacy.filter(item => item.deleted).length;
+    return { ...summary, libraries: this.store.directories.describe(this.store.libraries()), sync: this.transport.config(),
       workspace: this.store.local('workspace') || { tabs: [], selectedTab: null },
-      version: '0.1.1', localDataDirectory: this.store.directory };
+      version: '0.1.1', localDataDirectory: this.store.directory, localHierarchy: this.localHierarchy.status() };
   }
   async call(method, input = {}) {
+    if (['syncPlan', 'syncPublish', 'syncImport', 'deviceSetPrimary', 'deviceVerify', 'assetHydrate', 'assetEvict'].includes(method)) {
+      if (this.imports.size) await Promise.allSettled([...this.imports]);
+      if (this.localTask) await this.localTask;
+    }
     switch (method) {
       case 'storageStatus': return this.storage?.status() || { directory: this.store.directory, unavailable: true };
       case 'storageInspect':
@@ -55,33 +90,56 @@ export class Service {
       case 'agentPreferencesSave': return this.agents.savePreferences(input);
       case 'agentSkill': return { files: this.agents.skillFiles(), preferences: this.agents.preferences() };
       case 'librarySave': return this.store.saveLibrary(input);
+      case 'noteTree': return this.store.noteTree(input.domain).map(({ data, versions, ...node }) =>
+        ({ ...node, data: { title: data.title, domain: data.domain, parentNoteId: data.parentNoteId, noteOrder: data.noteOrder } }));
+      case 'noteMove': return this.store.moveNote(input);
+      case 'folders': return this.store.folders(input.domain);
+      case 'folderSave': {
+        const record = this.store.saveFolder(input);
+        this.store.local('hierarchyEnabled', true);
+        return record;
+      }
+      case 'recordMove': return this.store.moveRecord(input);
+      case 'localHierarchyStatus': return this.localHierarchy.status();
+      case 'localHierarchyRefresh': return this.organizeLocal();
       case 'libraryDirectory': {
         const record = this.store.libraries().find(item => item.id === input.id);
         check(record, '知识库不存在');
         return { directory: this.store.directories.ensure(record) };
       }
       case 'records': {
-        const records = this.store.list(input).filter(record => !['model', 'provider', 'usage', 'task', 'agentPreferences'].includes(record.type));
+        const records = this.store.list(input).filter(record => !['model', 'provider', 'usage', 'task', 'agentPreferences', 'folder'].includes(record.type));
         return input.preview ? records.map(record => ({ ...record, versions: [],
           data: { ...record.data, content: record.data.content?.slice(0, 1500), messages: record.data.messages?.slice(-1) } })) : records;
       }
       case 'record': return this.store.get(input.id);
       case 'save': {
         check(['note', 'draft', 'source', 'annotation', 'relation', 'proposal', 'workspace'].includes(input.type), '该类型不允许直接修改；内置聊天与模型管理已移除');
+        if (input.notePlacement) {
+          check(input.type === 'note', '只有正式笔记可以排序');
+          return this.store.moveNote({ ...input, parentNoteId: input.data.parentNoteId || null });
+        }
         return this.store.write({ ...input, allowBranch: false });
       }
       case 'saveBranch':
         check(['note', 'draft', 'source', 'annotation'].includes(input.type), 'Only user-editable content can be saved as a branch');
         return this.store.write({ ...input, allowBranch: true });
       case 'delete': return this.store.remove(input.id, input.parents);
+      case 'trashPreview': return previewTrash(this.store, input);
+      case 'trashEmpty':
+        check(!this.transport.running && !this.localTask, '请等待同步或本地资料整理完成', 'BUSY');
+        return emptyTrash(this.store, input);
       case 'history': return this.store.history(input.id);
       case 'restoreVersion': return this.store.restoreVersion(input.id, input.revision, input.parents);
       case 'approve': return this.store.approve(input.id, input.itemIds, input.parents);
       case 'propose': {
         check(Array.isArray(input.items) && input.items.length > 0, 'No proposed items');
         return this.store.write({ type: 'proposal', data: { title: input.title || '待确认整理方案', domain: input.domain || '通用',
+          ...(input.folderId ? { folderId: input.folderId } : {}),
           items: input.items.map(item => ({ id: uuid(), targetId: item.targetId || uuid(), parents: item.parents || [],
             data: { title: item.title, content: item.content || '', domain: input.domain || '通用', tags: item.tags || [],
+              ...(item.folderId || input.folderId ? { folderId: item.folderId || input.folderId } : {}),
+              ...(item.parentNoteId !== undefined || input.parentNoteId !== undefined ? { parentNoteId: item.parentNoteId ?? input.parentNoteId ?? null } : {}),
               sourceIds: item.sourceIds || [], assetIds: item.assetIds || [], sensitive: item.sensitive === true },
             status: 'pending' })) } });
       }
@@ -92,7 +150,11 @@ export class Service {
       case 'syncStatus': return this.transport.status();
       case 'syncPlan': return this.transport.plan(input);
       case 'syncPublish': return this.transport.publish(input);
-      case 'syncImport': return this.transport.importLatest(input);
+      case 'syncImport': {
+        const result = await this.transport.importLatest(input);
+        this.store.migrateNoteHierarchy();
+        return result;
+      }
       case 'syncCancel': return this.transport.cancel();
       case 'syncConfirmBatch': return this.transport.confirmBatch(input);
       case 'syncConfirmUpload': return this.transport.confirmUpload(input);
@@ -106,7 +168,32 @@ export class Service {
         check(typeof input.name === 'string' && input.name.trim().length > 0, 'Enter a device name');
         check(!this.transport.running, '请等待同步操作完成');
         this.store.setMeta('deviceName', input.name.slice(0, 100)); this.transport.announce(); return this.state();
-      case 'assetImport': return importAttachment(this.store, input.path, input);
+      case 'assetImport': {
+        check(!this.transport.running, '请等待当前同步完成后导入');
+        const task = (async () => {
+          if (this.localTask) await this.localTask;
+          return importAttachment(this.store, input.path, input);
+        })();
+        this.imports.add(task);
+        try { return await task; } finally { this.imports.delete(task); }
+      }
+      case 'assetDuplicates': {
+        const record = this.store.get(input.id);
+        check(record?.type === 'asset' && !record.deleted, '资料不存在或已回收');
+        return this.materials.rows().filter(row => row.data.domain === record.data.domain
+          && row.data.sha256 === record.data.sha256 && row.data.size === record.data.size);
+      }
+      case 'assetMergePreview': return previewAssetMerge(this.store, input);
+      case 'assetMerge': {
+        check(!this.imports.size && !this.transport.running && !this.localTask, '请等待导入、同步或目录整理完成');
+        const task = mergeAssets(this.store, input);
+        this.imports.add(task);
+        try { return await task; } finally { this.imports.delete(task); }
+      }
+      case 'assetCatalog': return this.materials.catalog(input);
+      case 'assetDetail': return this.materials.detail(input.id);
+      case 'assetUpdate': return this.materials.update(input);
+      case 'assetBatch': return this.materials.batch(input);
       case 'assets': return this.store.list({ type: 'asset' }).map(record => {
         const local = this.store.assetLocation(record.id);
         return { ...record, available: !!local && fs.existsSync(local.path), pinned: local?.pinned === 1 };

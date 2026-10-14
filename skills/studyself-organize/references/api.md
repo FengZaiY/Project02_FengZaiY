@@ -18,6 +18,18 @@
 - `history {id}`：历史版本。任一版本或引用超出授权时拒绝整个请求，不泄漏跨库/敏感历史。
 - `assetRead {id}`：返回 filename、mime、sha256、base64 data，不返回本机路径；校验哈希。最大 16 MiB，缺失原文件返回 ASSET_UNAVAILABLE。
 
+资料 `data.title` 是可修改的显示名称，`data.filename` 是原文件名，身份由 `id` 与内容哈希确定。引用使用 ID，不以名称或哈希猜测可删除的重复记录。`assetCatalog`、`assetDetail`、`assetUpdate`、`assetBatch` 是系统界面专用方法，外部 Agent 不可调用；资料属性、跨库移动、回收和恢复交由用户在“资料与附件”处理。当前正文分支、草稿、整理方案和回收站中的引用均可能阻止回收或跨库移动。
+
+## 笔记知识体系
+
+`search` 和 `record` 可返回 `noteOrder`（精确分数字符串或 null）。这是用户设置的同级顺序，随历史与同步保留，外部 Agent 只读并保留；`noteUpdate` 省略时由系统保留原值，改写则拒绝。提案更新同一上级的笔记保留原顺序，确认换上级/知识库后清除旧顺序，在目标层未排序项中按标题显示。`noteMove`、`notePlacement` 和目标层快照仅供受信任界面使用，不能通过 Agent 调用。参与同步的电脑都需更新到支持该字段的源码；不修改旧事件哈希。
+
+知识库是根，正式笔记可包含正文和下级笔记。`search {type:"note", domain}` 返回 `parentNoteId`；`record` 的 note.data 可含 `parentNoteId`（同库正式笔记 UUID，null/未指定为顶层）。最多 16 层，禁止循环；同步并发产生的异常保留双方，系统界面提示处理。上级及祖先同样受知识库和敏感授权限制。
+
+用 `propose` 提出新增概览、子笔记、内容融合或层级调整，由用户分项确认。已有笔记的 `noteUpdate` 必须保持 parentNoteId；省略已有非空值不代表允许移动。使用提案更新旧笔记时，未指定 parentNoteId 则沿用原值；明确传 null 才建议移到顶层。除层级外，保留旧正文、来源、附件与富内容。相同标题允许出现在不同笔记中，引用一律用稳定标识。
+
+旧 `folder` / `folderId` 仅保留兼容读取，旧分类由系统派生为概览笔记，原历史保留。不要继续创建文件夹归属方案，也不要操作文件路径。其他电脑须更新后编辑或同步新层级字段。
+
 ## 写入
 
 所有写入 input 额外包含 `preferencesVersion`，取自刚读取的 bootstrap.preferences.version。
@@ -28,15 +40,44 @@
 - `sourceCreate {data}`、`draftCreate {data}`：保存原资料或中间成果，返回完整记录。
 - `draftUpdate {id, parents, data}`：仅草稿，parents 必须是读取时 heads，不移动到其他库。
 - `assetWrite {domain, filename, mime, data, sha256, sensitive?}`：base64 原文件，最大 16 MiB，SHA-256 小写十六进制。文件不执行。更大文件由用户在系统中导入；接口不接受任意本机路径。
-- `propose {title, domain, content?, items}`：创建完整待确认预览，items 1 至 100 项。每项 `{data, targetId?, parents?}`；新笔记不指定 targetId/parents，融合旧正式笔记需指定其 ID 和 heads。融合自动保留原笔记出处、附件及敏感标记，但正文仍须由 Agent 完整合并。data 必须给目标 domain，允许范围内跨库提案。content 可记遗漏、提取进度或处理理由。
-- `proposalRevise {id, parents, items}`：局部修改待确认项，每项 `{id, data}`。这里 id 是方案项 ID；最外层 parents 是方案 heads。已确认项不能改写，原 targetId/parents 不改变。目标笔记已更新时重新对照并提交新方案。
+  不同请求仍可创建独立附件；相同请求标识遵守幂等规则。界面导入的同库复用及已有重复合并不扩大本接口权限，`assetDuplicates`、`assetMergePreview`、`assetMerge` 仅供受信任界面，外部 Agent 不可调用。
+- `propose {title, domain, content?, items}`：创建完整待确认预览，items 1 至 100 项。每项 `{data, targetId?, parents?, key?, parentKey?, reason?}`；新笔记不指定 targetId/parents，融合旧正式笔记需指定其 ID 和 heads。key 是本次方案唯一的字母/数字/短横线/下划线标识（1 至 80 字符）；parentKey 指向本次方案某项的 key，系统生成稳定 parentNoteId，返回值不保留 key。父子项顺序任意。reason 是单项整理理由，最多 4000 字。融合自动保留原笔记出处、附件及敏感标记，但正文仍须由 Agent 完整合并。data 必须给目标 domain。content 可解释整个知识体系与遗漏。
+- `proposalRevise {id, parents, items}`：局部修改待确认项，每项 `{id, data, reason?}`。这里 id 是方案项 ID；最外层 parents 是方案 heads。调整上级用返回方案中某项的 targetId 填写 data.parentNoteId，不再使用 parentKey。已确认项不能改写，原 targetId/parents 不改变。目标笔记已更新时重新对照并提交新方案。
 - `noteUpdate {id, parents, data}`：仅额外授予 edit 时可直接编辑正式笔记，不移动知识库。
 - `relationCreate {data}`：仅 edit 权限；data 包含 title、domain、from、to、description，目标为授权范围内的记录 ID。
 - `trash {id, parents}`：仅额外授予 trash 时可移到回收站。不删除知识库、原文件或历史。
 
+`trashPreview` / `trashEmpty` 为受信任界面专用方法，不开放给外部 Agent。用户清空后，搜索不再返回该记录，直接读取、历史及旧请求重放均拒绝访问；不要用旧 ID 重新创建。若另一台电脑已有并发修改，系统仍保留冲突，由用户处理。
+
 接口无 approve、授权管理、偏好修改、模型调用、Shell、任意 RPC、同步配置、空间预估/批次/暂停/拉取或设备释放操作。用户在界面中部分确认方案。应用已取消 Git 提交和本地独立备份；`history` 是笔记修改记录，不代表整库版本管理。
 
 系统工作根目录、知识库文件夹的选择/创建/迁移/打开只由用户界面管理，不是 Agent RPC。`libraries`/`record` 不返回本机文件夹路径。新附件由系统按知识库管理目录；Agent 仍只传稳定 domain、文件内容与哈希，不能指定文件系统路径。旧附件保持兼容，不根据目录存在与否推断资料被删除。
+
+层级提案示例（domain 和 preferencesVersion 替换为本次授权及 bootstrap 返回值）：
+
+```json
+{
+  "domain": "<知识库标识>",
+  "preferencesVersion": "<当前偏好版本>",
+  "title": "整理新知识点并补全主题概览",
+  "content": "说明新增内容、与现有知识的关系及待补充处。",
+  "items": [
+    {
+      "key": "overview",
+      "data": { "title": "主题概览", "domain": "<知识库标识>", "content": "有实际内容的概览", "parentNoteId": null },
+      "reason": "帮助理解该主题的结构和适用范围"
+    },
+    {
+      "key": "concept",
+      "parentKey": "overview",
+      "data": { "title": "具体知识点", "domain": "<知识库标识>", "content": "概念、条件、例子和出处" },
+      "reason": "该知识点属于主题的基础概念"
+    }
+  ]
+}
+```
+
+仅选子项而未入库的新父项未被选中时，系统拒绝本次确认并提示依赖；先确认父项或同时确认父子项。确认事务中按依赖写入，任何旧目标版本冲突或无效层级都会整体回滚本次选择，其他先前已确认项不受影响。
 
 ## 富内容正文
 
@@ -50,7 +91,7 @@
 
 块的公共字段为 `v: 1`、`kind`、`label`（最多 200 字）。仅允许各类型的已声明字段：
 
-布局独立于块 JSON：`figure` 可带 `data-ss-layout` 属性，其 JSON 仅含 `width`（15 至 100 的百分比）、`height`（null 表示自动，或 60 至 1600 像素）、`align`（left / center / right）。仍须 HTML 属性转义。省略时默认宽度自适应、高度自动。`section data-ss-container="true"` 包裹表格、高亮块或附件链接等普通正文，也可带相同布局属性。`div data-ss-row="true"` 直接包裹多个 figure / section 表示横排；无 row 容器时按正文顺序纵排。不得用本机路径、任意 CSS 或脚本代替这些属性。局部修改保留容器及布局；多台电脑均需升级后编辑新布局。
+布局独立于块 JSON：`figure` 可带 `data-ss-layout` 属性，其 JSON 仅含 `width`（15 至 100 的百分比）、`height`（null 表示自动，或 60 至 1600 像素）、`align`（left / center / right）。仍须 HTML 属性转义。省略时默认宽度自适应、高度自动。`div data-ss-row="true"` 可直接包裹多个 figure 表示纯媒体横排；无 row 容器时按正文顺序纵排。普通段落、表格、高亮块、附件链接直接写入正文，不再生成 `section data-ss-container` 文字框。该旧格式仍可读写以兼容历史；界面展开旧框，混合文字的旧 row 按内容顺序转为连续正文，纯媒体 row 保留。仅打开不会创建修改版本；下次实际编辑保存使用连续正文。不得用本机路径、任意 CSS 或脚本代替这些属性。局部修改保留媒体布局、全部内容和稳定引用，不能删除未知块或空段落；多台电脑应更新后编辑。
 
 | kind | 额外字段 |
 |---|---|
@@ -62,7 +103,11 @@
 
 画板对象字段：`id`（块内唯一字符串）、`type`（rect / ellipse / text / arrow / line）、有限数字 `x`、`y`、正数 `width`、`height`（绝对值最多 1000000）、`text`（最多 2000 字）、`fill`（六位十六进制颜色）。arrow / line 额外使用 `points`，为长度 4 至 10000 的偶数个有限坐标值，绝对值最多 1000000。单块 JSON 最多 200000 字，整条版本仍受 1 MiB 限制。
 
-Mermaid 界面模板包括流程、框架/架构（flowchart 分组）、思维导图、看板、甘特、UML 类/时序/状态图、饼/柱/折线图。图表不是拖拽看板或独立项目管理系统；用户编辑源文本并预览。
+Mermaid 界面模板包括流程、框架/架构（flowchart 分组）、思维导图、看板、甘特、UML 类/时序/状态图、饼/柱/折线图。思维导图提供主题可视化编辑，其他图表继续使用源文本预览，不是独立项目管理系统。
+
+思维导图仍为 `kind: "diagram"`、`source: "mindmap\n..."`。界面可添加 `%% studyself-mindmap:{"v":1,"layout":"balanced","palette":"classic","collapsed":[]}` 注释；layout 可为 balanced/right，palette 可为 classic/bright/quiet。collapsed 使用当前先序遍历位置（中心为 m0），结构改写后须重新映射，无法映射时清空 collapsed 以展开全部主题，不删除主题。普通 Mermaid 可忽略此注释继续显示。可视化编辑最多 500 个主题、40 层；特殊图标、样式或多行语法保留源文本路径。块版本及接口授权不变，不增加任意元数据字段。
+
+正文中图表（含思维导图）与画板预览复用 `data-ss-layout` 的 width/height/align 和纯媒体 `data-ss-row`；调整整块大小、位置不改 source/shapes。保留用户已有布局，不将正文尺寸误写入导图内部布局注释。界面按原始比例显示，窗口宽度可能进一步约束实际尺寸。
 
 系统链接用 `studyself://note/<记录UUID>` 或 `studyself://asset/<附件UUID>`。外部链接只允许无内嵌账号密码的 HTTP/HTTPS。`studyself://local/<UUID>` 为用户在桌面版建立的本机文件绑定，Agent 不能创建绑定或通过它读取本机文件。不得将该标识改写为路径。
 

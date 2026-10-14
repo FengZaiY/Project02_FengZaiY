@@ -5,6 +5,7 @@ import path from 'node:path';
 import { Store } from '../src/core/store.mjs';
 import { Service } from '../src/core/service.mjs';
 import { CurrentSync } from '../src/core/current-sync.mjs';
+import { LocalHierarchy } from '../src/core/local-hierarchy.mjs';
 import { CHUNK_BYTES, sealBinary } from '../src/core/sync-objects.mjs';
 import { importAttachment, makePairingKey } from '../src/core/transport.mjs';
 import { canonical, hashFile, uuid } from '../src/core/util.mjs';
@@ -308,4 +309,24 @@ test('concurrent primary changes preserve conflict and block release', async t =
   f.deliver(f.a, f.b); await f.b.sync.importLatest();
   assert.equal(f.b.sync.devices().conflict, true);
   await assert.rejects(f.b.sync.evict({ id: uuid(), confirmed: true }), /唯一主力机/);
+});
+
+test('automatically organized originals still require receipts and can be released and restored', async t => {
+  const f = fixture(t);
+  await f.a.sync.setPrimary({ deviceId: f.a.store.deviceId, parents: [], confirmed: true });
+  const asset = await f.file(f.a);
+  await f.publish(f.a); f.deliver(f.a, f.b); await f.b.sync.importLatest();
+  const hierarchy = new LocalHierarchy(f.b.store);
+  assert.deepEqual((await hierarchy.refresh()).errors, []);
+  const organized = f.b.store.assetLocation(asset.id).path;
+  assert.match(organized, /资料/);
+  await assert.rejects(f.b.sync.evict({ id: asset.id, confirmed: true }), /校验回执/);
+  await f.a.sync.verifyPrimary(); f.deliver(f.a, f.b); f.b.sync.scan();
+  assert.equal((await f.b.sync.evict({ id: asset.id, confirmed: true })).released, true);
+  assert.equal(fs.existsSync(organized), false);
+  assert.equal(f.b.store.local('hierarchyDirty'), true);
+  assert.equal((await hierarchy.refresh()).missing, 1);
+  await f.b.sync.hydrate({ id: asset.id });
+  assert.deepEqual((await hierarchy.refresh()).errors, []);
+  assert.equal(await hashFile(f.b.store.assetLocation(asset.id).path), asset.data.sha256);
 });

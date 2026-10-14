@@ -38,12 +38,27 @@ Windows 预览的目录按钮通过已鉴权的界面接口调用系统文件夹
 |---|---|
 | 文档和目录约定 | `npm run check:project` |
 | `src/core/` | `npm test` |
+| 清空回收站、终止删除标记 | 另运行 `npm run test:trash`、`npm run test:libraries`、`npm run test:assets`、`npm run test:agents`；核心覆盖范围、引用、批量回滚、过期确认、重复/乱序同步和并发恢复；不得用正式回收内容测试 |
 | 当前内容同步、批次与接收断点 | `node --test tests/current-sync.test.mjs`、全量核心及界面/桌面测试；覆盖缺块、重启、损坏前缀、空间不足、重复与并发 |
 | 退役 Git/独立备份兼容模块 | 现有 `git-sync.test.mjs` 等仅维护旧格式读取证据，不恢复当前产品入口 |
 | `web/` 或跨端业务调用 | `npm run build`、`npm run test:ui`，必要时核心测试 |
 | 笔记富内容、链接、媒体或画板 | 另运行 `npm run test:rich`，检查所有模板、保存重开、原文件播放、画板像素和桌面/窄窗口截图；原生协议/本地文件绑定另测 `test:desktop` |
-| 文件拖入、内容布局、自动保存 | 另运行 `npm run test:editor` 和 `node --test tests/note-autosave.test.mjs`；验证长按一秒/短按取消、四边四角缩放、悬浮落点/布局重开、切换笔记、保存中输入、失败重试、冲突暂停。桌面真实 File 路径桥接由 `test:desktop` 覆盖 |
+| 思维导图可视化编辑 | 另运行 `npm run test:mindmap`、`node --test tests/mindmap.test.mjs`；覆盖源文本保留、实体编码、中文输入、分支移动/循环/折叠、保存重开、取消、撤销、导出及窗口截图 |
+| 正文富媒体尺寸调整 | 另运行 `npm run test:rich-layout`；覆盖导图八方向实际缩放、图表/画板比例、调节点边界、取消/撤销、键盘、长按编排、双击编辑、保存重开、历史与窄窗口，不以布局属性变化代替可见尺寸验证 |
+| 富内容行间拖动 | 另运行 `npm run test:line-drag`、`node --test tests/block-layout.test.mjs`；检查换行/自动折行落点、上下移动、列表/引用/表格、行内格式与链接、横排移出、再次拖动、取消、一次撤销与保存重开 |
+| 富内容横向排列 | 另运行 `npm run test:horizontal-drag`；真实鼠标拖到素材左右空白，检查竖向提示、小导图与竖图、附件面板展开、引用内横排、窄区域保持并排、比例、缩放、换序、移出、取消、撤销和保存重开 |
+| DOCX 附件预览 | `npm run test:docx-preview`、`test:attachments`、`test:attachment-drag`、`test:assets`、`test:ui` 与 `test:desktop`；检查正文/表格/图片/列表、旧 MIME、损坏/解压限制、隔离与无外部请求、取消/竞态、放大和长列表可见性、编辑器/撤销保留与窗口截图 |
+| 文件拖入、内容布局、自动保存 | 另运行 `npm run test:editor`、`npm run test:document` 和 `node --test tests/note-autosave.test.mjs`；验证媒体长按/缩放、旧正文框展开、回车退格/选择/撤销、粘贴与长文自适应、切换笔记、保存中输入、失败重试、冲突暂停。桌面真实 File 路径桥接由 `test:desktop` 覆盖 |
+| 浮动工具、快捷插入、正文目录、引用和历史差异 | `npm run test:experience`、`node --test tests/editor-experience.test.mjs`；包含输入法、格式状态、阅读设置、表格/图片粘贴、代码复制、跨库引用、备注歧义、查找、局部恢复及多窗口截图。桌面无路径剪贴板图片另测 `test:desktop` |
 | 知识库管理和范围选择 | 另运行 `npm run test:libraries`，检查用户视口与空工作区 |
+| 资料目录、属性与回收 | 另运行 `npm run test:assets`、`node --test tests/asset-management.test.mjs`；覆盖文件身份、引用保护、批量回滚、过期编辑、历史/同步、分页与多视口截图 |
+| 附件导入去重与合并 | 另运行 `npm run test:dedup`、`node --test tests/asset-merge.test.mjs`；覆盖并发复用、明确独立导入、缺失/损坏原件、取消/过期预览/未保存、引用重写、失败回滚、历史/恢复及并发同步；只使用隔离重复资料 |
+| 原附件面板及关联管理 | 另运行 `npm run test:attachments`、`npm run test:libraries`；覆盖本地导入、库内关联、解除/取消、正文及其他笔记引用保留、未保存正文与撤销、保存中输入、失败重试、冲突暂停和窄窗口；预览开关另运行 `test:docx-preview`、`test:attachment-drag`，检查关闭/重开、延迟结果取消、视频停止、紧凑行和完整名称提示 |
+| 原附件拖入正文 | 另运行 `npm run test:attachment-drag`；使用真实鼠标验证图片/视频/链接落点、空白笔记、边缘滚动、预览、取消、撤销、重复不重新导入、校验期间输入、失效/伪造数据、切换笔记、保存重开及窄窗口 |
+| 资料缩略图、筛选布局 | 另运行 `npm run test:asset-previews`；检查真实图片/视频帧、静音不自动播放、不可用/失败占位、按可见区域加载、离开页面清理、长标签完整显示和多窗口截图；桌面媒体协议由 `test:desktop` 验证 |
+| 资料本机目录展示 | 另运行 `npm run test:asset-storage`；检查真实目录与文件绑定、笔记层级/共享/回收、待下载/缺失/外部绑定、路径复制、目录及跨库筛选、分页总数、多窗口截图和只读不改知识记录；本机路径不得进入外部 Agent 返回 |
+| 笔记知识体系与后台文件 | 另运行 `npm run test:hierarchy`、`node --test tests/note-hierarchy.test.mjs tests/hierarchy.test.mjs`；覆盖上下级、提案依赖/部分确认/授权、旧分类幂等转换、新机同步、并发循环、磁盘失败、文件保护和截图 |
+| 笔记树拖动 | 另运行 `npm run test:note-drag`、`node --test tests/note-order.test.mjs`；真实鼠标验证下级/顶层/同级前后、整条子树、排序重开/同步/并发、循环/跨库阻止、取消/长树滚动、当前及后台标签保存竞态、失败重试、源及目标过期、编辑器/预览/撤销保留，以及层级目录跟随和单纯排序不搬原件 |
 | 根目录与知识库文件夹 | `npm test` 含 `library-directories.test.mjs`；另测 `test:storage`、`test:libraries` 和 `test:desktop`，核对真实目录、旧库兼容、创建失败回退及跨库新附件位置 |
 | 本地存储与启动目录 | 另运行 `npm run test:storage`、`npm run test:desktop`；覆盖非空/占用/丢失/损坏目录、复制失败、配置写入失败、WAL 和重启持久化 |
 | 外部 Agent、权限、偏好和 Skill | 另运行 `npm run test:agents`，核心测试通过真实本机 HTTP 验证隔离、撤销、幂等和偏好更新；检查导出的 ZIP |

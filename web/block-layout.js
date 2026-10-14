@@ -4,7 +4,7 @@ import { Fragment } from '@tiptap/pm/model';
 import { validateLayout } from '../src/core/rich-schema.mjs';
 
 const defaults = () => ({ width: 100, height: null, align: 'left' });
-const movable = node => ['richBlock', 'layoutBlock'].includes(node.type.name);
+const movable = node => node.type.name === 'richBlock';
 const drags = new WeakMap();
 const blocks = new WeakMap();
 export const layoutAttributes = () => ({
@@ -23,11 +23,17 @@ export function applyLayout(dom, value) {
   dom.classList.toggle('block-fixed-height', layout.height !== null);
   fitMedia(dom);
 }
+function mediaRatio(dom) {
+  const media = dom.querySelector(':scope > .rich-content > img,:scope > .rich-content > video,:scope > .rich-content > svg');
+  const width = media?.naturalWidth || media?.videoWidth || media?.viewBox?.baseVal.width;
+  const height = media?.naturalHeight || media?.videoHeight || media?.viewBox?.baseVal.height;
+  return width > 0 && height > 0 ? width / height : null;
+}
 export function fitMedia(dom) {
-  const media = dom.querySelector(':scope > .rich-content > img,:scope > .rich-content > video');
-  const width = media?.naturalWidth || media?.videoWidth, height = media?.naturalHeight || media?.videoHeight;
+  const ratio = mediaRatio(dom);
   const bound = parseFloat(dom.style.getPropertyValue('--block-height'));
-  dom.style.setProperty('--media-max-width', width && height && bound ? `${bound * width / height}px` : '100%');
+  dom.classList.toggle('block-aspect-media', !!ratio);
+  dom.style.setProperty('--media-max-width', ratio && bound ? `${bound * ratio}px` : '100%');
 }
 function groups(editor) {
   const result = [];
@@ -48,11 +54,69 @@ function replaceGroups(editor, list, selectedNode) {
   });
   editor.view.dispatch(tr.scrollIntoView());
 }
+function removeBlock(tr, from) {
+  const $from = tr.doc.resolve(from), node = tr.doc.nodeAt(from);
+  if (!node || !movable(node)) return null;
+  if ($from.parent.type.name === 'blockRow') {
+    const children = [];
+    $from.parent.forEach((child, _offset, index) => { if (index !== $from.index()) children.push(child); });
+    const start = $from.before(), end = $from.after();
+    if (!children.length) tr.delete(start, end);
+    else tr.replaceWith(start, end, children.length === 1 ? children[0] : $from.parent.copy(Fragment.fromArray(children)));
+  } else tr.delete(from, from + node.nodeSize);
+  return node;
+}
+function selectMovedBlock(editor, tr, node) {
+  if (tr.doc.eq(editor.state.doc)) return false;
+  let inserted = false;
+  tr.doc.descendants((child, pos) => {
+    if (child === node) { tr.setSelection(NodeSelection.create(tr.doc, pos)); inserted = true; }
+  });
+  if (!inserted) return false;
+  editor.view.dispatch(tr.scrollIntoView());
+  return true;
+}
+export function moveBlockAt(editor, from, position) {
+  const node = editor.state.doc.nodeAt(from);
+  if (!node || !movable(node) || position >= from && position <= from + node.nodeSize) return false;
+  const tr = editor.state.tr;
+  removeBlock(tr, from);
+  const pos = tr.mapping.map(position), $pos = tr.doc.resolve(pos);
+  let start = pos, end = pos;
+  // A hard break becomes the paragraph split, not an extra blank line beside the media.
+  if ($pos.parent.isTextblock && $pos.parentOffset > 0 && $pos.parentOffset < $pos.parent.content.size) {
+    if ($pos.nodeAfter?.type.name === 'hardBreak') end++;
+    else if ($pos.nodeBefore?.type.name === 'hardBreak') start--;
+  }
+  tr.replaceRangeWith(start, end, node);
+  return selectMovedBlock(editor, tr, node);
+}
+function moveNestedBeside(editor, from, to, side) {
+  const node = editor.state.doc.nodeAt(from), target = editor.state.doc.nodeAt(to);
+  if (!node || !target || from === to || !movable(node) || !movable(target)) return false;
+  const tr = editor.state.tr;
+  removeBlock(tr, from);
+  let pos = tr.mapping.map(to);
+  if (tr.doc.nodeAt(pos) !== target) tr.doc.descendants((child, at) => { if (child === target) pos = at; });
+  const $pos = tr.doc.resolve(pos);
+  if ($pos.parent.type.name === 'blockRow') tr.insert(pos + (side === 'right' ? target.nodeSize : 0), node);
+  else tr.replaceWith(pos, pos + target.nodeSize, editor.schema.nodes.blockRow.create(null, side === 'right' ? [target, node] : [node, target]));
+  return selectMovedBlock(editor, tr, node);
+}
 export function moveBlock(editor, from, to, side) {
+  if (side === 'text') return moveBlockAt(editor, from, to);
+  if (['before', 'after'].includes(side)) {
+    const target = editor.state.doc.nodeAt(to), $to = editor.state.doc.resolve(to);
+    if (!target) return false;
+    const position = $to.parent.type.name === 'blockRow' ? (side === 'after' ? $to.after() : $to.before())
+      : to + (side === 'after' ? target.nodeSize : 0);
+    return moveBlockAt(editor, from, position);
+  }
   const list = groups(editor);
   const units = list.flatMap(group => group.children.length ? group.children : [group]);
   const source = units.find(item => item.pos === from), target = units.find(item => item.pos === to);
-  if (!source || !target || source === target || !movable(source.node)) return false;
+  if (!source || !target) return moveNestedBeside(editor, from, to, side);
+  if (source === target || !movable(source.node)) return false;
   if (['left', 'right'].includes(side) && !movable(target.node)) return false;
   const sourceGroup = list.find(group => group === source || group.children.includes(source));
   if (['left', 'right'].includes(side)) {
@@ -74,10 +138,33 @@ export function moveBlock(editor, from, to, side) {
   replaceGroups(editor, list, source.node);
   return true;
 }
+function textDropTarget(editor, x, y) {
+  const view = editor.view, bounds = view.dom.getBoundingClientRect();
+  const found = view.posAtCoords({ left: Math.max(bounds.left + 1, Math.min(x, bounds.right - 1)), top: y });
+  if (!found) return null;
+  const $pos = view.state.doc.resolve(found.pos);
+  if (!$pos.parent.isTextblock || $pos.parent.type.spec.code) return null;
+  const element = view.nodeDOM($pos.before()), rect = element?.getBoundingClientRect();
+  if (!rect || y < rect.top - 6 || y > rect.bottom + 6) return null;
+  const line = view.coordsAtPos(found.pos), before = y < (line.top + line.bottom) / 2;
+  let low = $pos.start(), high = $pos.end();
+  // Binary search the rendered line boundary, including soft wraps and inline formatting.
+  while (low < high) {
+    const mid = before ? Math.floor((low + high) / 2) : Math.ceil((low + high) / 2);
+    const coords = view.coordsAtPos(mid, before ? 1 : -1);
+    if (before ? coords.top < line.top - 1 : coords.bottom <= line.bottom + 1) {
+      if (before) low = mid + 1; else low = mid;
+    } else {
+      if (before) high = mid; else high = mid - 1;
+    }
+  }
+  const top = before ? line.top : line.bottom;
+  return { pos: low, side: 'text', rect: { left: rect.left, right: rect.right, top, bottom: top, width: rect.width, height: 0 } };
+}
 function dropTarget(editor, source, x, y) {
   const area = editor.view.dom.closest('.editor-scroll'), bounds = area.getBoundingClientRect();
   if (x < bounds.left || x > bounds.right || y < bounds.top || y > bounds.bottom) return null;
-  const element = document.elementFromPoint(x, y)?.closest('.rich-block,.layout-block');
+  const hit = document.elementFromPoint(x, y), element = hit?.closest('.rich-block');
   if (element && editor.view.dom.contains(element)) {
     if (element === source || source.contains(element)) return null;
     const pos = blocks.get(element)?.getPos(), rect = element.getBoundingClientRect();
@@ -87,6 +174,18 @@ function dropTarget(editor, source, x, y) {
         : y < rect.top + rect.height / 2 ? 'before' : 'after';
     return { pos, side, rect };
   }
+  // Empty space beside small media belongs to the row, not the paragraph below it.
+  const lateral = [...editor.view.dom.querySelectorAll('.rich-block')].flatMap(candidate => {
+    if (candidate === source || !hit?.contains(candidate)) return [];
+    const rect = candidate.getBoundingClientRect(), parent = candidate.parentElement.getBoundingClientRect();
+    if (!rect.width || !rect.height || y < rect.top || y > rect.bottom || x < parent.left || x > parent.right) return [];
+    const side = x < rect.left ? 'left' : x > rect.right ? 'right' : null;
+    const pos = blocks.get(candidate)?.getPos();
+    return side && typeof pos === 'number' ? [{ pos, side, rect, distance: Math.abs(x - (side === 'left' ? rect.left : rect.right)) }] : [];
+  }).sort((a, b) => a.distance - b.distance)[0];
+  if (lateral) return lateral;
+  const text = textDropTarget(editor, x, y);
+  if (text) return text;
   const candidates = groups(editor).flatMap(group => group.children.length ? group.children : [group]).map(group => {
     const element = editor.view.nodeDOM(group.pos);
     return element?.getBoundingClientRect && element !== source ? { pos: group.pos, rect: element.getBoundingClientRect() } : null;
@@ -128,7 +227,7 @@ export function blockInteractions({ dom, editor, getPos, getNode }) {
   };
   const startDrag = event => {
     if (event.button !== 0 || !event.isPrimary || event.target.closest('button,input,textarea,select')
-      || event.target.closest('.rich-block,.layout-block') !== dom) return;
+      || event.target.closest('.rich-block') !== dom) return;
     const video = event.target.closest('video');
     if (video && event.clientY > video.getBoundingClientRect().bottom - 54) return;
     drags.get(editor)?.(); cleanup();
@@ -141,8 +240,11 @@ export function blockInteractions({ dom, editor, getPos, getNode }) {
       marker.hidden = !target;
       if (target) {
         const { rect, side } = target, vertical = ['left', 'right'].includes(side);
-        Object.assign(marker.style, { left: `${side === 'right' ? rect.right : rect.left}px`, top: `${side === 'after' ? rect.bottom : rect.top}px`,
-          width: `${vertical ? 3 : rect.width}px`, height: `${vertical ? rect.height : 3}px` });
+        const height = vertical ? Math.max(36, rect.height) : 3;
+        marker.dataset.dropSide = side;
+        Object.assign(marker.style, { left: `${side === 'right' ? rect.right : rect.left}px`,
+          top: `${vertical ? rect.top - (height - rect.height) / 2 : side === 'after' ? rect.bottom : rect.top}px`,
+          width: `${vertical ? 3 : rect.width}px`, height: `${height}px` });
       }
     };
     const tick = () => {
@@ -191,7 +293,7 @@ export function blockInteractions({ dom, editor, getPos, getNode }) {
       dom.focus({ preventScroll: true });
       dom.setPointerCapture(event.pointerId);
       paint(); frame = requestAnimationFrame(tick);
-    }, 1000);
+    }, 500);
     cleanup = () => finish(false); drags.set(editor, cleanup);
   };
   const preventNativeDrag = event => { event.preventDefault(); };
@@ -204,11 +306,10 @@ export function blockInteractions({ dom, editor, getPos, getNode }) {
     handle.onpointerdown = event => {
       if (event.button !== 0) return;
       event.preventDefault(); event.stopPropagation(); drags.get(editor)?.(); cleanup();
-      const content = dom.querySelector('.rich-content,.layout-content'), box = dom.getBoundingClientRect();
+      const content = dom.querySelector('.rich-content'), box = dom.getBoundingClientRect();
       const parentWidth = dom.parentElement.getBoundingClientRect().width, original = getNode().attrs.layout || defaults();
       const height = content.getBoundingClientRect().height;
-      const media = content.querySelector('img,video');
-      const ratio = media && (media.naturalWidth || media.videoWidth) / (media.naturalHeight || media.videoHeight);
+      const ratio = mediaRatio(dom);
       let pending = original, moved = false;
       dom.classList.add('resizing'); handle.focus({ preventScroll: true }); handle.setPointerCapture(event.pointerId);
       const finish = commit => {
@@ -239,6 +340,16 @@ export function blockInteractions({ dom, editor, getPos, getNode }) {
       if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) return;
       event.preventDefault(); event.stopPropagation();
       const layout = getNode().attrs.layout || defaults();
+      const ratio = mediaRatio(dom);
+      if (ratio) {
+        const parentWidth = dom.parentElement.getBoundingClientRect().width;
+        const box = dom.querySelector('.rich-content').getBoundingClientRect();
+        const nextWidth = box.width + (event.key === 'ArrowRight' ? parentWidth * .05 : event.key === 'ArrowLeft' ? -parentWidth * .05
+          : (event.key === 'ArrowDown' ? 20 : -20) * ratio);
+        const width = Math.max(15, Math.min(100, nextWidth / parentWidth * 100));
+        update({ ...layout, width, height: Math.max(60, Math.min(1600, parentWidth * width / 100 / ratio)) });
+        return;
+      }
       update({ ...layout, width: Math.max(15, Math.min(100, layout.width + (event.key === 'ArrowRight' ? 5 : event.key === 'ArrowLeft' ? -5 : 0))),
         height: ['ArrowUp', 'ArrowDown'].includes(event.key) ? Math.max(60, Math.min(1600, (layout.height || 200) + (event.key === 'ArrowDown' ? 20 : -20))) : layout.height });
     };
@@ -251,21 +362,8 @@ export function blockInteractions({ dom, editor, getPos, getNode }) {
 }
 export function layoutExtensions() {
   return [
-    Node.create({ name: 'blockRow', group: 'block', content: '(richBlock | layoutBlock)+',
+    Node.create({ name: 'blockRow', group: 'block', content: 'richBlock+',
       parseHTML: () => [{ tag: 'div[data-ss-row]' }],
-      renderHTML: () => ['div', { 'data-ss-row': 'true', class: 'block-row' }, 0] }),
-    Node.create({ name: 'layoutBlock', group: 'block', content: 'block+', defining: true, isolating: true,
-      addAttributes: layoutAttributes, parseHTML: () => [{ tag: 'section[data-ss-container]' }],
-      renderHTML: ({ HTMLAttributes }) => ['section', { ...HTMLAttributes, 'data-ss-container': 'true' }, 0],
-      addNodeView() { return ({ node, editor, getPos }) => {
-        let current = node;
-        const dom = document.createElement('section'); dom.className = 'layout-block';
-        const contentDOM = document.createElement('div'); contentDOM.className = 'layout-content'; dom.append(contentDOM);
-        const dispose = blockInteractions({ dom, editor, getPos, getNode: () => current });
-        applyLayout(dom, node.attrs.layout);
-        return { dom, contentDOM, stopEvent: event => !!event.target.closest('.block-resize-edge'),
-          ignoreMutation: mutation => mutation.type !== 'selection' && !contentDOM.contains(mutation.target),
-          update(next) { if (next.type !== current.type) return false; current = next; applyLayout(dom, next.attrs.layout); return true; }, destroy: dispose };
-      }; } })
+      renderHTML: () => ['div', { 'data-ss-row': 'true', class: 'block-row' }, 0] })
   ];
 }

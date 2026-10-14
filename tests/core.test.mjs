@@ -308,7 +308,7 @@ test('restoring an older backup never rolls back a newer local head', async t =>
 test('content-deduplicated backup restores every stable attachment ID', async t => {
   const { directory, a, b } = setup(t);
   const file = path.join(directory, 'same.txt'); fs.writeFileSync(file, 'identical content');
-  const first = await importAttachment(a, file), second = await importAttachment(a, file);
+  const first = await importAttachment(a, file), second = await importAttachment(a, file, { duplicateMode: 'separate' });
   assert.notEqual(first.id, second.id);
   const result = await new BackupManager(a).create(path.join(directory, 'backups'));
   assert.equal(result.assets.length, 1);

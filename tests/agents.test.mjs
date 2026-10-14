@@ -56,9 +56,25 @@ test('Agent server rejects browser origins, bad hosts, arbitrary RPC and system 
   }
   for (const method of ['approve', 'agentGrant', 'agentPreferencesSave', 'assetImport', 'syncConfigure', 'backupRestore', 'ask', 'providerSave', 'toString',
     'versionCommit', 'versionRestore', 'syncStatus', 'syncPlan', 'syncPublish', 'syncImport', 'syncPause', 'syncCancel',
-    'syncConfirmBatch', 'syncConfirmUpload', 'deviceSetPrimary', 'syncClientValidate', 'assetEvict', 'pairingKey']) {
+    'syncConfirmBatch', 'syncConfirmUpload', 'deviceSetPrimary', 'syncClientValidate', 'assetEvict', 'pairingKey',
+    'assetCatalog', 'assetDetail', 'assetUpdate', 'assetBatch', 'assetDuplicates', 'assetMergePreview', 'assetMerge', 'trashPreview', 'trashEmpty']) {
     await assert.rejects(rpc(method), /FORBIDDEN/);
   }
+});
+
+test('cleared records cannot be read through Agent search, direct reads, history or request replay', async t => {
+  const { service, rpc, write, a } = await setup(t, { edit: true, trash: true });
+  const requestId = uuid();
+  const input = { data: { ...data(a), title: '待清空的收集内容' } };
+  const note = await write('draftCreate', input, requestId);
+  await write('trash', { id: note.id, parents: note.heads });
+  const preview = await service.call('trashPreview', { domain: a.id });
+  assert.equal(preview.eligible.length, 1);
+  await service.call('trashEmpty', { domain: a.id, token: preview.token, confirmed: true });
+  assert.equal((await rpc('search', { trash: true })).total, 0);
+  await assert.rejects(rpc('record', { id: note.id }), /FORBIDDEN/);
+  await assert.rejects(rpc('history', { id: note.id }), /FORBIDDEN/);
+  await assert.rejects(write('draftCreate', input, requestId), /FORBIDDEN/);
 });
 
 test('busy port is reported without changing addresses and persisted enable can be cancelled', async t => {
@@ -144,13 +160,17 @@ test('proposals support source preservation, partial approval, local revision an
 });
 
 test('attachments enforce hashes, reject arbitrary paths and remain scoped', async t => {
-  const { write, rpc, a, store } = await setup(t);
+  const { write, rpc, a, store, service } = await setup(t);
   const bytes = Buffer.from('学习资料'), body = { domain: a.id, filename: 'lesson.txt', mime: 'text/plain', data: bytes.toString('base64'), sha256: sha(bytes) };
   await assert.rejects(write('assetWrite', { ...body, sha256: '0'.repeat(64) }), /哈希/);
   await assert.rejects(write('assetWrite', { ...body, filename: '../secret.txt' }), /filename/);
   const asset = await write('assetWrite', body);
   const value = await rpc('assetRead', { id: asset.id });
   assert.equal(value.data, body.data); assert.equal(value.path, undefined);
+  assert.equal((await service.call('assetDetail', { id: asset.id })).storage.path, store.assetLocation(asset.id).path);
+  const portable = await rpc('record', { id: asset.id });
+  assert.equal(portable.storage, undefined);
+  assert.ok(!JSON.stringify(portable).includes(store.directory.replaceAll('\\', '\\\\')));
   fs.writeFileSync(store.assetLocation(asset.id).path, 'corrupt');
   await assert.rejects(rpc('assetRead', { id: asset.id }), /完整性/);
   fs.unlinkSync(store.assetLocation(asset.id).path);

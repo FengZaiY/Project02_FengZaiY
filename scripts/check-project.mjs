@@ -14,10 +14,18 @@ const required = [
   'docs/decisions/0001-local-first-folder-sync.md',
   'src/core/store.mjs', 'src/core/service.mjs', 'src/core/transport.mjs',
   'src/core/current-sync.mjs', 'src/core/sync-state.mjs', 'src/core/resumable-files.mjs',
+  'src/core/hierarchy.mjs', 'src/core/local-hierarchy.mjs', 'web/hierarchy-ui.js', 'tests/hierarchy.test.mjs',
+  'src/core/note-hierarchy.mjs', 'tests/note-hierarchy.test.mjs',
+  'src/core/note-order.mjs', 'tests/note-order.test.mjs',
+  'web/note-tree-drag.js', 'scripts/test-note-tree-drag.mjs',
+  'src/core/asset-management.mjs', 'web/asset-manager.js', 'web/assets.css', 'tests/asset-management.test.mjs', 'scripts/test-assets-ui.mjs',
+  'src/core/asset-merge.mjs', 'tests/asset-merge.test.mjs', 'scripts/test-asset-dedup.mjs',
+  'web/asset-storage.js', 'scripts/test-asset-storage.mjs',
   'src/core/agent-access.mjs', 'skills/studyself-organize/SKILL.md', 'src/desktop/main.mjs',
   'src/desktop/preload.cjs', 'src/server.mjs', 'web/app.js', 'tests/core.test.mjs',
   'src/core/rich-schema.mjs', 'src/core/rich-content.mjs', 'src/core/media.mjs',
-  'web/rich-editor.js', 'web/rich-canvas.js', 'web/rich.css', 'tests/rich.test.mjs', 'scripts/test-rich-ui.mjs'
+  'web/rich-editor.js', 'web/rich-canvas.js', 'web/rich.css', 'tests/rich.test.mjs', 'scripts/test-rich-ui.mjs',
+  'web/mindmap-editor.js', 'web/mindmap-model.js', 'web/mindmap.css', 'tests/mindmap.test.mjs', 'scripts/test-mindmap-ui.mjs'
 ];
 const read = name => fs.readFileSync(path.join(root, name), 'utf8');
 for (const name of required) {
@@ -36,8 +44,18 @@ const scripts = {
   test: 'node --test tests/*.test.mjs',
   'test:ui': 'node scripts/test-ui.mjs',
   'test:libraries': 'node scripts/test-libraries-ui.mjs',
+  'test:note-drag': 'node scripts/test-note-tree-drag.mjs',
+  'test:assets': 'node scripts/test-assets-ui.mjs',
+  'test:dedup': 'node scripts/test-asset-dedup.mjs',
+  'test:asset-storage': 'node scripts/test-asset-storage.mjs',
+  'test:attachment-drag': 'node scripts/test-attachment-drag.mjs',
+  'test:asset-previews': 'node scripts/test-asset-previews.mjs',
   'test:agents': 'node scripts/test-agents-ui.mjs',
   'test:rich': 'node scripts/test-rich-ui.mjs',
+  'test:mindmap': 'node scripts/test-mindmap-ui.mjs',
+  'test:document': 'node scripts/test-document-flow.mjs',
+  'test:experience': 'node scripts/test-editor-experience.mjs',
+  'test:trash': 'node scripts/test-trash-ui.mjs',
   'test:desktop': 'node scripts/test-desktop.mjs',
   'test:packaged': 'node scripts/test-desktop.mjs --packaged',
   benchmark: 'node scripts/benchmark.mjs'

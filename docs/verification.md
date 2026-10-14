@@ -1,6 +1,36 @@
 # 0.1.0 验证记录
 
-最新结果见 [2026-10-10 纯内容与直接手势验证](verification-direct-content-gestures-2026-10-10.md)。此前结果见 [拖放布局与自动保存验证](verification-editor-interactions-2026-10-10.md)、[当前内容同步验证](verification-current-sync-2026-10-10.md)、[同步开发重点调整](verification-sync-focus-2026-10-10.md) 和 [Git 同步验证](verification-git-sync-2026-10-10.md)。本页以下均为历史记录，其中 Git、独立备份和客户端验证前置要求已被最新需求取消。
+最新同级拖动与排序结果见 [2026-10-14 笔记排序验证](verification-note-order-2026-10-14.md)。
+
+最新笔记分级拖动及目录跟随结果见 [2026-10-14 笔记树拖动验证](verification-note-tree-drag-2026-10-14.md)。
+
+最新附件预览开关与紧凑布局结果见 [2026-10-14 预览控件验证](verification-preview-controls-2026-10-14.md)。
+
+最新资料目录展示结果见 [2026-10-14 本机存放位置验证](verification-asset-local-storage-2026-10-14.md)。
+
+最新思维导图结果见 [2026-10-14 思维导图交互验证](verification-mindmap-2026-10-14.md)。
+
+最新附件去重结果见 [2026-10-14 附件去重与合并验证](verification-attachment-dedup-2026-10-14.md)。
+
+最新原附件拖入正文结果见 [2026-10-14 附件拖入验证](verification-attachment-drag-2026-10-14.md)。
+
+最新原附件面板与管理结果见 [2026-10-14 原附件管理验证](verification-note-attachments-2026-10-14.md)。
+
+最新回收站结果见 [2026-10-14 清空回收站验证](verification-trash-2026-10-14.md)。
+
+最新编辑体验结果见 [2026-10-13 正文交互完善验证](verification-editor-experience-2026-10-13.md)。
+
+最新缩略图与筛选布局结果见 [2026-10-12 资料预览验证](verification-material-previews-2026-10-12.md)。
+
+最新资料管理结果见 [2026-10-12 资料管理验证](verification-material-management-2026-10-12.md)。
+
+最新正文交互结果见 [2026-10-12 连续文档编辑验证](verification-continuous-document-2026-10-12.md)。
+
+最新原资料面板结果见 [2026-10-12 原资料展开/收起验证](verification-source-panel-2026-10-12.md)。
+
+最新导航调整见 [2026-10-12 知识体系 / 笔记列表互斥视图验证](verification-note-views-2026-10-12.md)。
+
+最新结果见 [2026-10-12 笔记知识体系与层级提案验证](verification-note-tree-2026-10-12.md)。此前结果见 [旧文件夹分级验证](verification-hierarchy-2026-10-10.md)、[纯内容与直接手势验证](verification-direct-content-gestures-2026-10-10.md)、[拖放布局与自动保存验证](verification-editor-interactions-2026-10-10.md)、[当前内容同步验证](verification-current-sync-2026-10-10.md)、[同步开发重点调整](verification-sync-focus-2026-10-10.md) 和 [Git 同步验证](verification-git-sync-2026-10-10.md)。本页以下均为历史记录，其中 Git、独立备份和客户端验证前置要求已被最新需求取消。
 
 新增专项记录：[2026-10-09 正式笔记富内容验证](verification-rich-notes-2026-10-09.md)。以下历史结论保留，不作为本轮测试结果。
 

@@ -84,7 +84,7 @@ try {
   };
   await drop([{ name: '第一张.png', type: 'image/png', bytes: image }, { name: '第二张.png', type: 'image/png', bytes: image },
     { name: '原资料.txt', type: 'text/plain', bytes: [...Buffer.from('source document')] }, { name: '短片.webm', type: 'video/webm', bytes: video }]);
-  await wait(() => app.service.store.get(note.id).data.assetIds?.length === 4);
+  await wait(() => app.service.store.get(note.id).data.assetIds?.length === 3);
   await page.waitForFunction(() => document.querySelector('.tiptap video')?.readyState >= 1);
   assert.equal(await page.locator('.tiptap img').count(), 2);
   assert.equal(await page.locator('.tiptap a[href^="studyself://asset"]').innerText(), '原资料.txt');
@@ -93,7 +93,7 @@ try {
     else await route.continue();
   });
   await drop([{ name: '失败.txt', type: 'text/plain', bytes: [1] }, { name: '保留.txt', type: 'text/plain', bytes: [2] }]);
-  await wait(() => app.service.store.get(note.id).data.assetIds?.length === 5);
+  await wait(() => app.service.store.get(note.id).data.assetIds?.length === 4);
   assert.equal(await page.locator('.tiptap a', { hasText: '失败.txt' }).count(), 0);
   assert.equal(await page.locator('.tiptap a', { hasText: '保留.txt' }).count(), 1);
   await page.unroute('**/upload?*');
@@ -169,7 +169,7 @@ try {
   await page.reload(); await page.locator('.tiptap .block-row').waitFor();
   assert.deepEqual(await page.locator('.tiptap .block-row>.rich-block').evaluateAll(nodes => nodes.map(n => JSON.parse(n.dataset.ssBlock).label)), afterOrder);
   assert.equal(await page.locator('.tiptap .rich-block').count(), 3);
-  assert.equal(app.service.store.get(note.id).data.assetIds.length, 5);
+  assert.equal(app.service.store.get(note.id).data.assetIds.length, 4);
   for (const [width, height] of [[1480, 940], [931, 672], [600, 900]]) {
     await page.setViewportSize({ width, height }); await page.locator('.editor-scroll').evaluate(el => el.scrollTop = 0);
     await page.screenshot({ path: path.join(root, `layout-${width}.png`) });
@@ -187,27 +187,26 @@ try {
     assert.equal(await page.locator('.editor-scroll').evaluate(el => Math.abs(el.scrollHeight - el.scrollTop - el.clientHeight) < 3), true);
   }
   await page.setViewportSize({ width: 1480, height: 940 });
-  // Editable containers need the same drag/resize semantics and history layout as media.
-  const containers = page.locator('.tiptap .layout-block');
-  const kept = containers.filter({ hasText: '保留.txt' }), sourceFile = containers.filter({ hasText: '原资料.txt' });
-  await sourceFile.scrollIntoViewIfNeeded();
-  await drag(kept, sourceFile, 'left');
-  assert.equal(await page.locator('.tiptap .block-row>.layout-block').count(), 2);
-  assert.deepEqual(await page.locator('.tiptap .block-row>.layout-block a').allTextContents(), ['保留.txt', '原资料.txt']);
-  const editableParagraph = kept.locator('.layout-content p'), editableBox = await editableParagraph.boundingBox();
+  // File links are normal paragraphs, with no resize box or long-press gesture.
+  assert.equal(await page.locator('.tiptap .layout-block').count(), 0);
+  const editableParagraph = page.locator('.tiptap > p').filter({ hasText: '保留.txt' });
+  await editableParagraph.scrollIntoViewIfNeeded();
+  const editableBox = await editableParagraph.boundingBox();
   await editableParagraph.click({ position: { x: editableBox.width - 15, y: editableBox.height / 2 } });
   await page.keyboard.press('End'); await page.keyboard.insertText(' 补充说明');
   assert.match(await editableParagraph.innerText(), /补充说明/);
+  const holdBox = await editableParagraph.boundingBox();
+  await page.mouse.move(holdBox.x + holdBox.width - 10, holdBox.y + holdBox.height / 2); await page.mouse.down();
+  await page.waitForTimeout(1100);
   assert.equal(await page.locator('.block-drag-preview').count(), 0);
-  const containerResize = kept.getByRole('button', { name: '调整下边大小', exact: true });
-  await containerResize.press('ArrowDown');
-  assert.equal(await kept.evaluate(el => el.style.getPropertyValue('--block-height')), '220px');
+  await page.mouse.up();
+  assert.equal(await editableParagraph.locator('button').count(), 0);
   await page.locator('[data-action=save]').click();
   await page.waitForFunction(() => document.querySelector('[data-action=save]').dataset.status === 'saved');
   await page.getByRole('button', { name: '历史版本', exact: true }).click();
-  const historyContainer = page.locator('#modal .prose .layout-block').filter({ hasText: '保留.txt' }).first();
-  assert.equal(await historyContainer.locator(':scope > .layout-content').evaluate(el => Math.round(el.getBoundingClientRect().height)), 220);
-  assert.equal(await historyContainer.locator('a').getAttribute('href'), await kept.locator('a').getAttribute('href'));
+  const historyLink = page.locator('#modal .prose a').filter({ hasText: '保留.txt' }).first();
+  assert.equal(await historyLink.getAttribute('href'), await editableParagraph.locator('a').getAttribute('href'));
+  assert.equal(await page.locator('#modal .layout-block').count(), 0);
   await page.getByRole('button', { name: '关闭', exact: true }).click();
   // Switching tabs must save the original note, not the newly selected one.
   await page.locator('#note-title').fill('切换后仍保存到原笔记');
@@ -254,7 +253,7 @@ try {
   assert.equal(app.service.store.get(note.id).conflict, false);
   assert.deepEqual(errors, []);
   fs.writeFileSync(path.join(root, 'report.json'), JSON.stringify({ passed: true, imported: 5, layout, beforeOrder, afterOrder, resizedEdges, longPress: true, cancellation: true, errors }, null, 2));
-  console.log('PASS: local files, borderless content, one-second hold/reorder, eight resize edges, cancellation, saved layout/history, autosave and conflict pause.');
+  console.log('PASS: local files, borderless content, half-second hold/reorder, eight resize edges, cancellation, saved layout/history, autosave and conflict pause.');
 } catch (error) {
   await page?.screenshot({ path: path.join(root, 'failure.png') }).catch(() => {});
   console.error('Page errors:', errors); throw error;

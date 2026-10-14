@@ -11,6 +11,8 @@ import { createElement, icons } from 'lucide';
 import { validateBlock, safeNoteLink, encodeBlock } from '../src/core/rich-schema.mjs';
 import { openCanvas } from './rich-canvas.js';
 import { layoutAttributes, applyLayout, fitMedia, blockInteractions, layoutExtensions } from './block-layout.js';
+import { isMindmap } from './mindmap-model.js';
+import { parseMindmap, mindmapSvg, openMindmap } from './mindmap-editor.js';
 
 const esc = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
 export const diagramTemplates = {
@@ -32,6 +34,16 @@ mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme: 'neutra
 let diagramId = 0;
 const renderTokens = new WeakMap();
 
+function unwrapTextLayouts(root) {
+  // Legacy text boxes become normal document flow; keep every child, including blank paragraphs.
+  for (const container of [...root.querySelectorAll('section[data-ss-container]')].reverse()) {
+    container.replaceWith(...container.childNodes);
+  }
+  for (const row of [...root.querySelectorAll('div[data-ss-row]')].reverse()) {
+    const children = [...row.childNodes].filter(node => node.nodeType !== 3 || node.textContent.trim());
+    if (!children.length || children.some(node => !node.matches?.('figure[data-ss-block]'))) row.replaceWith(...row.childNodes);
+  }
+}
 export function cleanNoteHtml(html) {
   // JSON arrows such as --> must not look like XML comment delimiters to the sanitizer.
   const inert = document.createElement('template'); inert.innerHTML = html;
@@ -44,6 +56,7 @@ export function cleanNoteHtml(html) {
     ALLOWED_URI_REGEXP: /^(?:https?:\/\/|studyself:\/\/(?:note|asset|local)\/)/i });
   const template = document.createElement('template'); template.innerHTML = clean;
   for (const a of template.content.querySelectorAll('a')) if (!safeNoteLink(a.getAttribute('href'))) a.removeAttribute('href');
+  unwrapTextLayouts(template.content);
   return template.innerHTML;
 }
 export async function renderBlock(host, block, mediaUrl) {
@@ -53,10 +66,18 @@ export async function renderBlock(host, block, mediaUrl) {
     if (block.kind === 'formula') host.innerHTML = katex.renderToString(block.source, { displayMode: true, throwOnError: true, trust: false, strict: 'error', maxExpand: 500, maxSize: 20 });
     else if (block.kind === 'diagram') {
       if (/%%\{|^\s*---|\bclick\s|<\/?(?:script|iframe|img|image)\b/i.test(block.source)) throw new Error('图表不允许配置指令、外部图片或交互脚本');
+      if (isMindmap(block.source)) {
+        try {
+          const model = await parseMindmap(block.source);
+          if (renderTokens.get(host) !== token) return false;
+          host.replaceChildren(mindmapSvg(model)); host.removeAttribute('data-error'); return true;
+        } catch { /* Advanced syntax stays readable through Mermaid's original renderer. */ }
+      }
       const result = await mermaid.render(`ss-diagram-${++diagramId}`, block.source);
       if (renderTokens.get(host) !== token) return false;
       host.innerHTML = DOMPurify.sanitize(result.svg, { USE_PROFILES: { svg: true, svgFilters: true }, FORBID_TAGS: ['foreignObject', 'image', 'a'] });
-      host.querySelector('svg')?.removeAttribute('height');
+      const svg = host.querySelector('svg');
+      if (svg) { svg.removeAttribute('height'); svg.style.maxWidth = '100%'; }
     } else if (['image', 'video'].includes(block.kind)) {
       const media = document.createElement(block.kind === 'image' ? 'img' : 'video');
       if (block.kind === 'video') { media.controls = true; media.preload = 'metadata'; }
@@ -70,25 +91,26 @@ export async function renderBlock(host, block, mediaUrl) {
       const paper = document.createElement('div'); paper.className = `rich-sticker ${block.color}`; paper.textContent = block.text; host.append(paper);
     } else if (block.kind === 'canvas') {
       const { canvasPreview } = await import('./rich-canvas.js');
+      if (renderTokens.get(host) !== token) return false;
       canvasPreview(host, block.shapes);
+      host.querySelector('img')?.addEventListener('load', () => {
+        const figure = host.closest('.rich-block'); if (figure) fitMedia(figure);
+      }, { once: true });
     }
     host.removeAttribute('data-error'); return true;
   } catch (error) {
     if (renderTokens.get(host) !== token) return false;
     host.dataset.error = 'true'; host.classList.add('rich-error'); host.textContent = `无法显示：${error.message}`; return false;
+  } finally {
+    // Async diagrams and canvas previews must fit the saved layout as soon as they arrive.
+    const figure = host.closest('.rich-block');
+    if (figure && renderTokens.get(host) === token) fitMedia(figure);
   }
 }
 export function hydrateRich(root, mediaUrl) {
-  for (const element of root.querySelectorAll('[data-ss-layout], [data-ss-container], [data-ss-row]')) {
+  for (const element of root.querySelectorAll('figure[data-ss-layout], [data-ss-row]')) {
     if (element.dataset.ssRow) element.classList.add('block-row');
     else {
-      if (element.dataset.ssContainer) {
-        element.classList.add('layout-block');
-        if (!element.dataset.hydrated) {
-          const content = document.createElement('div'); content.className = 'layout-content';
-          content.append(...element.childNodes); element.append(content); element.dataset.hydrated = 'true';
-        }
-      }
       try { applyLayout(element, element.dataset.ssLayout ? JSON.parse(element.dataset.ssLayout) : null); } catch {}
     }
   }
@@ -120,10 +142,15 @@ export function richExtensions({ mediaUrl, edit }) {
         const draw = () => { dom.dataset.ssBlock = current.attrs.payload; dom.dataset.hydrated = 'true'; try { const block = JSON.parse(current.attrs.payload); dom.dataset.blockKind = block.kind; label.textContent = block.label; label.title = block.label; void renderBlock(host, block, mediaUrl); } catch { host.textContent = '富内容数据无法解析'; } };
         const actions = document.createElement('div'); actions.className = 'block-actions'; dom.append(actions);
         const control = (title, icon, handler) => { const b = document.createElement('button'); b.type = 'button'; b.className = 'icon-button'; b.title = title; b.setAttribute('aria-label', title); b.append(createElement(icon)); b.onclick = handler; actions.append(b); };
-        control('编辑内容块', icons.Pencil, () => edit(JSON.parse(current.attrs.payload), next => {
+        const openEditor = () => edit(JSON.parse(current.attrs.payload), next => {
           if (editor.isDestroyed || typeof getPos() !== 'number') return;
           editor.chain().focus().setNodeSelection(getPos()).updateAttributes('richBlock', { payload: encodeBlock(validateBlock(next)) }).run();
-        }));
+        });
+        control('编辑内容块', icons.Pencil, openEditor);
+        host.ondblclick = event => {
+          const block = JSON.parse(current.attrs.payload);
+          if (block.kind === 'diagram' && isMindmap(block.source)) { event.preventDefault(); openEditor(); }
+        };
         control('移除内容块', icons.Trash2, () => { if (typeof getPos() === 'number') editor.chain().focus().setNodeSelection(getPos()).deleteSelection().run(); });
         // Async renderers mutate their display DOM, never the serialized editor document.
         applyLayout(dom, node.attrs.layout);
@@ -143,6 +170,7 @@ export function addRichMarkdownRules(converter) {
 }
 export function editRichBlock(block, commit, { openModal, mediaUrl, fail }) {
   if (block.kind === 'canvas') { openCanvas(block, commit, { openModal, fail }); return; }
+  if (block.kind === 'diagram' && isMindmap(block.source)) { openMindmap(block, commit, { openModal, fail }); return; }
   const diagramOptions = Object.entries(diagramTemplates).map(([id, [name]]) => `<option value="${id}">${name}</option>`).join('');
   const body = `<form id="rich-form" class="settings-form"><label>标题<input name="label" maxlength="200" value="${esc(block.label)}"></label>
     ${block.kind === 'diagram' ? `<label>图表模板<select id="diagram-template"><option value="">自定义</option>${diagramOptions}</select></label>` : ''}

@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { StorageLocation } from '../core/storage-location.mjs';
 import { check, prettyError, uuid, isId, noSymlink } from '../core/util.mjs';
 import { mediaResponse } from '../core/media.mjs';
+import { importClipboardImage } from './clipboard-import.mjs';
 
 protocol.registerSchemesAsPrivileged([{ scheme: 'studyself-media', privileges: { standard: true, secure: true, stream: true } }]);
 
@@ -52,7 +53,9 @@ else {
     try {
       check(event.sender === window.webContents && event.senderFrame === window.webContents.mainFrame, 'Untrusted request');
       let value;
-      if (method === 'storageOpenFolder') {
+      if (method === 'importClipboardImage') {
+        value = await importClipboardImage(service, input);
+      } else if (method === 'storageOpenFolder') {
         const error = await shell.openPath(service.store.directory);
         check(!error, error); value = true;
       } else if (method === 'libraryOpenFolder') {
@@ -61,7 +64,7 @@ else {
         check(!error, error); value = true;
       } else if (method === 'storageRestart') {
         check(storage.status().restartRequired, '没有待生效的存储变更');
-        check(!service.transport.running, '同步仍在执行，请稍后重启');
+        check(!service.transport.running && !service.localTask, '同步或目录整理仍在执行，请稍后重启');
         check(!(service.store.local('workspace')?.tabs || []).some(tab => tab.dirty), '请先保存或关闭未保存的笔记标签');
         setTimeout(() => { app.relaunch(); app.exit(0); }, 200);
         value = true;
@@ -126,6 +129,10 @@ else {
   window.on('close', event => {
     if (allowClose || smokeTest) return;
     event.preventDefault();
+    if (service.localTask) {
+      dialog.showMessageBoxSync(window, { type: 'info', message: '本地目录正在整理，请完成后退出。' });
+      return;
+    }
     let pending;
     try { pending = service.transport.status(); } catch { pending = null; }
     const choice = dialog.showMessageBoxSync(window, {

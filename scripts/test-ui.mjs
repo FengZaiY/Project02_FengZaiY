@@ -119,9 +119,11 @@ try {
   }
   await page.setViewportSize({ width: 1480, height: 940 });
   await page.locator('[data-nav="assets"]').click();
+  await page.locator(`[data-material-row="${missingAsset.id}"]`).getByRole('button', { name: '资料详情与引用', exact: true }).click();
   await page.locator(`[data-action="bind-asset"][data-asset="${missingAsset.id}"]`).waitFor();
-  assert.match(await page.locator('#main').innerText(), /缺失或等待完整接收/);
+  assert.match(await page.locator('#modal').innerText(), /待下载或缺失/);
   assert.doesNotMatch(await page.locator('#main').innerText(), /按需获取|优先传输/);
+  await page.locator('[data-modal-close]').click();
   await app.service.call('assetImport', { path: missingFile, expectedId: missingAsset.id });
   await page.locator('[data-nav="sync"]').first().click();
   await page.locator('[data-action="sync-plan"]').click();

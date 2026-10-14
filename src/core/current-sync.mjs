@@ -3,6 +3,7 @@ import path from 'node:path';
 import { DirectoryChannel, assetObjects, assetAAD, localAsset, sealBinary, validateAssets } from './sync-objects.mjs';
 import { describeAsset, assetChunk, diskSpace, receiveResumable } from './resumable-files.mjs';
 import { EMPTY_CONTROL, eventHeads, mergeControl, primaryRole, orderedEvents } from './sync-state.mjs';
+import { LocalHierarchy } from './local-hierarchy.mjs';
 import { atomicWrite, canonical, check, hashFile, isHash, isId, noSymlink, now, outside, sha, uuid } from './util.mjs';
 
 const PART_BYTES = 2 * 1024 * 1024;
@@ -387,7 +388,8 @@ export class CurrentSync {
       const file = path.resolve(local.path); noSymlink(file);
       const allowed = ['objects', 'received-objects'].map(folder => path.join(this.store.directory, folder, record.data.sha256));
       allowed.push(this.store.directories.assetPath(record.data.domain, record.data.sha256));
-      check(allowed.some(value => path.resolve(value).toLowerCase() === file.toLowerCase()) && outside(this.config().folder, file), '只能释放系统托管原件');
+      check((allowed.some(value => path.resolve(value).toLowerCase() === file.toLowerCase()) || new LocalHierarchy(this.store).managedOriginal(file))
+        && outside(this.config().folder, file), '只能释放系统托管原件');
       const protectedFile = () => {
         check(!Object.values(this.store.local('localFileLinks') || {}).some(value => path.resolve(value).toLowerCase() === file.toLowerCase()), '原件仍被本机文件链接引用');
         const aliases = [...this.store.list({ type: 'asset' }), ...this.store.list({ type: 'asset', trash: true })]
@@ -396,7 +398,7 @@ export class CurrentSync {
       };
       protectedFile(); check(await hashFile(file) === record.data.sha256, '原件已变化，拒绝释放');
       protectedFile(); this.guardEditing(); check(!this.store.unexported().length, '校验期间产生新修改，原件未释放');
-      fs.unlinkSync(file); return { released: true, cloudDeleted: false };
+      fs.unlinkSync(file); this.store.local('hierarchyDirty', true); return { released: true, cloudDeleted: false };
     });
   }
 }

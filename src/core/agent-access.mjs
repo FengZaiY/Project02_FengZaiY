@@ -9,7 +9,7 @@ import { richReferences } from './rich-content.mjs';
 const skillRoot = fileURLToPath(new URL('../../skills/studyself-organize/', import.meta.url));
 const skillNames = ['SKILL.md', 'references/preferences.md', 'references/api.md', 'scripts/client.mjs'];
 const preferenceId = 'becb64b1-215f-46ed-b332-ae0b36613126';
-const readableTypes = ['library', 'note', 'draft', 'source', 'annotation', 'relation', 'proposal', 'asset', 'conversation'];
+const readableTypes = ['library', 'folder', 'note', 'draft', 'source', 'annotation', 'relation', 'proposal', 'asset', 'conversation'];
 const permissions = { bootstrap: 'read', libraries: 'read', search: 'read', record: 'read', history: 'read', assetRead: 'read',
   draftCreate: 'collect', sourceCreate: 'collect', draftUpdate: 'collect', assetWrite: 'collect',
   propose: 'propose', proposalRevise: 'propose', noteUpdate: 'edit', relationCreate: 'edit', trash: 'trash' };
@@ -75,22 +75,24 @@ export class AgentAccess {
     check(grant.domains.includes(domain), '该知识库未授权', 'FORBIDDEN');
     check(this.store.libraries().some(item => item.data.domain === domain && !item.deleted && !item.conflict), '知识库已删除或存在冲突', 'FORBIDDEN');
   }
-  checkData(grant, data, seen = new Set()) {
+  checkData(grant, data, seen = new Set(), virtual = new Map()) {
     this.scope(grant, data.domain);
     check(!data.sensitive || grant.sensitive, '敏感资料未授权', 'FORBIDDEN');
-    const refs = [...(data.sourceIds || []), ...(data.assetIds || []), ...richReferences(data).refs, ...[data.noteId, data.from, data.to].filter(Boolean)];
-    for (const id of refs) this.readable(grant, this.store.get(id), seen);
+    if (data.items) virtual = new Map(data.items.map(item => [item.targetId, { id: item.targetId, type: 'note', data: item.data, versions: [{ data: item.data }] }]));
+    const refs = [...(data.sourceIds || []), ...(data.assetIds || []), ...richReferences(data).refs, ...[data.noteId, data.from, data.to, data.folderId, data.parentId].filter(Boolean)];
+    for (const id of refs) this.readable(grant, this.store.get(id), seen, virtual);
+    if (data.parentNoteId) this.readable(grant, this.store.get(data.parentNoteId) || virtual.get(data.parentNoteId), seen, virtual);
     for (const item of data.items || []) {
-      this.checkData(grant, item.data, seen);
+      this.checkData(grant, item.data, seen, virtual);
       if (this.store.get(item.targetId)) this.readable(grant, this.store.get(item.targetId), seen);
     }
   }
-  readable(grant, record, seen = new Set()) {
+  readable(grant, record, seen = new Set(), virtual = new Map()) {
     check(record && readableTypes.includes(record.type), '资料不存在或不可访问', 'FORBIDDEN');
     if (seen.has(record.id)) return record;
     check(seen.size < 2000, '引用过多，请缩小范围');
     seen.add(record.id);
-    for (const version of record.versions.length ? record.versions : [{ data: record.data }]) this.checkData(grant, version.data, seen);
+    for (const version of record.versions.length ? record.versions : [{ data: record.data }]) this.checkData(grant, version.data, seen, virtual);
     return record;
   }
   canRead(grant, record) { try { this.readable(grant, record); return true; } catch { return false; } }
@@ -141,9 +143,10 @@ export class AgentAccess {
       check(!input.type || readableTypes.includes(input.type), '不支持的内容类型');
       const limit = Number.isInteger(input.limit) ? Math.max(1, Math.min(input.limit, 100)) : 50;
       const offset = Number.isInteger(input.offset) ? Math.max(0, input.offset) : 0;
-      const records = this.store.list({ type: input.type, domain: input.domain, query: String(input.query || '').slice(0, 500), trash: input.trash === true }).filter(record => this.canRead(grant, record));
+      const records = this.store.list({ type: input.type, domain: input.domain, folderId: input.folderId, query: String(input.query || '').slice(0, 500), trash: input.trash === true }).filter(record => this.canRead(grant, record));
       return { total: records.length, offset, records: records.slice(offset, offset + limit).map(record => ({ id: record.id, type: record.type, heads: record.heads,
-        domain: record.data.domain, title: record.data.title, tags: record.data.tags, updatedAt: record.updatedAt, conflict: record.conflict, deleted: record.deleted })) };
+        domain: record.data.domain, folderId: record.data.folderId, parentId: record.data.parentId, parentNoteId: record.data.parentNoteId, noteOrder: record.data.noteOrder,
+        title: record.data.title, tags: record.data.tags, updatedAt: record.updatedAt, conflict: record.conflict, deleted: record.deleted })) };
     }
     const record = this.readable(grant, this.store.get(input.id));
     if (method === 'record') return record;
@@ -179,7 +182,8 @@ export class AgentAccess {
       check(bytes.toString('base64') === input.data, 'Invalid base64 attachment');
       check(bytes.length <= maxAsset && hash === input.sha256, '附件哈希或大小不符');
       const data = { title: input.filename, domain: input.domain, filename: input.filename, mime: String(input.mime || 'application/octet-stream').slice(0, 200),
-        size: bytes.length, sha256: hash, priority: 'normal', sensitive: input.sensitive === true };
+        size: bytes.length, sha256: hash, priority: 'normal', sensitive: input.sensitive === true,
+        ...(input.folderId ? { folderId: input.folderId } : {}) };
       this.checkData(grant, data);
       const target = this.store.directories.assetPath(input.domain, hash);
       noSymlink(target);
@@ -190,7 +194,18 @@ export class AgentAccess {
     }
     if (method === 'propose') {
       check(Array.isArray(input.items) && input.items.length > 0 && input.items.length <= 100, '方案需要 1 至 100 项');
-      const items = input.items.map(item => this.proposalItem(grant, item));
+      const keys = new Map();
+      for (const item of input.items) if (item.key !== undefined) {
+        check(typeof item.key === 'string' && /^[a-zA-Z0-9_-]{1,80}$/.test(item.key) && !keys.has(item.key), '方案 key 必须唯一且只含字母、数字、下划线或短横线');
+        keys.set(item.key, item.targetId || uuid());
+      }
+      const items = input.items.map(item => {
+        if (item.parentKey !== undefined) check(keys.has(item.parentKey), '方案引用了不存在的上级 key');
+        const entry = this.proposalItem(grant, { ...item, data: { ...item.data,
+          ...(item.parentKey !== undefined ? { parentNoteId: keys.get(item.parentKey) } : {}) } });
+        if (!item.targetId && item.key) entry.targetId = keys.get(item.key);
+        return entry;
+      });
       return write('proposal', { title: input.title || '外部 Agent 整理方案', domain: input.domain, content: input.content || '', items });
     }
     const record = this.readable(grant, this.store.get(input.id));
@@ -208,16 +223,18 @@ export class AgentAccess {
         const old = record.data.items.find(entry => entry.id === item.id);
         check(old && old.status === 'pending' && !updates.has(item.id), '不能改写已确认项或重复修改同一项');
         const targetId = this.store.get(old.targetId) ? old.targetId : undefined;
-        updates.set(item.id, { ...this.proposalItem(grant, { ...item, targetId, parents: old.parents }), id: old.id, targetId: old.targetId });
+        updates.set(item.id, { ...this.proposalItem(grant, { ...item, reason: item.reason ?? old.reason, targetId, parents: old.parents }), id: old.id, targetId: old.targetId });
       }
       return write('proposal', { ...record.data, items: record.data.items.map(item => updates.get(item.id) || item) }, record.id, input.parents);
     }
     check(record.type === (method === 'noteUpdate' ? 'note' : 'draft'), '记录类型不符');
     check(input.data.domain === record.data.domain, '改换知识库请提交方案，不直接移动');
-    return write(record.type, input.data, record.id, input.parents);
+    check((input.data.folderId || null) === (record.data.folderId || null), '调整目录归属请提交整理方案，由用户确认');
+    check((input.data.parentNoteId || null) === (record.data.parentNoteId || null), '调整知识体系请提交整理方案，由用户确认');
+    check(input.data.noteOrder === undefined || input.data.noteOrder === record.data.noteOrder, '笔记排序由用户界面管理，请保留已有顺序');
+    return write(record.type, { ...input.data, ...(record.data.noteOrder !== undefined ? { noteOrder: record.data.noteOrder } : {}) }, record.id, input.parents);
   }
   proposalItem(grant, item) {
-    this.checkData(grant, item.data);
     const target = item.targetId && this.store.get(item.targetId);
     check(!item.targetId || target, '更新目标不存在');
     if (target) {
@@ -225,10 +242,14 @@ export class AgentAccess {
       check(target.type === 'note' && !target.deleted && !target.conflict, '目标必须是无冲突的正式笔记');
       check(Array.isArray(item.parents) && canonical([...item.parents].sort()) === canonical(target.heads), '目标基础版本已变化', 'CONFLICT');
     } else check(!item.parents?.length, '新笔记不应指定父版本');
-    const data = target ? { ...item.data, sensitive: target.data.sensitive || item.data.sensitive === true,
+    const data = target ? { ...(target.data.folderId !== undefined ? { folderId: target.data.folderId } : {}),
+      ...(target.data.parentNoteId !== undefined ? { parentNoteId: target.data.parentNoteId } : {}), ...item.data, sensitive: target.data.sensitive || item.data.sensitive === true,
       sourceIds: [...new Set([...(target.data.sourceIds || []), ...(item.data.sourceIds || [])])],
       assetIds: [...new Set([...(target.data.assetIds || []), ...(item.data.assetIds || [])])] } : item.data;
-    return { id: uuid(), targetId: target?.id || uuid(), parents: target?.heads || [], data, status: 'pending' };
+    check(item.data.noteOrder === undefined || item.data.noteOrder === target?.data.noteOrder, '笔记排序由用户界面管理，请保留已有顺序');
+    if (target?.data.noteOrder !== undefined) data.noteOrder = (data.parentNoteId || null) === (target.data.parentNoteId || null) && data.domain === target.data.domain ? target.data.noteOrder : null;
+    return { id: uuid(), targetId: target?.id || uuid(), parents: target?.heads || [], data,
+      ...(item.reason !== undefined ? { reason: item.reason } : {}), status: 'pending' };
   }
   async configure(enabled) {
     check(!this.starting, '接口正在启动，请稍后');

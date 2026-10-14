@@ -1,0 +1,13 @@
+.asset-preview-header{position:sticky;top:0;z-index:1;display:flex;align-items:center;gap:6px;background:#fbfcfb;padding:8px 0;border-bottom:1px solid var(--line);margin-bottom:8px}
+.asset-preview-header strong{flex:1;min-width:0;font-size:12px;font-weight:600;overflow-wrap:anywhere}
+.asset-preview-header>div{display:flex;flex-shrink:0}
+.asset-preview-header .icon-button{width:26px;min-width:26px;height:28px;min-height:28px}
+.asset-preview-body{min-width:0;font-size:12px;line-height:1.8;overflow-wrap:anywhere}
+.source-preview[data-asset]{min-height:100%}
+.source-preview:empty{display:none}
+.docx-preview{display:block;width:100%;height:60vh;min-height:280px;border:1px solid var(--line);background:white}
+.preview-format-note{margin:0 0 8px;color:#758078;font-size:11px;line-height:1.6}
+.asset-preview-error{color:#a13e39;margin:8px 0}
+dialog.asset-preview-dialog{width:960px;max-width:calc(100vw - 32px)}
+.asset-preview-dialog .modal-body{max-height:calc(90vh - 70px);padding:16px}
+.asset-preview-dialog .docx-preview{height:calc(82vh - 100px)}

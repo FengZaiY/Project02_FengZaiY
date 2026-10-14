@@ -50,7 +50,9 @@ export async function createServer({ directory = path.join(project, '.local', 'p
           fs.mkdirSync(path.dirname(temp), { recursive: true });
           try {
             fs.writeFileSync(temp, Buffer.concat(chunks));
-            value = await service.call('assetImport', { path: temp, expectedId: url.searchParams.get('expectedId') || undefined, domain: url.searchParams.get('domain') || '通用' });
+            value = await service.call('assetImport', { path: temp, expectedId: url.searchParams.get('expectedId') || undefined,
+              duplicateMode: url.searchParams.get('duplicateMode') || 'reuse',
+              domain: url.searchParams.get('domain') || '通用', folderId: url.searchParams.get('folderId') || undefined });
           } finally {
             if (fs.existsSync(temp)) fs.unlinkSync(temp);
             fs.rmdirSync(path.dirname(temp));
@@ -69,7 +71,8 @@ export async function createServer({ directory = path.join(project, '.local', 'p
         return;
       }
       check(req.method === 'GET', 'Unsupported request method');
-      const staticNames = new Map([['/', 'index.html'], ['/index.html', 'index.html'], ['/app.js', 'app.js'], ['/app.js.map', 'app.js.map'], ['/style.css', 'style.css']]);
+      const staticNames = new Map([['/', 'index.html'], ['/index.html', 'index.html'], ['/app.js', 'app.js'], ['/app.js.map', 'app.js.map'],
+        ['/docx-worker.js', 'docx-worker.js'], ['/style.css', 'style.css']]);
       const generated = /^\/(?:app\.css|fonts\/[A-Za-z0-9_-]+\.(?:woff2?|ttf))$/.test(url.pathname) ? url.pathname.slice(1) : undefined;
       const name = staticNames.get(url.pathname) || generated;
       if (!name) { res.writeHead(404); res.end('Not found'); return; }
@@ -89,7 +92,7 @@ export async function createServer({ directory = path.join(project, '.local', 'p
   service.startTimer();
   await service.agents.resume();
   return { server, service, token, url: `http://127.0.0.1:${server.address().port}`,
-    close: async () => { picker.close(); await new Promise(resolve => server.close(resolve)); service.close(); storage.close(); } };
+    close: async () => { picker.close(); await new Promise(resolve => server.close(resolve)); await service.close(); storage.close(); } };
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const app = await createServer({ port: Number(process.env.PORT || 4317), directory: process.env.STUDYSELF_DATA || undefined });

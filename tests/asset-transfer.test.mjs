@@ -155,7 +155,7 @@ test('missing or altered source files do not block unrelated notes and are repor
   const { directory, a, b, deliver } = setup(t);
   const assets = [];
   for (const name of ['missing.txt', 'changed.txt']) {
-    const file = path.join(directory, name); fs.writeFileSync(file, 'old'); assets.push(await importAttachment(a.store, file));
+    const file = path.join(directory, name); fs.writeFileSync(file, 'old'); assets.push(await importAttachment(a.store, file, { duplicateMode: 'separate' }));
   }
   fs.unlinkSync(a.store.assetLocation(assets[0].id).path);
   fs.writeFileSync(a.store.assetLocation(assets[1].id).path, 'new');

@@ -63,7 +63,7 @@ export function orderedEvents(events, store) {
     if (first) {
       check(first.type === event.type, 'Record type changed');
       if (event.type === 'asset') check(first.data.sha256 === event.data.sha256 && first.data.size === event.data.size, 'Asset identity changed');
-      if (event.type === 'library') check(first.data.domain === event.data.domain, 'Library scope changed');
+      if (['library', 'folder'].includes(event.type)) check(first.data.domain === event.data.domain, 'Library scope changed');
     }
     entities.set(event.entityId, event);
   }
