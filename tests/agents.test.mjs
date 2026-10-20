@@ -59,7 +59,8 @@ test('Agent server rejects browser origins, bad hosts, arbitrary RPC and system 
     'versionCommit', 'versionRestore', 'syncStatus', 'syncPlan', 'syncPublish', 'syncImport', 'syncPause', 'syncCancel',
     'updateStatus', 'updateCheck', 'updateDownload', 'updateInstall', 'updateConfigure',
     'syncConfirmBatch', 'syncConfirmUpload', 'deviceSetPrimary', 'syncClientValidate', 'assetEvict', 'pairingKey',
-    'assetCatalog', 'assetDetail', 'assetUpdate', 'assetBatch', 'assetDuplicates', 'assetMergePreview', 'assetMerge', 'trashPreview', 'trashEmpty']) {
+    'assetCatalog', 'assetDetail', 'assetUpdate', 'assetBatch', 'assetDuplicates', 'assetMergePreview', 'assetMerge', 'trashPreview', 'trashEmpty',
+    'deletionStatus', 'deletionRetry', 'storagePreviousPreview', 'storagePreviousClean']) {
     await assert.rejects(rpc(method), /FORBIDDEN/);
   }
 });
@@ -192,14 +193,17 @@ test('merge proposals retain prior provenance and sensitive flags; stale targets
   assert.equal(store.get(note.id).data.content, '用户的新修改');
 });
 
-test('legacy data remains readable and model calls are unavailable', async t => {
-  const { service, store, a, rpc } = await setup(t);
-  const chat = store.write({ type: 'conversation', data: { ...data(a), messages: [{ role: 'assistant', content: '旧回答' }] } });
-  const model = store.write({ type: 'model', data: { title: '旧模型', providerId: 'custom', modelName: 'legacy' } });
-  assert.equal((await rpc('record', { id: chat.id })).data.messages[0].content, '旧回答');
+test('retired data cannot be imported, read or recreated and model calls remain unavailable', async t => {
+  const { service, store, a, rpc, directory } = await setup(t);
+  const old = new Store(path.join(directory, 'old-fixture')); t.after(() => old.close());
+  const chat = old.write({ type: 'conversation', data: { ...data(a), messages: [{ role: 'assistant', content: '旧回答' }] } });
+  const model = old.write({ type: 'model', data: { title: '旧模型', providerId: 'custom', modelName: 'legacy' } });
+  store.importEvents(old.allEvents());
+  await assert.rejects(rpc('record', { id: chat.id }), /不存在|不可访问/);
   for (const method of ['models', 'ask', 'providerSave', 'modelPrice', 'discussionPlan', 'discussionStart']) await assert.rejects(service.call(method), /Unsupported/);
   await assert.rejects(service.call('save', { type: 'model', data: model.data }), /移除/);
-  assert.ok(store.get(model.id));
+  assert.equal(store.get(model.id), null);
+  assert.throws(() => store.write({ type: 'model', data: model.data }), /已删除/);
   assert.equal(service.models, undefined);
 });
 
@@ -252,9 +256,9 @@ test('receipts survive restart and revocation/expiry is checked before replay', 
 
 test('workspace publication strips retired chat payloads and portable skill ZIP is well formed', async t => {
   const { service } = await setup(t);
-  const tab = { id: uuid(), title: '笔记', domain: 'scope', scroll: 10, prompt: 'private', modelId: 'old', conversationId: 'old', attachments: ['private'], jobId: 'old' };
+  const tab = { id: uuid(), recordId: uuid(), title: '笔记', domain: 'scope', scroll: 10, prompt: 'private', modelId: 'old', conversationId: 'old', attachments: ['private'], jobId: 'old' };
   const record = await service.call('workspacePublish', { tabs: [tab], selectedTab: tab.id });
-  assert.deepEqual(Object.keys(record.data.tabs[0]).sort(), ['domain', 'id', 'scroll', 'title']);
+  assert.deepEqual(Object.keys(record.data.tabs[0]).sort(), ['domain', 'id', 'recordId', 'scroll', 'title']);
   const files = service.agents.skillFiles();
   const zip = Buffer.from(await skillZip(files).arrayBuffer());
   assert.equal(zip.readUInt32LE(0), 0x04034b50);

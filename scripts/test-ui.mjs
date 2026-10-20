@@ -3,11 +3,15 @@ import fs from 'node:fs';
 import path from 'node:path';
 import assert from 'node:assert/strict';
 import { createServer } from '../src/server.mjs';
+import { Store } from '../src/core/store.mjs';
 import { sha } from '../src/core/util.mjs';
 
 const root = path.resolve('artifacts/ui');
 fs.mkdirSync(root, { recursive: true });
 const directory = fs.mkdtempSync(path.join(root, 'profile-'));
+const legacyStore = new Store(directory);
+const legacy = legacyStore.write({ type: 'conversation', data: { title: '退役对话', domain: 'AI', messages: [{ role: 'assistant', content: '应删除的旧回答' }] } });
+legacyStore.close();
 const app = await createServer({ directory, port: 0 });
 const errors = [];
 let browser;
@@ -17,8 +21,6 @@ try {
     content: '<h2>把知识同步与模型运行分开</h2><p>每台电脑保留自己的本地知识库。同步传递内容和版本，不传递正在使用的数据库。</p><blockquote>同步用于保持一致，独立备份用于恢复错误。两者不能互相替代。</blockquote><h2>需要核对的状态</h2><table><tr><th>状态</th><th>含义</th></tr><tr><td>已本地保存</td><td>当前电脑已提交版本</td></tr><tr><td>等待客户端传输</td><td>已生成文件，云端状态未核验</td></tr><tr><td>另一台已接收</td><td>已收到另一设备的回执</td></tr></table><h2>处理冲突</h2><p>保留并发版本，人工对照融合。不按照上传时间覆盖修改。</p>' } });
   const second = app.service.store.write({ type: 'note', data: { title: '英语 · 表达积累', domain: '英语', tags: ['表达'],
     content: '## Notes\n\nA personal knowledge workspace.\n\n个人知识工作区。' } });
-  const legacy = app.service.store.write({ type: 'conversation', data: { title: '退役对话', domain: 'AI',
-    messages: [{ role: 'assistant', content: '旧消息不得自动恢复到界面。' }] } });
   const legacyTab = { id: crypto.randomUUID(), recordId: legacy.id, title: legacy.data.title, domain: 'AI', conversationId: legacy.id };
   const noteTab = { id: crypto.randomUUID(), recordId: first.id, title: first.data.title, domain: 'AI', scroll: 0 };
   await app.service.call('workspaceSave', { tabs: [noteTab, legacyTab], selectedTab: legacyTab.id, domain: 'AI' });
@@ -42,7 +44,7 @@ try {
   assert.equal(await page.locator(`[data-tab="${legacyTab.id}"]`).count(), 0);
   assert.equal(await page.locator(`[data-tab="${noteTab.id}"]`).count(), 1);
   assert.equal(await page.locator('[data-action="conversation-to-draft"]').count(), 0);
-  assert.deepEqual(app.service.store.get(legacy.id).heads, legacy.heads);
+  assert.equal(app.service.store.get(legacy.id), null);
   await page.locator(`[data-record="${first.id}"]`).click();
   await page.locator('#note-title').waitFor();
   await page.locator('.tiptap').waitFor();
@@ -133,7 +135,8 @@ try {
   await page.locator('[data-action="sync-publish"]').click();
   await page.waitForFunction(() => document.querySelector('#sync-task')?.textContent.includes('最新内容已生成'));
   assert.equal(app.service.transport.value('latest').id, plannedId);
-  assert.equal(app.service.transport.value('latest').format, 3);
+  assert.equal(app.service.transport.value('latest').format, 4);
+  assert.ok(app.service.transport.value('latest').erasures.some(item => item.entityId === legacy.id));
   assert.doesNotMatch(await page.locator('#main').innerText(), /Git|保存版本|版本历史|独立备份/);
   await page.locator('[data-action="sync-upload-confirm"]').click();
   await page.locator('#modal [data-confirm]').click();
@@ -171,7 +174,7 @@ try {
   await page.locator('.tiptap').waitFor();
   assert.equal(await page.locator('.work-tab').count(), tabCountBeforeAdopt);
   assert.equal(await page.locator('.work-tab.selected').getAttribute('data-tab'), selectedBeforeAdopt);
-  assert.deepEqual(app.service.store.get(legacy.id).data, legacy.data);
+  assert.equal(app.service.store.get(legacy.id), null);
   await page.setViewportSize({ width: 1165, height: 892 });
   await page.screenshot({ path: path.join(root, 'no-conversation-archive.png'), fullPage: true });
   // An arriving version must not silently become the base of an unsaved editor.
@@ -190,6 +193,14 @@ try {
   assert.equal(concurrent.conflict, true);
   assert.ok(concurrent.versions.some(version => version.data.content.includes('Local concurrent text.')));
   assert.ok(concurrent.versions.some(version => version.data.content.includes('Arriving version')));
+  await page.locator('[data-nav="settings"]').click();
+  await page.getByText(/内置 AI 历史：已移除/).waitFor();
+  for (const width of [1165, 600]) {
+    await page.setViewportSize({ width, height: 892 });
+    await page.getByText(/内置 AI 历史：已移除/).scrollIntoViewIfNeeded();
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+    await page.screenshot({ path: path.join(root, `retired-ai-cleanup-${width}.png`) });
+  }
   assert.deepEqual(errors, [], 'Browser runtime errors');
   fs.writeFileSync(path.join(root, 'report.json'), JSON.stringify({ passed: true, url: app.url, screenshots: ['desktop-knowledge.png', 'desktop-sync.png', 'compact-desktop.png', 'narrow-window.png'], errors }, null, 2));
   console.log('PASS: editing, tab persistence, scope, current sync, space estimate, retired Git/backup controls, partial approval and stale-editor conflict.');

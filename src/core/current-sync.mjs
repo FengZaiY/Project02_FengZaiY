@@ -4,6 +4,11 @@ import { DirectoryChannel, assetObjects, assetAAD, localAsset, sealBinary, valid
 import { describeAsset, assetChunk, diskSpace, receiveResumable } from './resumable-files.mjs';
 import { EMPTY_CONTROL, eventHeads, mergeControl, primaryRole, orderedEvents } from './sync-state.mjs';
 import { LocalHierarchy } from './local-hierarchy.mjs';
+import { filterErased, mergeErasures } from './erasures.mjs';
+import { readErasureReceipts, readHistoryPart, cleanErasedTransport } from './erasure-sync.mjs';
+import { prepareRemoteErasure } from './trash.mjs';
+import { scheduleDeletion, runDeletionFiles } from './permanent-files.mjs';
+import { retirementReceipts, replacementWorkspaces } from './retired-ai.mjs';
 import { atomicWrite, canonical, check, hashFile, isHash, isId, noSymlink, now, outside, sha, uuid } from './util.mjs';
 
 const PART_BYTES = 2 * 1024 * 1024;
@@ -11,7 +16,8 @@ const DEFAULT_BATCH = 256 * 1024 * 1024;
 const MIN_BATCH = 4 * 1024 * 1024 + 36;
 const MAX_MANIFEST = 32 * 1024 * 1024;
 const tick = () => new Promise(resolve => setImmediate(resolve));
-const manifestDigest = manifest => sha(canonical({ parts: manifest.parts, control: manifest.control, assets: manifest.assets }));
+const manifestDigest = manifest => sha(canonical({ parts: manifest.parts, control: manifest.control, assets: manifest.assets,
+  ...(manifest.format === 4 ? { erasures: manifest.erasures } : {}) }));
 
 export class CurrentSync {
   constructor(store, options = {}) {
@@ -23,7 +29,7 @@ export class CurrentSync {
   }
   config() {
     const key = this.store.secret('pairing');
-    return { protocol: 3, configured: !!key && !!this.store.local('syncFolder'), enabled: false, manual: true,
+    return { protocol: this.store.erasures().length ? 4 : 3, configured: !!key && !!this.store.local('syncFolder'), enabled: false, manual: true,
       folder: this.store.local('syncFolder') || '', channel: key ? sha(Buffer.from(key, 'hex')).slice(0, 16) : null,
       attachmentMode: 'all-files', lastReport: this.store.local('v3LastReport'), cloudUploadVerified: false };
   }
@@ -80,7 +86,8 @@ export class CurrentSync {
   status() {
     const plan = this.value('plan'), latest = this.value('latest');
     const pendingChanges = this.store.unexported().length;
-    const pendingControl = latest ? canonical(latest.control) !== canonical(this.control()) : true;
+    const pendingControl = latest ? canonical(latest.control) !== canonical(this.control())
+      || canonical(latest.erasures || []) !== canonical(this.store.erasures()) : true;
     const progress = this.progress();
     return { busy: this.running, config: this.config(), pendingChanges, pendingControl,
       unpublished: pendingChanges || pendingControl ? 1 : 0, unconfirmed: latest && !latest.userConfirmedAt ? 1 : 0,
@@ -123,7 +130,8 @@ export class CurrentSync {
         const assetIndex = assets.length; assets.push(descriptor);
         descriptor.chunks.forEach((chunk, index) => objects.push({ kind: 'asset', ...chunk, assetIndex, index, reusable: known.has(asset.hash) }));
       }
-      const manifest = { format: 3, id: uuid(), deviceId: this.store.deviceId, deviceName: this.store.getMeta('deviceName'),
+      const erasures = this.store.erasures();
+      const manifest = { format: erasures.length ? 4 : 3, ...(erasures.length ? { erasures } : {}), id: uuid(), deviceId: this.store.deviceId, deviceName: this.store.getMeta('deviceName'),
         at: now(), parts, assets, control: mergeControl(EMPTY_CONTROL, this.control()) };
       manifest.digest = manifestDigest(manifest);
       if (this.value('latest')?.digest === manifest.digest) return { ...this.status(), unchanged: true };
@@ -206,16 +214,19 @@ export class CurrentSync {
           for (const events of Object.values(plan.metadata)) for (const event of events) this.store.db.prepare('UPDATE events SET exported=1 WHERE id=?').run(event.id);
           this.saveProgress({ ...progress, state: 'complete', reason: '最新内容已生成，等待客户端上传', finishedAt: now() });
         });
-        return this.status();
+        const cleanup = cleanErasedTransport(this);
+        return { ...this.status(), cleanup };
       } catch (error) {
         save('blocked', error.message); throw error;
       }
     });
   }
   validateManifest(manifest, deviceId) {
-    check(manifest?.format === 3 && isId(manifest.id) && manifest.deviceId === deviceId && isId(deviceId)
+    check([3, 4].includes(manifest?.format) && isId(manifest.id) && manifest.deviceId === deviceId && isId(deviceId)
       && typeof manifest.deviceName === 'string' && manifest.deviceName.length <= 100 && Number.isFinite(Date.parse(manifest.at)), '无效的最新内容清单');
-    check(Object.keys(manifest).sort().join() === 'assets,at,control,deviceId,deviceName,digest,format,id,parts', '清单含未知字段');
+    check(Object.keys(manifest).sort().join() === (manifest.format === 4
+      ? 'assets,at,control,deviceId,deviceName,digest,erasures,format,id,parts' : 'assets,at,control,deviceId,deviceName,digest,format,id,parts'), '清单含未知字段');
+    if (manifest.format === 4) mergeErasures(manifest.erasures);
     check(Array.isArray(manifest.parts) && manifest.parts.length <= 100000, 'Invalid history parts');
     const names = new Set();
     for (const part of manifest.parts) {
@@ -237,10 +248,14 @@ export class CurrentSync {
   }
   scan() {
     const channel = this.channel(), entries = [], errors = [], seen = this.value('seen') || {};
+    const erased = new Set(mergeErasures(this.store.erasures(), readErasureReceipts(channel)).map(item => item.entityId));
     for (const name of channel.names('.sscurrent')) {
       try {
         const manifest = this.loadCurrent(name), missing = [];
-        for (const object of [...manifest.parts, ...manifest.assets.flatMap(asset => asset.chunks)]) {
+        for (const part of manifest.parts) {
+          try { readHistoryPart(channel, part); } catch { missing.push(part.name); }
+        }
+        for (const object of manifest.assets.filter(asset => asset.ids.some(id => !erased.has(id))).flatMap(asset => asset.chunks)) {
           const file = channel.file(object.name);
           if (!fs.existsSync(file) || fs.statSync(file).size !== object.size + 36) missing.push(object.name);
         }
@@ -256,28 +271,30 @@ export class CurrentSync {
   async importLatest({ metadataOnly = false } = {}) {
     return this.exclusive(async () => {
       this.guardEditing();
-      const channel = this.channel(), incoming = [], union = new Map(), descriptors = new Map();
+      const channel = this.channel(), incoming = channel.names('.sscurrent').map(name => this.loadCurrent(name)), union = new Map(), descriptors = new Map();
+      const histories = new Map(incoming.map(manifest => [manifest.id, manifest.parts.flatMap(part => readHistoryPart(channel, part))]));
+      let erasures = mergeErasures(this.store.erasures(), readErasureReceipts(channel), ...incoming.map(manifest => manifest.erasures || []));
+      erasures = mergeErasures(erasures, retirementReceipts(this.store, [...this.store.allEvents(), ...[...histories.values()].flat()], erasures));
+      const erasedIds = new Set(erasures.map(item => item.entityId));
       let control = this.control();
-      for (const name of channel.names('.sscurrent')) {
-        const manifest = this.loadCurrent(name), events = [];
-        for (const part of manifest.parts) {
-          const data = channel.read(part.name, `v3:history:${part.hash}`, PART_BYTES);
-          check(data.length === part.size && sha(data) === part.hash, '修改记录分块校验失败');
-          const group = JSON.parse(data.toString()); check(Array.isArray(group) && group.length === part.count, '修改记录数量不符'); events.push(...group);
-        }
+      for (const manifest of incoming) {
+        const original = histories.get(manifest.id);
+        const events = [...filterErased(original, erasures), ...replacementWorkspaces(original, erasures)];
         orderedEvents(events, this.store);
-        check(canonical(assetObjects(events)) === canonical(manifest.assets.map(({ hash, size, ids }) => ({ hash, size, ids }))), '原件索引与修改记录不一致');
+        const assets = manifest.assets.map(asset => ({ ...asset, ids: asset.ids.filter(id => !erasedIds.has(id)) })).filter(asset => asset.ids.length);
+        check(canonical(assetObjects(events)) === canonical(assets.map(({ hash, size, ids }) => ({ hash, size, ids }))), '原件索引与修改记录不一致');
         for (const event of events) {
           check(!union.has(event.id) || union.get(event.id).hash === event.hash, '同步记录身份冲突'); union.set(event.id, event);
         }
-        for (const asset of manifest.assets) {
+        for (const asset of assets) {
           const previous = descriptors.get(asset.hash);
           check(!previous || canonical(previous.chunks) === canonical(asset.chunks), '原件分块身份冲突');
           descriptors.set(asset.hash, { ...asset, ids: [...new Set([...(previous?.ids || []), ...asset.ids])].sort() });
         }
-        control = mergeControl(control, manifest.control); incoming.push(manifest);
+        control = mergeControl(control, manifest.control);
       }
       check(incoming.length, '尚未发现最新内容，请先在百度客户端下载');
+      prepareRemoteErasure(this.store, erasures, [...union.values()]);
       const role = primaryRole(control);
       check(!metadataOnly || role.primary && !role.conflict && role.primary !== this.store.deviceId, '仅已确定的非主力机可以只导入索引');
       const current = assetObjects(eventHeads([...union.values()])), paths = new Map();
@@ -289,6 +306,11 @@ export class CurrentSync {
       const events = orderedEvents([...union.values()], this.store);
       let count = 0;
       this.store.transaction(() => {
+        const deletion = prepareRemoteErasure(this.store, erasures, [...union.values()]);
+        if (erasures.length) {
+          scheduleDeletion(this.store, deletion.ids, deletion.files);
+          this.store.eraseRaw(erasures);
+        }
         for (const event of events) {
           if (this.store.insert(event, true)) count++;
           this.store.db.prepare('DELETE FROM pending WHERE id=?').run(event.id);
@@ -299,9 +321,11 @@ export class CurrentSync {
         for (const manifest of incoming) { remotes[manifest.deviceId] = manifest; seen[manifest.id] = sha(canonical(manifest)); }
         this.value('remotes', remotes); this.value('seen', seen); this.value('receivedAt', now());
       });
+      const cleanup = erasures.length ? await runDeletionFiles(this.store) : null;
+      if (erasures.length) cleanErasedTransport(this);
       let receiptWarning;
       try { await this.verifyPrimary(); } catch (error) { receiptWarning = error.message; }
-      return { imported: count, unchanged: !count, metadataOnly, devices: incoming.length, receiptWarning };
+      return { imported: count, unchanged: !count, metadataOnly, devices: incoming.length, receiptWarning, cleanup };
     });
   }
   confirmUpload({ id, confirmed }) {

@@ -282,16 +282,17 @@ test('a formerly pending malformed child does not block unrelated valid revision
   assert.equal(b.get(parent.id).data.content, 'original');
   assert.equal(b.summary().pendingParents, 0);
 });
-test('restart labels only this device interrupted tasks and does not execute them', t => {
+test('restart deletes retired tasks from every device without executing them', async t => {
   const { directory } = setup(t);
   const profile = path.join(directory, 'restart');
-  const first = new Service(profile);
-  const own = first.store.write({ type: 'task', data: { title: 'local', ownerDevice: first.store.deviceId, status: 'running' } });
-  const foreign = first.store.write({ type: 'task', data: { title: 'other', ownerDevice: uuid(), status: 'running' } });
+  const first = new Store(profile);
+  const own = first.write({ type: 'task', data: { title: 'local', ownerDevice: first.deviceId, status: 'running' } });
+  const foreign = first.write({ type: 'task', data: { title: 'other', ownerDevice: uuid(), status: 'running' } });
   first.close();
   const restarted = new Service(profile, { fetcher: () => { throw new Error('Unexpected network'); } });
-  assert.equal(restarted.store.get(own.id).data.status, 'interrupted_cost_unknown');
-  assert.equal(restarted.store.get(foreign.id).data.status, 'running');
+  await restarted.ready;
+  assert.equal(restarted.store.get(own.id), null);
+  assert.equal(restarted.store.get(foreign.id), null);
   assert.equal(restarted.models, undefined);
   restarted.close();
 });

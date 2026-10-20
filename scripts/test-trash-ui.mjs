@@ -31,7 +31,8 @@ try {
   await page.getByRole('button', { name: '确认清空 1 项', exact: true }).waitFor();
   assert.match(await page.locator('.trash-confirm').innerText(), /不受搜索或分页限制/);
   assert.match(await page.locator('.trash-confirm').innerText(), /引用者/);
-  assert.match(await page.locator('.trash-confirm').innerText(), /不释放磁盘空间/);
+  assert.match(await page.locator('.trash-confirm').innerText(), /预计释放/);
+  assert.match(await page.locator('.trash-confirm').innerText(), /百度云端历史/);
   await page.getByRole('button', { name: '取消', exact: true }).click();
   assert.ok(store.get(removable.id)?.deleted);
   await page.getByLabel('搜索笔记').fill('');
@@ -44,6 +45,7 @@ try {
   await page.locator('#trash-clear-error', { hasText: '已变化' }).waitFor();
   assert.ok(store.get(removable.id));
   await page.getByRole('button', { name: '取消', exact: true }).click();
+  await app.service.organizeLocal();
   await page.getByRole('button', { name: '清空回收站', exact: true }).click();
   await page.getByRole('button', { name: '确认清空 2 项', exact: true }).waitFor();
   for (const width of [1220, 600]) {
@@ -55,7 +57,7 @@ try {
   await page.setViewportSize({ width: 1220, height: 892 });
   if (app.service.localTask) await app.service.localTask;
   await page.getByRole('button', { name: '确认清空 2 项', exact: true }).click();
-  await page.locator('#toast', { hasText: '已清空 2 项' }).waitFor();
+  await page.locator('#toast', { hasText: '已永久删除 2 项' }).waitFor();
   assert.equal(store.get(removable.id), null); assert.equal(store.get(added.id), null);
   assert.ok(store.get(other.id)?.deleted); assert.ok(store.get(protectedNote.id)?.deleted);
   assert.equal(await page.locator(`[data-record="${removable.id}"]`).count(), 0);
@@ -64,6 +66,17 @@ try {
   await page.getByRole('button', { name: '清空回收站', exact: true }).click();
   await page.getByRole('button', { name: '确认清空 0 项', exact: true }).waitFor();
   assert.equal(await page.getByRole('button', { name: '确认清空 0 项', exact: true }).isDisabled(), true);
+  await page.getByRole('button', { name: '取消', exact: true }).click();
+  await page.locator('[data-nav=settings]').click();
+  await page.getByRole('button', { name: '重试永久删除清理', exact: true }).waitFor();
+  for (const width of [1220, 600]) {
+    await page.setViewportSize({ width, height: 892 });
+    await page.getByRole('button', { name: '重试永久删除清理', exact: true }).scrollIntoViewIfNeeded();
+    await page.screenshot({ path: path.join(root, `cleanup-${width}.png`) });
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+  }
+  await page.getByRole('button', { name: '重试永久删除清理', exact: true }).click();
+  await page.locator('#toast', { hasText: '已重试' }).waitFor();
   assert.deepEqual(errors, []);
   console.log('PASS: trash scope, search independence, cancel, stale confirmation, protected references, tab cleanup and responsive confirmation.');
 } catch (error) {

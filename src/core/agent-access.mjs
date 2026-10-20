@@ -10,7 +10,7 @@ import { cleanDraftRefs, validateDraftRefs } from './draft-workflow.mjs';
 const skillRoot = fileURLToPath(new URL('../../skills/studyself-organize/', import.meta.url));
 const skillNames = ['SKILL.md', 'references/preferences.md', 'references/api.md', 'scripts/client.mjs'];
 const preferenceId = 'becb64b1-215f-46ed-b332-ae0b36613126';
-const readableTypes = ['library', 'folder', 'note', 'draft', 'source', 'annotation', 'relation', 'proposal', 'asset', 'conversation'];
+const readableTypes = ['library', 'folder', 'note', 'draft', 'source', 'annotation', 'relation', 'proposal', 'asset'];
 const permissions = { bootstrap: 'read', libraries: 'read', search: 'read', record: 'read', history: 'read', assetRead: 'read',
   draftCreate: 'collect', sourceCreate: 'collect', draftUpdate: 'collect', assetWrite: 'collect',
   propose: 'propose', proposalRevise: 'propose', noteUpdate: 'edit', relationCreate: 'edit', trash: 'trash' };
@@ -94,7 +94,10 @@ export class AgentAccess {
     check(!data.sensitive || grant.sensitive, '敏感资料未授权', 'FORBIDDEN');
     if (data.items) virtual = new Map(data.items.map(item => [item.targetId, { id: item.targetId, type: 'note', data: item.data, versions: [{ data: item.data }] }]));
     const refs = [...(data.sourceIds || []), ...(data.assetIds || []), ...richReferences(data).refs, ...[data.noteId, data.from, data.to, data.folderId, data.parentId].filter(Boolean)];
-    for (const id of refs) this.readable(grant, this.store.get(id), seen, virtual);
+    for (const id of refs) {
+      if (this.store.isRetiredAI(id)) continue;
+      this.readable(grant, this.store.get(id), seen, virtual);
+    }
     const checkDraft = ref => {
       this.readable(grant, this.store.get(ref.id), seen, virtual);
       const event = this.store.event(ref.versionId), key = `version:${ref.versionId}`;

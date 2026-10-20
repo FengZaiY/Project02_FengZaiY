@@ -109,6 +109,16 @@ try {
   assert.equal(path.dirname(app.service.state().libraries[0].localDirectory), target);
   assert.equal(app.service.store.get(note.id).data.content.includes('还没有保存的编辑'), true);
   await restored.screenshot({ path: path.join(root, 'migrated-1165.png'), fullPage: true });
+  if (app.service.localTask) await app.service.localTask;
+  await restored.locator('[data-action="storage-previous-clean"]').click();
+  await restored.locator('#modal h2', { hasText: '永久清理迁移旧副本' }).waitFor();
+  await restored.locator('[data-cancel]').click();
+  assert.ok(fs.existsSync(path.join(anchor, 'knowledge.sqlite')));
+  await restored.locator('[data-action="storage-previous-clean"]').click();
+  await restored.locator('[data-confirm]').click();
+  await restored.locator('#toast', { hasText: '旧副本托管内容已清理' }).waitFor();
+  assert.equal(fs.existsSync(path.join(anchor, 'knowledge.sqlite')), false);
+  assert.ok(app.service.store.get(note.id));
   const other = new Service(path.join(base, 'other'));
   other.store.saveLibrary({ title: '另一套资料' }); other.close();
   picked = path.join(base, 'other');

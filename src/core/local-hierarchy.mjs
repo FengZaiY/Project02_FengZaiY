@@ -22,11 +22,9 @@ export class LocalHierarchy {
     const file = inside(this.store.directory, relative); noSymlink(file); return file;
   }
   projectionFile(file) {
-    for (const library of this.store.libraries()) {
-      const mappings = this.store.local('libraryDirectories') || {}, name = mappings[library.id];
-      if (!name) continue;
+    for (const [id, name] of Object.entries(this.store.local('libraryDirectories') || {})) {
       const directory = this.store.directories.location(name);
-      if (!this.store.directories.owns(directory, library.id)) continue;
+      if (!this.store.directories.owns(directory, id)) continue;
       if (!outside(directory, file)) return true;
     }
     return false;
@@ -56,11 +54,9 @@ export class LocalHierarchy {
     if (!outside(this.store.directory, file)) {
       const received = path.join(this.store.directory, 'received-objects');
       if (path.dirname(file) === received && /^[a-f0-9]{64}$/.test(path.basename(file))) return true;
-      for (const library of this.store.libraries()) {
-        const mappings = this.store.local('libraryDirectories') || {}, name = mappings[library.id];
-        if (!name) continue;
+      for (const [id, name] of Object.entries(this.store.local('libraryDirectories') || {})) {
         const directory = this.store.directories.location(name);
-        if (!this.store.directories.owns(directory, library.id)) continue;
+        if (!this.store.directories.owns(directory, id)) continue;
         if (path.dirname(file) === path.join(directory, 'attachments') && /^[a-f0-9]{64}$/.test(path.basename(file))) return true;
         const tracked = this.store.local('hierarchyOriginals') || {};
         if (tracked[path.relative(this.store.directory, file)] && !outside(directory, file)) return true;

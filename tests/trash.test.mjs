@@ -21,7 +21,7 @@ function fixture(t) {
   return { directory, service, store, domain, other: other.id, note, trash, clear };
 }
 
-test('empty trash respects library scope, closes saved tabs, retains sync history and disallows recovery', async t => {
+test('empty trash respects library scope, closes tabs and removes payload history', async t => {
   const f = fixture(t), note = f.trash(f.note('清空')), keep = f.note('正常笔记'), other = f.trash(f.note('另一库', f.other));
   f.store.local('workspace', { tabs: [{ id: 'gone', recordId: note.id }, { id: 'keep', recordId: keep.id }], selectedTab: 'gone' });
   const before = f.store.allEvents();
@@ -37,7 +37,8 @@ test('empty trash respects library scope, closes saved tabs, retains sync histor
   assert.deepEqual(f.store.local('workspace').tabs.map(tab => tab.id), ['keep']);
   assert.equal(f.store.local('workspace').selectedTab, null);
   assert.equal(f.store.summary().trash, 1);
-  for (const event of before) assert.deepEqual(f.store.event(event.id), event);
+  for (const event of before) assert.deepEqual(f.store.event(event.id), event.entityId === note.id ? undefined : event);
+  assert.equal(f.store.erasures().length, 1);
   assert.throws(() => f.store.restoreVersion(note.id, note.heads[0], f.store.headIds(note.id)), /清空/);
   assert.throws(() => f.store.write({ id: note.id, parents: [], data: note.data }), /清空/);
   assert.equal(f.clear().count, 0);
@@ -67,28 +68,28 @@ test('stale confirmation rejects new references, new trash and restores; batch e
   const owner = f.store.write({ type: 'annotation', data: { title: '备注', noteId: a.id, domain: f.domain, content: '仍有关联' } });
   assert.throws(() => emptyTrash(f.store, { domain: f.domain, token: preview.token, confirmed: true }), { code: 'CONFLICT' });
   f.trash(owner);
-  const before = f.store.allEvents(), sequence = f.store.getMeta('sequence'), original = f.store.purgeRaw.bind(f.store);
-  let calls = 0;
-  f.store.purgeRaw = (...args) => { if (++calls === 2) throw new Error('模拟写入失败'); return original(...args); };
+  const before = f.store.allEvents(), sequence = f.store.getMeta('sequence'), original = f.store.eraseRaw.bind(f.store);
+  f.store.eraseRaw = (...args) => { original(...args); throw new Error('模拟写入失败'); };
   assert.throws(() => f.clear(), /模拟写入失败/);
   assert.deepEqual(f.store.allEvents(), before);
   assert.equal(f.store.getMeta('sequence'), sequence);
-  f.store.purgeRaw = original;
+  f.store.eraseRaw = original;
   const stale = previewTrash(f.store, { domain: f.domain });
   f.store.restoreVersion(b.id, b.heads[0], b.heads);
   assert.throws(() => emptyTrash(f.store, { domain: f.domain, token: stale.token, confirmed: true }), { code: 'CONFLICT' });
 });
 
-test('clear more than a list page and retain original file bytes', async t => {
+test('clear more than a page, delete managed original and preserve external import source', async t => {
   const f = fixture(t);
   for (let i = 0; i < 155; i++) f.trash(f.note(`第 ${i} 项`));
   const file = path.join(f.directory, '原资料.txt'); fs.writeFileSync(file, '应保留的原件');
   const asset = await f.service.call('assetImport', { path: file, domain: f.domain });
   const location = f.store.assetLocation(asset.id).path;
   f.trash(asset);
-  assert.equal(f.clear().count, 156);
+  const preview = await f.service.call('trashPreview', { domain: f.domain });
+  assert.equal((await f.service.call('trashEmpty', { domain: f.domain, token: preview.token, confirmed: true })).count, 156);
   assert.equal(fs.readFileSync(file, 'utf8'), '应保留的原件');
-  assert.equal(fs.readFileSync(location, 'utf8'), '应保留的原件');
+  assert.equal(fs.existsSync(location), false);
   assert.equal(f.store.summary().trash, 0);
   await assert.rejects(f.service.call('assetContent', { id: asset.id }), /not available/);
 });
@@ -98,7 +99,7 @@ test('out-of-order and repeated import plus restart cannot resurrect cleared con
   const old = f.store.allEvents(), bPath = path.join(f.directory, 'B');
   let b = new Store(bPath); t.after(() => b.close());
   b.importEvents(old);
-  f.clear();
+  f.store.transaction(() => f.store.purgeRaw(note.id, note.heads));
   const marker = f.store.allEvents().at(-1);
   const c = new Store(path.join(f.directory, 'C')); t.after(() => c.close());
   assert.equal(c.importEvents([marker]).pending, 1);
@@ -132,12 +133,13 @@ test('v3 latest-content sync carries final deletion and remains idempotent for a
   const c = new CurrentSync(cStore, { reserveBytes: 0 }); c.configure(folder, key);
   await c.importLatest();
   assert.equal(cStore.get(note.id), null);
-  assert.equal(cStore.allEvents().some(event => event.purged), true);
+  assert.equal(cStore.erasures().some(receipt => receipt.entityId === note.id), true);
+  assert.equal(cStore.allEvents().some(event => event.entityId === note.id), false);
 });
 
 test('final deletion marker validates its shape and parent deletion without accepting data changes', t => {
   const f = fixture(t), live = f.note('正文'), deleted = f.trash(live);
-  f.clear();
+  f.store.transaction(() => f.store.purgeRaw(deleted.id, deleted.heads));
   const marker = f.store.allEvents().at(-1);
   assert.equal(validateEvent(marker), marker);
   const resign = value => { const { hash, ...rest } = value; return { ...rest, hash: sha(canonical(rest)) }; };

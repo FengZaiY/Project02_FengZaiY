@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { Store } from './store.mjs';
+import { Store, validateEvent } from './store.mjs';
+import { migrateRetiredAI, cleanRetiredTabs, retiredAI } from './retired-ai.mjs';
 import { makePairingKey, importAttachment } from './transport.mjs';
 import { CurrentSync } from './current-sync.mjs';
 import { AgentAccess } from './agent-access.mjs';
@@ -9,11 +10,16 @@ import { workspaceLock } from './workspace-lock.mjs';
 import { LocalHierarchy } from './local-hierarchy.mjs';
 import { AssetManagement } from './asset-management.mjs';
 import { previewTrash, emptyTrash } from './trash.mjs';
+import { deletionStatus, runDeletionFiles } from './permanent-files.mjs';
+import { cleanErasedTransport } from './erasure-sync.mjs';
+import { cleanPrevious, previewPrevious } from './old-workspace-cleanup.mjs';
 import { previewAssetMerge, mergeAssets } from './asset-merge.mjs';
 import { archiveDraft, draftWorkflows } from './draft-workflow.mjs';
 
 const sharedTab = tab => Object.fromEntries(['id', 'recordId', 'title', 'domain', 'scroll']
   .filter(key => Object.hasOwn(tab, key)).map(key => [key, tab[key]]));
+const cleanWorkspace = (store, value) => cleanRetiredTabs(value,
+  new Set(store.erasures().filter(item => retiredAI(item.type)).map(item => item.entityId)));
 
 export class Service {
   constructor(directory, options = {}) {
@@ -31,18 +37,17 @@ export class Service {
       this.timer = null;
       this.imports = new Set();
       this.idleCheck = options.idleCheck;
-      for (const task of this.store.list({ type: 'task' })) {
-        if (task.data.ownerDevice === this.store.deviceId && task.data.status === 'running' && !task.conflict) {
-          this.store.write({ id: task.id, type: 'task', parents: task.heads, data: { ...task.data, status: 'interrupted_cost_unknown' } });
-        }
-      }
+      this.store.retiredAI = true;
+      const cleanupNeeded = migrateRetiredAI(this.store, validateEvent);
+      this.store.importEvents([]);
+      this.ready = cleanupNeeded ? this.finishDeletion() : Promise.resolve();
     } catch (error) { this.store?.close(); this.releaseLock(); throw error; }
   }
   startTimer() {
     if (this.timer) return;
     this.timer = setInterval(() => {
       const status = this.localHierarchy.status();
-      if (!this.closed && !this.imports.size && status.enabled && status.pending && !status.busy && !this.transport.running && !status.errors?.length) {
+      if (!this.closed && !this.store.permanentDeleting && !this.imports.size && status.enabled && status.pending && !status.busy && !this.transport.running && !status.errors?.length) {
         this.organizeLocal({ verify: false });
       }
     }, 2500);
@@ -71,15 +76,39 @@ export class Service {
     summary.trash -= legacy.filter(item => item.deleted).length;
     return { ...summary, libraries: this.store.directories.describe(this.store.libraries()), sync: this.transport.config(),
       workspace: this.store.local('workspace') || { tabs: [], selectedTab: null },
-      version: '0.1.2', localDataDirectory: this.store.directory, localHierarchy: this.localHierarchy.status() };
+      version: '0.1.2', localDataDirectory: this.store.directory, localHierarchy: this.localHierarchy.status(), deletion: deletionStatus(this.store) };
+  }
+  async finishDeletion() {
+    this.store.permanentDeleting = true;
+    const task = (async () => {
+      await runDeletionFiles(this.store);
+      const retired = this.store.local('retiredAiCleanup');
+      if (retired) this.store.local('retiredAiCleanup', { ...retired, pending: deletionStatus(this.store).pending > 0
+        || this.store.local('permanentDeletionDatabase')?.state !== 'done' });
+      try { this.store.local('permanentDeletionTransport', cleanErasedTransport(this.transport)); }
+      catch (error) { this.store.local('permanentDeletionTransport', { state: 'blocked', errors: [{ message: error.message }], cloudVerified: false }); }
+      return deletionStatus(this.store);
+    })();
+    this.imports.add(task);
+    try { return await task; } finally { this.imports.delete(task); this.store.permanentDeleting = false; }
   }
   async call(method, input = {}) {
+    await this.ready;
+    check(!this.store.permanentDeleting || ['state', 'deletionStatus'].includes(method), '永久删除正在处理，请稍后操作', 'BUSY');
     if (['syncPlan', 'syncPublish', 'syncImport', 'deviceSetPrimary', 'deviceVerify', 'assetHydrate', 'assetEvict'].includes(method)) {
       if (this.imports.size) await Promise.allSettled([...this.imports]);
       if (this.localTask) await this.localTask;
     }
     switch (method) {
       case 'storageStatus': return this.storage?.status() || { directory: this.store.directory, unavailable: true };
+      case 'storagePreviousPreview':
+      case 'storagePreviousClean': {
+        check(this.storage && !this.transport.running && !this.localTask && !this.imports.size, '请等待当前工作完成');
+        this.store.permanentDeleting = true;
+        const task = method === 'storagePreviousPreview' ? previewPrevious(this.storage) : cleanPrevious(this.storage, input);
+        this.imports.add(task);
+        try { return await task; } finally { this.imports.delete(task); this.store.permanentDeleting = false; }
+      }
       case 'storageInspect':
       case 'storageSchedule':
       case 'storageCancel':
@@ -139,9 +168,15 @@ export class Service {
         return this.store.write({ ...input, allowBranch: true });
       case 'delete': return this.store.remove(input.id, input.parents);
       case 'trashPreview': return previewTrash(this.store, input);
-      case 'trashEmpty':
-        check(!this.transport.running && !this.localTask, '请等待同步或本地资料整理完成', 'BUSY');
-        return emptyTrash(this.store, input);
+      case 'trashEmpty': {
+        check(!this.transport.running && !this.localTask && !this.imports.size, '请等待同步或本地资料整理完成', 'BUSY');
+        const result = emptyTrash(this.store, input);
+        return { ...result, cleanup: await this.finishDeletion() };
+      }
+      case 'deletionStatus': return deletionStatus(this.store);
+      case 'deletionRetry':
+        check(!this.transport.running && !this.localTask && !this.imports.size, '请等待同步或本地资料整理完成', 'BUSY');
+        return this.finishDeletion();
       case 'history': return this.store.history(input.id);
       case 'restoreVersion': return this.store.restoreVersion(input.id, input.revision, input.parents);
       case 'approve': return this.store.approve(input.id, input.itemIds, input.parents);
@@ -226,7 +261,7 @@ export class Service {
         return { mime: asset.data.mime, data: fs.readFileSync(local.path).toString('base64'), filename: asset.data.filename };
       }
       case 'workspaceSave': {
-        const workspace = { ...this.store.local('workspace'), ...input };
+        const workspace = cleanWorkspace(this.store, { ...this.store.local('workspace'), ...input });
         this.store.local('workspace', workspace); return workspace;
       }
       case 'workspacePublish': {
@@ -234,7 +269,7 @@ export class Service {
         const old = oldId && this.store.get(oldId);
         const record = this.store.write({ id: old?.id || uuid(), type: 'workspace', parents: old?.heads || [],
           data: { title: `${this.store.getMeta('deviceName')} · 工作区`, domain: '通用',
-            tabs: (input.tabs || []).map(sharedTab), selectedTab: input.selectedTab, originDevice: this.store.deviceId } });
+            tabs: (cleanWorkspace(this.store, input).tabs || []).map(sharedTab), selectedTab: input.selectedTab, originDevice: this.store.deviceId } });
         this.store.local('workspacePublicationId', record.id); return record;
       }
       case 'workspaceAdopt': {
@@ -242,7 +277,7 @@ export class Service {
         check(record?.type === 'workspace' && !record.conflict, 'Workspace not available');
         const current = this.store.local('workspace') || { tabs: [] };
         const known = new Set(current.tabs.map(t => t.id));
-        const incoming = (record.data.tabs || []).filter(t => !known.has(t.id)).map(sharedTab);
+        const incoming = (cleanWorkspace(this.store, record.data).tabs || []).filter(t => !known.has(t.id)).map(sharedTab);
         const result = { ...current, tabs: [...current.tabs, ...incoming] };
         this.store.local('workspace', result); return result;
       }

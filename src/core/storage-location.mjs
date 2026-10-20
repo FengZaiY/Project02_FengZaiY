@@ -183,6 +183,7 @@ export class StorageLocation {
             check(inspectDatabase(pending.directory, this.environment).deviceId === pending.deviceId, '目标工作区已被替换，请重新选择');
           }
           candidate = new Service(pending.directory, { ...options, storage: this });
+          await candidate.ready;
           // Rename/write failure keeps the old startup pointer and the source intact.
           if (pending.mode === 'migrate') fs.unlinkSync(path.join(pending.directory, incompleteName));
           this.write({ format: 1, directory: pending.directory, pending: null,
@@ -201,6 +202,7 @@ export class StorageLocation {
         }
       }
       this.service = new Service(this.current, { ...options, storage: this });
+      await this.service.ready;
       return this.service;
     } catch (error) { this.releaseConfig(); this.releaseConfig = null; throw error; }
   }

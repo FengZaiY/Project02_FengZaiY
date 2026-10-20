@@ -3,6 +3,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { randomBytes } from 'node:crypto';
+import { filterErased, mergeErasures } from './erasures.mjs';
+import { retirementReceipts, retiredAI, replacementWorkspaces } from './retired-ai.mjs';
 import { TYPES, CONTENT_TYPES } from './catalog.mjs';
 import { richReferences } from './rich-content.mjs';
 import { cleanDraftRefs, requireSaved, validateDraftRefs } from './draft-workflow.mjs';
@@ -145,7 +147,7 @@ export class Store {
     fs.mkdirSync(this.directory, { recursive: true });
     this.db = new DatabaseSync(path.join(this.directory, 'knowledge.sqlite'));
     this.db.exec(`
-      PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;
+      PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000; PRAGMA secure_delete=ON;
       CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS events(id TEXT PRIMARY KEY, entity_id TEXT NOT NULL, type TEXT NOT NULL,
         device_id TEXT NOT NULL, created_at TEXT NOT NULL, json TEXT NOT NULL, exported INTEGER NOT NULL DEFAULT 0,
@@ -160,6 +162,7 @@ export class Store {
         PRIMARY KEY(event_id,device_id));
       CREATE TABLE IF NOT EXISTS assets(id TEXT PRIMARY KEY, path TEXT NOT NULL, pinned INTEGER DEFAULT 0);
       CREATE TABLE IF NOT EXISTS local_config(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS erasures(id TEXT PRIMARY KEY, entity_id TEXT NOT NULL, json TEXT NOT NULL);
     `);
     if (!this.getMeta('deviceId')) this.setMeta('deviceId', uuid());
     if (!this.getMeta('deviceName')) this.setMeta('deviceName', options.deviceName || os.hostname());
@@ -196,8 +199,12 @@ export class Store {
   event(id) { const row = this.db.prepare('SELECT json FROM events WHERE id=?').get(id); return row && JSON.parse(row.json); }
   headIds(id) { return this.db.prepare('SELECT event_id FROM heads WHERE entity_id=? ORDER BY event_id').all(id).map(row => row.event_id); }
   isPurged(id) {
+    if (this.db.prepare('SELECT 1 FROM erasures WHERE entity_id=?').get(id)) return true;
     const heads = this.headIds(id);
     return heads.length > 0 && heads.every(head => this.event(head).purged === true);
+  }
+  isRetiredAI(id) {
+    return this.db.prepare('SELECT json FROM erasures WHERE entity_id=?').all(id).some(row => retiredAI(JSON.parse(row.json).type));
   }
   get(id) {
     const heads = this.headIds(id).map(head => this.event(head));
@@ -239,6 +246,8 @@ export class Store {
     return Number.isSafeInteger(limit) && limit > 0 ? records.slice(0, Math.min(limit, 10000)) : records;
   }
   insert(event, exported) {
+    check(!this.retiredAI || !retiredAI(event.type), '内置 AI 历史已退役，不再入库', 'RETIRED');
+    if (!filterErased([event], this.erasures()).length) return false;
     const existing = this.event(event.id);
     if (existing) { check(existing.hash === event.hash, 'Revision ID collision'); return false; }
     const entity = this.db.prepare('SELECT type,json FROM events WHERE entity_id=? LIMIT 1').get(event.entityId);
@@ -271,6 +280,8 @@ export class Store {
     return true;
   }
   writeRaw({ id = uuid(), type = 'note', data, parents = [], deleted = false, allowBranch = false }) {
+    check(!this.retiredAI || !retiredAI(type), '内置 AI 历史已删除，不再创建或恢复', 'RETIRED');
+    check(!this.permanentDeleting, '永久删除正在处理，请稍后操作', 'BUSY');
     check(!this.local('v2Journal'), '版本操作尚未恢复，请重启恢复后再编辑', 'RECOVERY_REQUIRED');
     if (['note', 'draft', 'source'].includes(type)) {
       const { assets } = richReferences(data);
@@ -436,6 +447,7 @@ export class Store {
     return this.write({ id, type: record.type, parents, data: { ...record.data, folderId } });
   }
   restoreVersion(id, revision, parents) {
+    check(!this.isPurged(id), '此内容已永久清空，不能恢复', 'PURGED');
     const event = this.event(revision);
     check(event?.entityId === id, 'Version not found');
     return this.write({ id, type: event.type, data: event.data, parents, deleted: false });
@@ -447,14 +459,18 @@ export class Store {
   importEvents(events) {
     check(Array.isArray(events) && events.length <= 10000, 'Invalid revision batch');
     events.forEach(validateEvent);
-    const batch = new Map(events.map(event => [event.id, event]));
-    for (const event of events) {
-      for (const id of event.parents) {
-        const parent = batch.get(id) || this.event(id);
-        if (parent) check(parent.entityId === event.entityId && parent.type === event.type, 'Parent belongs to a different record');
-      }
-    }
     return this.transaction(() => {
+      const retirement = retirementReceipts(this, events);
+      if (retirement.length) this.eraseRaw(retirement);
+      events = [...filterErased(events, this.erasures()), ...replacementWorkspaces(events, this.erasures())];
+      events.forEach(validateEvent);
+      const batch = new Map(events.map(event => [event.id, event]));
+      for (const event of events) {
+        for (const id of event.parents) {
+          const parent = batch.get(id) || this.event(id);
+          if (parent) check(parent.entityId === event.entityId && parent.type === event.type, 'Parent belongs to a different record');
+        }
+      }
       for (const event of events) {
         const existing = this.event(event.id);
         if (existing) check(existing.hash === event.hash, 'Revision ID collision');
@@ -484,6 +500,22 @@ export class Store {
       } while (changed);
       return { count, pending: this.db.prepare('SELECT COUNT(*) AS n FROM pending').get().n, rejected };
     });
+  }
+  erasures() { return this.db.prepare('SELECT json FROM erasures ORDER BY id').all().map(row => JSON.parse(row.json)); }
+  eraseRaw(receipts) {
+    const merged = mergeErasures(this.erasures(), receipts);
+    filterErased(this.allEvents(), merged);
+    for (const table of ['pending', 'rejected']) {
+      filterErased(this.db.prepare(`SELECT json FROM ${table}`).all().map(row => JSON.parse(row.json)), merged);
+    }
+    for (const receipt of receipts) {
+      this.db.prepare('INSERT OR IGNORE INTO erasures VALUES(?,?,?)').run(receipt.id, receipt.entityId, JSON.stringify(receipt));
+      this.db.prepare('DELETE FROM receipts WHERE event_id IN (SELECT id FROM events WHERE entity_id=?)').run(receipt.entityId);
+      this.db.prepare('DELETE FROM heads WHERE entity_id=?').run(receipt.entityId);
+      this.db.prepare('DELETE FROM events WHERE entity_id=?').run(receipt.entityId);
+      for (const table of ['pending', 'rejected']) this.db.prepare(`DELETE FROM ${table} WHERE json_extract(json,'$.entityId')=?`).run(receipt.entityId);
+    }
+    this.local('hierarchyDirty', true);
   }
   allEvents() { return this.db.prepare('SELECT json FROM events ORDER BY rowid').all().map(row => JSON.parse(row.json)); }
   unexported() { return this.db.prepare('SELECT json FROM events WHERE exported=0 ORDER BY rowid').all().map(row => JSON.parse(row.json)); }

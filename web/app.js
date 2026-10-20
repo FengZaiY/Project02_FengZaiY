@@ -414,7 +414,7 @@ async function renderDocument(record) {
     $('.editor-scroll').addEventListener('scroll', () => { clearTimeout(persistTimer); persistTimer = setTimeout(() => persist().catch(() => {}), 500); });
     $('.editor-scroll').scrollTop = tab?.scroll || 0;
   } else if (record.type === 'conversation') {
-    $('#editor-content').innerHTML = '<p class="muted">此功能已停用，原始记录仍保留在历史版本与独立备份中。</p>';
+    $('#editor-content').innerHTML = '<p class="muted">内置 AI 对话已取消，旧对话已清理。</p>';
   } else if (record.type === 'proposal') {
     $('#editor-content').innerHTML = `${data.content ? `<section class="proposal-summary prose">${safeHtml(data.content)}</section>` : ''}<div class="proposal-items">${data.items.map(item => `<section class="proposal-item"><label class="check-row"><input type="checkbox" data-proposal-item="${item.id}" ${item.status === 'accepted' ? 'disabled checked' : ''}><strong>${esc(item.data.title)}</strong><span class="pill ${item.status === 'accepted' ? 'green' : ''}">${item.status === 'accepted' ? '已确认' : '待确认'}</span></label><div class="proposal-destination">${icon('folder')}目标：${esc(libraryName(item.data.domain))}<span>出处 ${item.data.sourceIds?.length || 0} · 附件 ${item.data.assetIds?.length || 0}</span></div><div class="prose">${safeHtml(item.data.content, item.data.format)}</div></section>`).join('')}</div><div class="sticky-actions"><button class="primary" data-action="approve">确认选中部分</button><button class="secondary" data-action="proposal-edit">修改待确认部分</button></div>`;
     $$('.proposal-item').forEach((element, index) => {
@@ -756,9 +756,17 @@ async function renderSettings() {
       <div class="storage-summary"><span>知识库 ${activeLibraries().length}</span><span>笔记 ${state.snapshot.counts.note || 0}</span><span>附件 ${state.snapshot.counts.asset || 0}</span></div>
       <div class="storage-summary"><span>本地文件：${state.snapshot.localHierarchy?.busy ? '维护中' : state.snapshot.localHierarchy?.errors?.length ? '维护未完成' : state.snapshot.localHierarchy?.pending ? '待更新' : '已更新'}</span>${state.snapshot.localHierarchy?.missing ? `<span>${state.snapshot.localHierarchy.missing} 个原件待接收</span>` : ''}</div>
       ${state.snapshot.localHierarchy?.errors?.length ? `<div class="notice amber">${state.snapshot.localHierarchy.errors.map(item => esc(item.message)).join('<br>')}${button('refresh-cw', 'storage-retry', '重试本地文件维护')}</div>` : ''}
+      ${state.snapshot.deletion?.files?.length || state.snapshot.deletion?.database ? `<div class="notice"><div><strong>永久删除清理</strong><p>本地文件已释放 ${bytes(state.snapshot.deletion.releasedBytes)} · ${state.snapshot.deletion.pending} 个文件待处理 · 数据库${state.snapshot.deletion.database?.state === 'done' ? '已压缩' : '待压缩'}</p>
+        ${state.snapshot.deletion.retiredAI ? `<p>内置 AI 历史：已移除 ${state.snapshot.deletion.retiredAI.records} 条旧记录及 ${state.snapshot.deletion.retiredAI.settings} 项本机配置${state.snapshot.deletion.retiredAI.pending ? '，文件清理或数据库压缩待完成' : ''}。</p>` : ''}
+        ${state.snapshot.deletion.files.filter(item => item.state !== 'done').map(item => `<p class="storage-path">${esc(item.relative)}：${esc(item.reason || '等待清理')}</p>`).join('')}
+        ${state.snapshot.deletion.database?.reason ? `<p>${esc(state.snapshot.deletion.database.reason)}</p>` : ''}
+        <p>同步传输副本：${({ done: '本机目录清理完成，等待百度客户端传输删除', blocked: '部分待处理', unconfigured: '未配置同步' })[state.snapshot.deletion.transport?.state] || '待处理'}。百度历史版本和回收站需在客户端另行清理。</p>
+        ${(state.snapshot.deletion.transport?.errors || []).map(item => `<p>${esc(item.file || '')} ${esc(item.message)}</p>`).join('')}
+        ${state.snapshot.deletion.legacyArchives?.length || state.snapshot.deletion.legacyBackups ? '<p>检测到退役版本目录或旧备份登记，可能含历史副本。本次未清理，需单独核对，不能视为所有本地副本已删除。</p>' : ''}
+        <button class="secondary" data-action="deletion-retry">${icon('refresh-cw')}重试永久删除清理</button></div></div>` : ''}
       ${activeLibraries().filter(item => item.directoryError).map(item => `<div class="notice amber">${esc(item.data.title)}：${esc(item.directoryError)}${button('refresh-cw', 'library-storage-retry', '重试本地存储', `data-library="${item.id}"`)}</div>`).join('')}
       ${storage.error ? `<div class="notice danger" role="alert">${esc(storage.error)}</div>` : ''}
-      ${storage.lastChange?.mode === 'migrate' ? `<div class="notice">原目录保留为迁移前副本，请勿同时打开：<span class="storage-path">${esc(storage.lastChange.previous)}</span></div>` : ''}
+      ${storage.lastChange?.mode === 'migrate' ? `<div class="notice"><div>${storage.lastChange.cleaned ? '迁移旧副本的托管内容已清理，额外文件保留：' : '原目录保留为迁移前副本，请勿同时打开：'}<span class="storage-path">${esc(storage.lastChange.previous)}</span>${!storage.lastChange.cleaned ? '<button class="secondary" data-action="storage-previous-clean">检查并清理旧副本</button>' : ''}</div></div>` : ''}
       ${storage.unavailable ? '<div class="notice amber">当前服务尚未加载存储设置，请重新启动应用。</div>' : storage.pending ? `<div class="notice amber" id="storage-pending"><div><strong>待重启生效 · ${storage.pending.mode === 'migrate' ? '迁移当前工作区' : '打开已有工作区'}</strong><div class="storage-path">${esc(storage.pending.directory)}</div><p>${native ? '重启时应用变更，当前资料继续保存在原目录。' : '关闭并重新启动预览服务后生效，仅刷新网页不会切换目录。'}</p></div></div><div class="heading-actions">${native ? `<button class="primary" data-action="storage-restart">${icon('rotate-cw')}重启并应用</button>` : ''}<button class="secondary" data-action="storage-cancel">${icon('x')}取消变更</button></div>` : `<div class="heading-actions storage-actions"><button class="secondary" data-action="storage-change" data-mode="migrate">${icon('folder-input')}迁移到新目录</button><button class="secondary" data-action="storage-change" data-mode="open">${icon('folder-open')}打开已有工作区</button></div>`}
     </section>
     <section class="settings-section" id="skill-management" aria-label="SKILL 管理"></section>`;
@@ -1073,15 +1081,16 @@ async function clearTrash() {
   const dialog = openModal('清空回收站', `<div class="trash-confirm">
     <p>范围：<strong>${esc(libraryName(preview.domain))}</strong></p>
     <p>可清空 <strong>${preview.eligible.length}</strong> 项，保留 <strong>${preview.blocked.length}</strong> 项。本次包含该范围内所有回收内容，不受搜索或分页限制。</p>
-    ${preview.eligible.length ? `<p class="trash-warning">清空后不能再从回收站或修改历史恢复。</p><ul class="trash-preview-list">${rows(preview.eligible)}</ul>${preview.eligible.length > 30 ? `<p>另有 ${preview.eligible.length - 30} 项。</p>` : ''}` : '<p>当前没有可清空的内容。</p>'}
+    ${preview.eligible.length ? `<p class="trash-warning">永久删除正文、修改历史及不再共用的系统托管原件，无法恢复。</p><p>将清理 ${preview.files.length} 个本地文件，预计释放 ${bytes(preview.estimatedBytes)}（不含数据库压缩）。</p><ul class="trash-preview-list">${rows(preview.eligible)}</ul>${preview.eligible.length > 30 ? `<p>另有 ${preview.eligible.length - 30} 项。</p>` : ''}` : '<p>当前没有可清空的内容。</p>'}
     ${preview.blocked.length ? `<details open><summary>以下内容暂时保留</summary><ul class="trash-preview-list">${rows(preview.blocked)}</ul>${preview.blocked.length > 30 ? `<p>另有 ${preview.blocked.length - 30} 项受保护。</p>` : ''}</details>` : ''}
-    <p class="muted">清空结果随正常发布同步。为保留同步完整性，底层记录和原文件暂时保留；此操作不释放磁盘空间，也不删除百度云端历史。</p>
+    <p class="muted">共用资料和系统外导入源保留。删除凭据不含正文；其他电脑须升级后同步处理。同步目录的对应传输副本将清理，百度云端历史与回收站、迁移旧目录需要另行清理，不代表所有副本已擦除。</p>
     <p id="trash-clear-error" role="alert" hidden></p></div>`,
   `<button class="secondary" data-cancel>取消</button><button class="primary danger-action" id="trash-clear-confirm" ${preview.eligible.length ? '' : 'disabled'}>确认清空 ${preview.eligible.length} 项</button>`);
   $('[data-cancel]', dialog).onclick = () => dialog.close();
   const confirm = $('#trash-clear-confirm', dialog), errorBox = $('#trash-clear-error', dialog);
   confirm.onclick = async () => {
     confirm.disabled = true;
+    confirm.textContent = '正在永久删除...';
     try {
       await persist();
       const result = await api('trashEmpty', { domain: preview.domain, token: preview.token, confirmed: true });
@@ -1090,10 +1099,11 @@ async function clearTrash() {
       if (ids.has(state.selected?.id)) { state.editor?.destroy(); state.editor = null; state.selected = null; state.selectedTab = null; }
       state.tabs = state.tabs.filter(tab => !ids.has(tab.recordId));
       dialog.close(); await persist(); await render();
-      toast(`已清空 ${result.count} 项${result.skipped ? `，${result.skipped} 项受保护内容仍保留` : ''}`);
+      toast(`已永久删除 ${result.count} 项${result.skipped ? `，${result.skipped} 项受保护内容仍保留` : ''}${result.cleanup?.pending || result.cleanup?.database?.state === 'blocked' || result.cleanup?.transport?.state === 'blocked' ? '；部分清理未完成，请在系统设置中查看并重试' : ''}`);
     } catch (error) {
       errorBox.textContent = error.message; errorBox.hidden = false;
       confirm.disabled = false;
+      confirm.textContent = `确认清空 ${preview.eligible.length} 项`;
     }
   };
 }
@@ -1330,6 +1340,13 @@ const actions = {
   },
   'library-storage-retry': async target => { await api('libraryDirectory', { id: target.dataset.library }); await render(); },
   'storage-copy': async () => { await navigator.clipboard.writeText(state.snapshot.localDataDirectory); toast('已复制存储路径'); },
+  'deletion-retry': async () => { await api('deletionRetry'); await render(); toast('已重试，请查看各项清理状态'); },
+  'storage-previous-clean': async () => {
+    const plan = await api('storagePreviousPreview');
+    const confirmed = await confirmBox('永久清理迁移旧副本', `<p class="storage-path">${esc(plan.directory)}</p><p>将删除 ${plan.files.length} 个系统托管文件（${bytes(plan.bytes)}），包括旧数据库及其笔记历史。额外文件保留，当前工作区不受影响。</p><p>此操作无法撤销。</p>`, '永久清理旧副本');
+    if (!confirmed) return;
+    await api('storagePreviousClean', { confirmed: true, token: plan.token }); await render(); toast('旧副本托管内容已清理，额外文件保留');
+  },
   'storage-open-folder': async () => api('storageOpenFolder'),
   'storage-change': async target => changeStorage(target.dataset.mode),
   'storage-pick': async () => { if (await pickDirectory($('#storage-target'))) { const error = $('#storage-form-error'); if (error) error.hidden = true; } },

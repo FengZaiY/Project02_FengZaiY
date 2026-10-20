@@ -13,7 +13,7 @@
 
 - `bootstrap {}`：协议、最新 Skill 正文/协议说明、Skill 内容哈希、偏好（baseline、content、version、conflict、heads）、当前授权。
 - `libraries {}`：授权知识库。创建、改名、删除知识库由用户在系统操作。
-- `search {domain?, type?, query?, trash?, limit?, offset?}`：按范围/类型/关键词查询。返回 total、offset、records 摘要。每页最多 100 项，用 offset 分页；需要完整正文时调用 record。允许类型 note、draft、source、annotation、relation、proposal、asset、conversation、library。conversation 仅保留旧数据兼容，应用已取消历史对话归档功能。
+- `search {domain?, type?, query?, trash?, limit?, offset?}`：按范围/类型/关键词查询。返回 total、offset、records 摘要。每页最多 100 项，用 offset 分页；需要完整正文时调用 record。允许类型 note、draft、source、annotation、relation、proposal、asset、library。旧 conversation/model/provider/task/usage 内容已退役清理，不能读取、重建或恢复。笔记原有的旧对话链接可以保持不可用引用，不代表有权限读取被清理的对话。
 - `record {id}`：完整记录，包括 data、heads、versions、conflict、deleted。
 - `history {id}`：历史版本。任一版本或引用超出授权时拒绝整个请求，不泄漏跨库/敏感历史。
 - `assetRead {id}`：返回 filename、mime、sha256、base64 data，不返回本机路径；校验哈希。最大 16 MiB，缺失原文件返回 ASSET_UNAVAILABLE。
@@ -47,7 +47,7 @@
 - `relationCreate {data}`：仅 edit 权限；data 包含 title、domain、from、to、description，目标为授权范围内的记录 ID。
 - `trash {id, parents}`：仅额外授予 trash 时可移到回收站。不删除知识库、原文件或历史。
 
-`trashPreview` / `trashEmpty` 为受信任界面专用方法，不开放给外部 Agent。用户清空后，搜索不再返回该记录，直接读取、历史及旧请求重放均拒绝访问；不要用旧 ID 重新创建。若另一台电脑已有并发修改，系统仍保留冲突，由用户处理。
+`trashPreview` / `trashEmpty`、`deletionStatus` / `deletionRetry`、`storagePreviousPreview` / `storagePreviousClean` 为受信任界面专用方法，不开放给外部 Agent。用户清空会永久删除正文历史和不再共用的托管原件；搜索、读取、历史及旧请求重放均不能恢复，不要用旧 ID 重新创建。系统保留无正文删除凭据；另一台电脑有凭据未覆盖的新修改时暂停导入，由用户处理，不擅自重跑或绕过保护。百度历史版本和回收站不由接口清理。
 
 接口无 approve、授权管理、偏好修改、模型调用、Shell、任意 RPC、同步配置、空间预估/批次/暂停/拉取或设备释放操作。用户在界面中部分确认方案。应用已取消 Git 提交和本地独立备份；`history` 是笔记修改记录，不代表整库版本管理。
 

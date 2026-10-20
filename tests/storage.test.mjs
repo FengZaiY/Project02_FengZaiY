@@ -53,6 +53,43 @@ test('migration preserves all revisions, attachments, drafts, local links and cr
   assert.equal(app.service.store.history(first.id).length, 2);
 });
 
+test('old migration copy requires separate confirmation, preserves extras and never touches current workspace', async t => {
+  const app = await setup(t), library = app.service.store.saveLibrary({ title: '旧副本测试' });
+  const note = app.service.store.write({ type: 'note', data: { title: '笔记', domain: library.id, content: '保留在新目录' } });
+  await app.service.organizeLocal();
+  fs.writeFileSync(path.join(app.anchor, 'user-extra.txt'), 'not managed');
+  const target = path.join(app.base, 'target');
+  await app.service.call('storageSchedule', { mode: 'migrate', directory: target }); await app.restart();
+  const plan = await app.service.call('storagePreviousPreview');
+  await assert.rejects(app.service.call('storagePreviousClean', { token: plan.token }), /单独明确确认/);
+  assert.ok(fs.existsSync(path.join(app.anchor, 'knowledge.sqlite')));
+  await assert.rejects(app.service.call('storagePreviousClean', { token: 'stale', confirmed: true }), /已变化/);
+  await app.service.call('storagePreviousClean', { token: plan.token, confirmed: true });
+  assert.equal(fs.existsSync(path.join(app.anchor, 'knowledge.sqlite')), false);
+  assert.equal(fs.readFileSync(path.join(app.anchor, 'user-extra.txt'), 'utf8'), 'not managed');
+  assert.equal(app.service.store.get(note.id).data.content, '保留在新目录');
+});
+
+test('old copy with unsynchronized later changes cannot be removed', async t => {
+  const app = await setup(t), target = path.join(app.base, 'target');
+  await app.service.call('storageSchedule', { mode: 'migrate', directory: target }); await app.restart();
+  const old = new Service(app.anchor);
+  old.store.write({ type: 'note', data: { title: '仅在旧目录', content: '保护新修改', domain: 'temporary' } });
+  await old.close();
+  await assert.rejects(app.service.call('storagePreviousPreview'), /当前工作区没有的修改/);
+  assert.ok(fs.existsSync(path.join(app.anchor, 'knowledge.sqlite')));
+});
+
+test('old migration copy with unsaved edits cannot be removed', async t => {
+  const app = await setup(t), target = path.join(app.base, 'target');
+  await app.service.call('storageSchedule', { mode: 'migrate', directory: target }); await app.restart();
+  const old = new Service(app.anchor);
+  old.store.local('workspace', { tabs: [{ dirty: true, draft: { content: 'keep old unsaved edit' } }] });
+  await old.close();
+  await assert.rejects(app.service.call('storagePreviousPreview'), /未保存编辑/);
+  assert.ok(fs.existsSync(path.join(app.anchor, 'knowledge.sqlite')));
+});
+
 test('directory plans reject overlap, nonempty targets, missing workspaces, invalid paths and unsaved tabs', async t => {
   const app = await setup(t), target = path.join(app.base, 'target');
   for (const directory of [app.anchor, path.join(app.anchor, 'nested'), app.base, 'relative', '\\\\server\\share']) {
