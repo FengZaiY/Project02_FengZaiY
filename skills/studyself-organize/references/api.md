@@ -47,7 +47,9 @@
 - `relationCreate {data}`：仅 edit 权限；data 包含 title、domain、from、to、description，目标为授权范围内的记录 ID。
 - `trash {id, parents}`：仅额外授予 trash 时可移到回收站。不删除知识库、原文件或历史。
 
-`trashPreview` / `trashEmpty`、`deletionStatus` / `deletionRetry`、`storagePreviousPreview` / `storagePreviousClean` 为受信任界面专用方法，不开放给外部 Agent。用户清空会永久删除正文历史和不再共用的托管原件；搜索、读取、历史及旧请求重放均不能恢复，不要用旧 ID 重新创建。系统保留无正文删除凭据；另一台电脑有凭据未覆盖的新修改时暂停导入，由用户处理，不擅自重跑或绕过保护。百度历史版本和回收站不由接口清理。
+`trashPreview` / `trashEmpty`、`deletionStatus` / `deletionRetry`、`storagePreviousPreview` / `storagePreviousClean`、`emptyDirectoriesPreview` / `emptyDirectoriesClean` 为受信任界面专用方法，不开放给外部 Agent。用户清空会永久删除正文历史和不再共用的托管原件；搜索、读取、历史及旧请求重放均不能恢复，不要用旧 ID 重新创建。系统保留无正文删除凭据；另一台电脑有凭据未覆盖的新修改时暂停导入，由用户处理，不擅自重跑或绕过保护。百度历史版本和回收站不由接口清理。
+
+桌面退出握手 `exitStatus` / `exitCancel` / `exitFinish` 只由受信任桌面界面使用，外部 Agent 不得调用或借退出流程处理用户未保存编辑。
 
 接口无 approve、授权管理、偏好修改、模型调用、Shell、任意 RPC、同步配置、空间预估/批次/暂停/拉取或设备释放操作。用户在界面中部分确认方案。应用已取消 Git 提交和本地独立备份；`history` 是笔记修改记录，不代表整库版本管理。
 

@@ -77,6 +77,45 @@ try {
   }
   await page.getByRole('button', { name: '重试永久删除清理', exact: true }).click();
   await page.locator('#toast', { hasText: '已重试' }).waitFor();
+  const legacy = make('旧版隐藏残留', '旧领域');
+  await app.service.organizeLocal();
+  store.transaction(() => store.purgeRaw(legacy.id, legacy.heads));
+  await app.service.organizeLocal();
+  await page.setViewportSize({ width: 1220, height: 892 });
+  await page.locator('[data-nav=trash]').click();
+  await page.getByRole('button', { name: '检查旧版残留', exact: true }).click();
+  await page.getByRole('heading', { name: '清理旧版残留', exact: true }).waitFor();
+  assert.match(await page.locator('.trash-confirm').innerText(), /全部知识库/);
+  assert.match(await page.locator('.trash-confirm').innerText(), /旧领域/);
+  await page.getByRole('button', { name: '取消', exact: true }).click();
+  assert.equal(store.allEvents().filter(event => event.entityId === legacy.id).length, 3);
+  await page.getByRole('button', { name: '检查旧版残留', exact: true }).click();
+  await page.getByRole('heading', { name: '清理旧版残留', exact: true }).waitFor();
+  for (const width of [1220, 600]) {
+    await page.setViewportSize({ width, height: 892 });
+    await page.screenshot({ path: path.join(root, `legacy-${width}.png`) });
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+  }
+  await page.getByRole('button', { name: '确认清空 1 项', exact: true }).click();
+  await page.locator('#toast', { hasText: '已永久删除 1 项' }).waitFor();
+  assert.equal(store.allEvents().some(event => event.entityId === legacy.id), false);
+  assert.ok(store.get(other.id)?.deleted);
+  assert.equal(await page.getByRole('button', { name: '检查旧版残留', exact: true }).count(), 0);
+  await page.locator('[data-nav=settings]').click();
+  await page.getByRole('button', { name: '检查废弃空目录', exact: true }).click();
+  await page.getByRole('button', { name: '确认清理空目录', exact: true }).waitFor();
+  for (const width of [1220, 600]) {
+    await page.setViewportSize({ width, height: 892 });
+    await page.screenshot({ path: path.join(root, `directories-${width}.png`) });
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+  }
+  await page.getByRole('button', { name: '取消', exact: true }).click();
+  assert.ok(fs.existsSync(path.join(store.directory, '旧领域')));
+  await page.getByRole('button', { name: '检查废弃空目录', exact: true }).click();
+  await page.getByRole('button', { name: '确认清理空目录', exact: true }).click();
+  await page.locator('#toast', { hasText: '已清理 1 个废弃空目录' }).waitFor();
+  assert.equal(fs.existsSync(path.join(store.directory, '旧领域')), false);
+  assert.ok(fs.existsSync(store.directories.ensure(a)));
   assert.deepEqual(errors, []);
   console.log('PASS: trash scope, search independence, cancel, stale confirmation, protected references, tab cleanup and responsive confirmation.');
 } catch (error) {

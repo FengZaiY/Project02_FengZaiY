@@ -10,14 +10,14 @@ export function createNoteAutosave({ capture, write, apply, status, delay = 1500
     clearTimeout(job.timer);
     if (!job.blocked) job.timer = setTimeout(() => { void flush(key).catch(() => {}); }, delay);
   };
-  async function flush(key, manual = false) {
+  async function flush(key, manual = false, retry = false) {
     const job = jobFor(key);
     clearTimeout(job.timer);
     if (job.running) {
-      try { await job.running; } catch (error) { if (!manual) throw error; }
-      return flush(key, manual);
+      try { await job.running; } catch (error) { if (!manual && !retry) throw error; }
+      return flush(key, manual, retry);
     }
-    if (job.blocked && !manual) return;
+    if (job.blocked && !manual && !retry) return;
     const input = capture(key);
     if (!input) { notify(key, job, 'saved'); return; }
     const revision = job.revision;

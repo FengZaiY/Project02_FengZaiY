@@ -85,8 +85,12 @@ export function scheduleDeletion(store, ids, files) {
 
 export function deletionStatus(store) {
   const files = store.local('permanentDeletionFiles') || [];
+  const legacy = store.db.prepare(`SELECT e.entity_id, (SELECT count(*) FROM events v WHERE v.entity_id=e.entity_id) AS revisions
+    FROM heads h JOIN events e ON e.id=h.event_id GROUP BY e.entity_id
+    HAVING min(COALESCE(json_extract(e.json,'$.purged'),0))=1`).all();
   const legacyArchives = ['version-repositories', 'version-staging'].filter(name => fs.existsSync(path.join(store.directory, name)));
   return { files, pending: files.filter(item => item.state !== 'done').length,
+    legacyCleared: { count: legacy.length, revisions: legacy.reduce((sum, item) => sum + item.revisions, 0) },
     retiredAI: store.local('retiredAiCleanup'),
     releasedBytes: files.filter(item => item.state === 'done').reduce((n, item) => n + (item.releasedBytes || 0), 0),
     database: store.local('permanentDeletionDatabase'), transport: store.local('permanentDeletionTransport'), legacyArchives,

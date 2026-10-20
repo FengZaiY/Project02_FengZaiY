@@ -19,8 +19,9 @@ export function references(data) {
   return ids;
 }
 
-export function previewTrash(store, { domain = '' } = {}) {
+export function previewTrash(store, { domain = '', legacyOnly = false } = {}) {
   check(typeof domain === 'string' && domain.length <= 100, '知识库范围无效');
+  check(typeof legacyOnly === 'boolean', '残留清理范围无效');
   const records = [...store.list(), ...store.list({ trash: true })];
   // Earlier releases hid cleared entries but retained their bodies. Require a new confirmation.
   const events = store.allEvents(), known = new Set(records.map(record => record.id));
@@ -31,6 +32,7 @@ export function previewTrash(store, { domain = '' } = {}) {
     known.add(event.entityId);
   }
   const targets = records.filter(record => record.deleted && TRASH_TYPES.includes(record.type)
+    && (!legacyOnly || record.legacyCleared)
     && (!domain || record.versions.every(version => version.data.domain === domain)));
   const candidates = new Set(targets.map(record => record.id)), reasons = new Map(), refs = new Map();
   // Include only attachments actually used by the selected history; unrelated materials stay intact.
@@ -86,15 +88,15 @@ export function previewTrash(store, { domain = '' } = {}) {
     domain: record.data.domain, parents: record.heads, legacyCleared: !!record.legacyCleared,
     implicitAsset: !!record.implicitAsset, reason: reasons.get(record.id) || '' })).sort((a, b) => a.id.localeCompare(b.id));
   const files = deletionFiles(store, items.filter(item => !item.reason).map(item => item.id));
-  return { domain, total: items.length, eligible: items.filter(item => !item.reason), blocked: items.filter(item => item.reason),
+  return { domain, legacyOnly, total: items.length, eligible: items.filter(item => !item.reason), blocked: items.filter(item => item.reason),
     files, estimatedBytes: files.reduce((sum, file) => sum + file.bytes, 0),
-    token: sha(canonical({ domain, items, files })) };
+    token: sha(canonical({ domain, legacyOnly, items, files })) };
 }
 
-export function emptyTrash(store, { domain = '', token, confirmed } = {}) {
+export function emptyTrash(store, { domain = '', legacyOnly = false, token, confirmed } = {}) {
   check(confirmed === true, '清空回收站需要明确确认');
   return store.transaction(() => {
-    const preview = previewTrash(store, { domain });
+    const preview = previewTrash(store, { domain, legacyOnly });
     check(token === preview.token, '回收站内容或引用已变化，请重新预览后确认', 'CONFLICT');
     const ids = preview.eligible.map(item => item.id);
     const receipts = ids.map(id => createErasure(store, id));

@@ -68,6 +68,7 @@ Windows 预览的目录按钮通过已鉴权的界面接口调用系统文件夹
 | 本地存储与启动目录 | 另运行 `npm run test:storage`、`npm run test:desktop`；覆盖非空/占用/丢失/损坏目录、复制失败、配置写入失败、WAL 和重启持久化 |
 | 外部 Agent、权限、偏好和 Skill | 另运行 `npm run test:agents`，核心测试通过真实本机 HTTP 验证隔离、撤销、幂等和偏好更新；检查导出的 ZIP |
 | 主进程、预加载、凭据和 IPC | 核心测试、构建、`npm run test:desktop` |
+| 桌面退出与保存检查 | 另运行 `npm run test:exit`、`node --test tests/exit-check.test.mjs tests/note-autosave.test.mjs`；验证受信任握手、重复关闭/取消/超时、后台操作保护、多标签保存、冲突不分支、未保存偏好与弹窗、结构化错误码及退出后数据库落盘；使用 `--smoke-test --test-exit` 隔离源码实例 |
 | 日常依赖或桌面代码修改 | 相关核心/界面测试、按需 `npm run test:desktop`，不生成安装包 |
 | 用户明确指定的安装包任务 | 相关测试、`npm run dist`、`npm run test:packaged` |
 | 查询、索引或大批数据路径 | 相关测试、`npm run benchmark` |

@@ -57,10 +57,10 @@ test('Agent server rejects browser origins, bad hosts, arbitrary RPC and system 
   }
   for (const method of ['approve', 'agentGrant', 'agentPreferencesSave', 'assetImport', 'syncConfigure', 'backupRestore', 'ask', 'providerSave', 'toString',
     'versionCommit', 'versionRestore', 'syncStatus', 'syncPlan', 'syncPublish', 'syncImport', 'syncPause', 'syncCancel',
-    'updateStatus', 'updateCheck', 'updateDownload', 'updateInstall', 'updateConfigure',
+    'updateStatus', 'updateCheck', 'updateDownload', 'updateInstall', 'updateConfigure', 'exitStatus', 'exitCancel', 'exitFinish',
     'syncConfirmBatch', 'syncConfirmUpload', 'deviceSetPrimary', 'syncClientValidate', 'assetEvict', 'pairingKey',
     'assetCatalog', 'assetDetail', 'assetUpdate', 'assetBatch', 'assetDuplicates', 'assetMergePreview', 'assetMerge', 'trashPreview', 'trashEmpty',
-    'deletionStatus', 'deletionRetry', 'storagePreviousPreview', 'storagePreviousClean']) {
+    'deletionStatus', 'deletionRetry', 'storagePreviousPreview', 'storagePreviousClean', 'emptyDirectoriesPreview', 'emptyDirectoriesClean']) {
     await assert.rejects(rpc(method), /FORBIDDEN/);
   }
 });

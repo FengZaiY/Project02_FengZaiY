@@ -51,3 +51,18 @@ test('failed writes retain the draft and can be manually retried without automat
   assert.equal(app.saver.state('note'), 'error'); assert.equal(app.notes.get('note').dirty, true);
   fail = false; await app.saver.flush('note', true); assert.equal(app.notes.get('note').dirty, false);
 });
+
+test('exit retries failed saves without enabling manual conflict branches', async t => {
+  let fail = true; const flags = [];
+  const app = setup(async (_input, manual) => {
+    flags.push(manual);
+    if (fail) throw Object.assign(new Error('conflict'), { code: 'CONFLICT' });
+    return { heads: ['saved'] };
+  });
+  t.after(() => app.saver.forget('note'));
+  app.edit('note', 'keep'); await assert.rejects(app.saver.flush('note'), /conflict/);
+  await assert.rejects(app.saver.flush('note', false, true), /conflict/);
+  assert.equal(app.notes.get('note').dirty, true); assert.deepEqual(flags, [false, false]);
+  fail = false; await app.saver.flush('note', false, true);
+  assert.equal(app.notes.get('note').dirty, false); assert.equal(flags.at(-1), false);
+});

@@ -1,5 +1,11 @@
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
 contextBridge.exposeInMainWorld('desktop', {
+  callResult: (method, input = {}) => ipcRenderer.invoke('studyself:call', { method, input }),
+  onExitRequest: callback => {
+    const listener = (_event, request) => callback(request);
+    ipcRenderer.on('studyself:exit-request', listener);
+    return () => ipcRenderer.removeListener('studyself:exit-request', listener);
+  },
   onUpdateStatus: callback => {
     const listener = (_event, status) => callback(status);
     ipcRenderer.on('studyself:update-status', listener);

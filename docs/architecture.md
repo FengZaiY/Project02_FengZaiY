@@ -258,4 +258,16 @@ Node tests simulate separate profiles and transfer directories, reversal of dire
 
 ## Verification
 
+### Desktop Exit Check
+
+The close event starts a request-scoped handshake (`exit-check.mjs`). The preload exposes a fixed exit-request listener; trusted renderer RPC supplies `exitStatus`, `exitCancel` and `exitFinish`. Renderer state covers all note/draft tabs, composition, imports and unsaved preferences. An existing editing dialog is never replaced. Acknowledgement timeout leaves the window open. Cancelled, repeated or previous-page requests cannot close the application.
+
+Save-and-exit flushes each note's existing serial saver, allowing an explicit retry without manual branch creation. Failed or conflicting drafts remain editable. Workspace persistence must finish, followed by a fresh renderer check and a main-process check of stored dirty tabs and active writes. Background timers/Agent listening stop only after accepting the final close. Pending publications and manual upload confirmations are independent of local saves; ordinary exit neither publishes nor installs updates. `callResult` carries structured errors across the isolated preload so conflict codes survive Electron's error serialization; the older `call` remains available for compatibility.
+
+### Cleared Legacy Records and Empty Directories
+
+`deletionStatus.legacyCleared` counts old purged heads and their retained history across all scopes. The trusted trash preview/confirmation accepts `legacyOnly`, covered by its confirmation digest, so legacy cleanup cannot silently expand into ordinary trash. Existing reference, conflict, transaction and erasure transport protection remains in effect.
+
+`empty-library-directories.mjs` exposes a separate trusted preview/confirmation for mapped marker-only directories. It checks current libraries, all historical events, pending/rejected imports, workspace tabs, bindings and tracked file jobs. Active empty libraries and unknown or nonempty directories are retained. Execution rechecks the digest and individual candidates, removes only the verified marker and then uses nonrecursive directory removal. Failures preserve replacement files and attempt exclusive marker restoration; partial results persist locally. A missing marker after a process crash is treated as unknown ownership and never auto-deleted. No startup sweep or external Agent method is added.
+
 Playwright browser tests cover real editing and task navigation. Native tests additionally cover packaged Electron startup, preload IPC, SQLite and Windows encryption. All test material is generated under `artifacts` and does not use a personal cloud account or a paid model.

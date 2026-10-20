@@ -8,6 +8,7 @@ import updaterPackage from 'electron-updater';
 import { UpdateManager, assertUpdateIdle } from './updates.mjs';
 import { mediaResponse } from '../core/media.mjs';
 import { importClipboardImage } from './clipboard-import.mjs';
+import { ExitCheck, exitActivity } from './exit-check.mjs';
 
 protocol.registerSchemesAsPrivileged([{ scheme: 'studyself-media', privileges: { standard: true, secure: true, stream: true } }]);
 
@@ -67,14 +68,37 @@ else {
       }
       if (!window.isDestroyed()) window.webContents.send('studyself:update-status', status);
     } });
+  const exitCheck = new ExitCheck({
+    send: request => window.webContents.send('studyself:exit-request', request),
+    unavailable: () => { if (!window.isDestroyed()) void dialog.showMessageBox(window, { type: 'warning', title: '暂时无法退出',
+      message: '尚未取得笔记保存状态，窗口已保留。', detail: '请等待页面恢复后再次关闭，避免丢失未保存的编辑。', buttons: ['继续使用'] }); },
+    inspect: () => {
+      let sync = null, syncError = '';
+      try { const status = service.transport.status(); sync = { pendingChanges: status.pendingChanges, unconfirmed: status.unconfirmed,
+        unfinished: !!status.job && !['complete', 'cancelled'].includes(status.job.state) }; }
+      catch (error) { syncError = error.message; }
+      return { sync, syncError, busy: exitActivity(service, activeCalls), dirty: (service.store.local('workspace')?.tabs || []).some(tab => tab.dirty) };
+    },
+    finish: () => {
+      allowClose = true;
+      clearInterval(service.timer); service.timer = null; service.agents.stop();
+      setTimeout(() => window.close(), 0);
+    }
+  });
+  window.webContents.on('did-start-loading', () => exitCheck.dispose());
+  window.on('closed', () => exitCheck.dispose());
   ipcMain.handle('studyself:call', async (event, { method, input = {} }) => {
     let counted = false;
     try {
       check(event.sender === window.webContents && event.senderFrame === window.webContents.mainFrame, 'Untrusted request');
       check(!installingUpdate || method === 'updateStatus', '正在退出并安装更新，请稍候');
+      check(!allowClose || installingUpdate, '正在退出，请稍候');
       activeCalls++; counted = true;
       let value;
-      if (method === 'updateStatus') value = updates.status();
+      if (method === 'exitStatus') value = exitCheck.status(input.id);
+      else if (method === 'exitCancel') value = exitCheck.cancel(input.id);
+      else if (method === 'exitFinish') value = exitCheck.accept(input);
+      else if (method === 'updateStatus') value = updates.status();
       else if (method === 'updateConfigure') value = updates.configure(input);
       else if (method === 'updateCheck') value = await updates.check();
       else if (method === 'updateDownload') value = await updates.download();
@@ -173,21 +197,9 @@ else {
     app.once('before-quit', () => clearTimeout(timer));
   }
   window.on('close', event => {
-    if (allowClose || smokeTest) return;
+    if (allowClose || smokeTest && !process.argv.includes('--test-exit')) return;
     event.preventDefault();
-    if (service.localTask) {
-      dialog.showMessageBoxSync(window, { type: 'info', message: '本地目录正在整理，请完成后退出。' });
-      return;
-    }
-    let pending;
-    try { pending = service.transport.status(); } catch { pending = null; }
-    const choice = dialog.showMessageBoxSync(window, {
-      type: 'question', title: '退出 StudySelf',
-      message: '退出前请确认笔记已保存。',
-      detail: `${pending ? `${pending.pendingChanges} 条修改未发布，${pending.unconfirmed} 次上传未确认。${pending.job && !['complete', 'cancelled'].includes(pending.job.state) ? '\n发布任务尚未完成，进度已保留。' : ''}\n` : ''}关闭不会自动发布。百度客户端的上传状态需在其客户端确认。${service.transport.running ? '\n当前仍有同步操作，建议暂停后等待当前分块完成。' : ''}`,
-      buttons: ['继续使用', '退出'], defaultId: 0, cancelId: 0
-    });
-    if (choice === 1) { allowClose = true; window.close(); }
+    exitCheck.begin();
   });
   app.on('window-all-closed', () => app.quit());
   app.on('will-quit', () => { service?.close(); storage?.close(); });

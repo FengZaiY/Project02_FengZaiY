@@ -13,6 +13,7 @@ import { previewTrash, emptyTrash } from './trash.mjs';
 import { deletionStatus, runDeletionFiles } from './permanent-files.mjs';
 import { cleanErasedTransport } from './erasure-sync.mjs';
 import { cleanPrevious, previewPrevious } from './old-workspace-cleanup.mjs';
+import { cleanEmptyDirectories, previewEmptyDirectories } from './empty-library-directories.mjs';
 import { previewAssetMerge, mergeAssets } from './asset-merge.mjs';
 import { archiveDraft, draftWorkflows } from './draft-workflow.mjs';
 
@@ -76,7 +77,7 @@ export class Service {
     summary.trash -= legacy.filter(item => item.deleted).length;
     return { ...summary, libraries: this.store.directories.describe(this.store.libraries()), sync: this.transport.config(),
       workspace: this.store.local('workspace') || { tabs: [], selectedTab: null },
-      version: '0.1.3', localDataDirectory: this.store.directory, localHierarchy: this.localHierarchy.status(), deletion: deletionStatus(this.store) };
+      version: '0.1.4', localDataDirectory: this.store.directory, localHierarchy: this.localHierarchy.status(), deletion: deletionStatus(this.store) };
   }
   async finishDeletion() {
     this.store.permanentDeleting = true;
@@ -174,6 +175,10 @@ export class Service {
         return { ...result, cleanup: await this.finishDeletion() };
       }
       case 'deletionStatus': return deletionStatus(this.store);
+      case 'emptyDirectoriesPreview':
+      case 'emptyDirectoriesClean':
+        check(!this.transport.running && !this.localTask && !this.imports.size, '请等待同步或本地资料整理完成', 'BUSY');
+        return method === 'emptyDirectoriesPreview' ? previewEmptyDirectories(this.store) : cleanEmptyDirectories(this.store, input);
       case 'deletionRetry':
         check(!this.transport.running && !this.localTask && !this.imports.size, '请等待同步或本地资料整理完成', 'BUSY');
         return this.finishDeletion();

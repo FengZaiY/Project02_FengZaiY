@@ -11,6 +11,7 @@ import { createSyncUI } from './sync-pages.js';
 import { cleanNoteHtml, richExtensions, hydrateRich, editRichBlock, addRichMarkdownRules, diagramTemplates } from './rich-editor.js';
 import { parseNoteLink, safeNoteLink, encodeBlock } from '../src/core/rich-schema.mjs';
 import { createNoteAutosave } from './note-autosave.js';
+import { installExitCheck } from './exit-check.js';
 import { createHierarchyUI } from './hierarchy-ui.js';
 import { createNoteTreeDrag } from './note-tree-drag.js';
 import { createAssetUI } from './asset-manager.js';
@@ -37,9 +38,10 @@ const token = $('meta[name=local-token]').content;
 const native = !!window.desktop;
 const mediaUrl = id => native ? `studyself-media://asset/${id}` : `/media/${encodeURIComponent(id)}?token=${encodeURIComponent(token)}`;
 const api = async (method, input = {}) => {
-  if (native) return window.desktop.call(method, input);
-  const response = await fetch('/api', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-StudySelf-Token': token }, body: JSON.stringify({ method, input }) });
-  const result = await response.json();
+  if (native && !window.desktop.callResult) return window.desktop.call(method, input);
+  // Preserve structured error codes across the context bridge; thrown Errors lose custom fields.
+  const result = native ? await window.desktop.callResult(method, input) : await (await fetch('/api', {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-StudySelf-Token': token }, body: JSON.stringify({ method, input }) })).json();
   if (result.error) throw Object.assign(new Error(result.error.message), { code: result.error.code });
   return result.value;
 };
@@ -125,6 +127,31 @@ const syncUI = createSyncUI({ api, esc, icon, formatTime, bytes, render, toast, 
 const hierarchyUI = createHierarchyUI({ state, api, esc, icon, button, render: renderRecordList, persist, saveNote, openModal, confirmBox, toast, run, openRecord, libraryName });
 const draftUI = createDraftUI({ state, api, esc, icon, openModal, saveNote, persist, openRecord, hierarchyUI, libraries, run, toast, redrawIcons });
 const skillUI = createSkillManager({ api, esc, icon, safeHtml, formatTime, toast, confirmBox, redrawIcons, run });
+installExitCheck({ bridge: window.desktop, api, esc, openModal, toast, persist,
+  snapshot: () => {
+    stash();
+    if (!state.snapshot) throw new Error('工作区正在加载，请稍后退出');
+    return { notes: state.tabs.map(tab => {
+      const saving = noteSaver.state(tab.id);
+      return { title: tab.title || '未命名笔记', state: !tab.dirty && saving !== 'saving' ? 'saved' : saving === 'saved' ? 'queued' : saving };
+    }),
+    preferenceDirty: skillUI.dirty(), importing: importingFiles > 0, composing: !!state.editor?.view.composing };
+  },
+  save: async () => {
+    stash();
+    const errors = [];
+    for (const tab of [...state.tabs]) {
+      try {
+        if (tab.dirty && noteSaver.state(tab.id) === 'conflict') throw new Error('请先处理版本冲突');
+        // Explicit retry must not invoke the manual branch-save dialog during exit.
+        if (tab.dirty || noteSaver.state(tab.id) === 'saving') await noteSaver.flush(tab.id, false, true);
+      } catch (error) { errors.push(`${tab.title}：${error.code === 'CONFLICT' ? '存在新版本，当前编辑已保留，请返回笔记对照处理' : error.message}`); }
+    }
+    clearTimeout(persistTimer); await persist();
+    if (errors.length) throw new Error(errors.join('；'));
+  },
+  showSync: async () => { await persist(); state.view = 'sync'; state.selected = null; state.selectedTab = null; await render(); }
+});
 const updateUI = createUpdateUI({ api, native, esc, icon, bytes, formatTime, redrawIcons, toast, prepareInstall: async () => {
   stash();
   if (importingFiles || state.tabs.some(tab => tab.dirty || noteSaver.state(tab.id) === 'saving') || skillUI.dirty() || $('dialog[open]')) {
@@ -155,6 +182,10 @@ function currentTab() { return state.tabs.find(t => t.id === state.selectedTab);
 function libraries() { return state.snapshot?.libraries || []; }
 function activeLibraries() { return libraries().filter(item => !item.deleted || item.contentCount > 0); }
 function libraryName(domain) { return domain === GLOBAL_SCOPE ? '不限定知识库' : libraries().find(item => item.data.domain === domain)?.data.title || domain || '全部知识库'; }
+function legacyCleanupNotice() {
+  const legacy = state.snapshot.deletion?.legacyCleared;
+  return legacy?.count ? `<div class="notice amber"><div><strong>旧版清空残留 · ${legacy.count} 项</strong><p>整个工作区仍有 ${legacy.revisions} 条旧修改记录，仅被旧版隐藏，尚未永久删除。</p><button class="secondary" data-action="legacy-clear">检查旧版残留</button></div></div>` : '';
+}
 function requireLibrary() {
   const library = libraries().find(item => item.data.domain === state.domain);
   if (!library) throw new Error('请先创建并选择知识库');
@@ -273,6 +304,7 @@ function shell() {
       </header>
       <div class="work-tabs">${state.tabs.map(tab => `<div class="work-tab ${tab.id === state.selectedTab ? 'selected' : ''}" data-tab="${tab.id}" title="${esc(libraryName(tab.domain))} / ${esc(tab.title)}">${icon('file-text')}<span>${esc(tab.title)}${tab.dirty ? ' ·' : ''}</span><small>${esc(libraryName(tab.domain))}</small><button data-close-tab="${tab.id}" aria-label="关闭标签">${icon('x')}</button></div>`).join('')}<button class="tab-add" data-action="new" title="新建笔记" aria-label="新建笔记">${icon('plus')}</button><div class="tab-spacer"></div>${button('upload', 'publish-workspace', '发布当前工作区')}${button('panels-top-left', 'adopt-workspace', '接续其他电脑的工作区')}</div>
       ${state.view === 'trash' ? `<div class="trash-toolbar"><strong>回收站 · ${esc(libraryName(state.domain))}</strong><button class="secondary danger-action" data-action="trash-empty">${icon('trash-2')}清空回收站</button></div>` : ''}
+      ${state.view === 'trash' ? legacyCleanupNotice() : ''}
       <main id="main"></main>
       <footer class="statusbar"><span>${icon('hard-drive')}本地保存</span><span>修改历史自动保留</span><span class="status-right">云端上传状态：由客户端确认</span></footer>
     </div>`;
@@ -756,6 +788,8 @@ async function renderSettings() {
       <div class="storage-summary"><span>知识库 ${activeLibraries().length}</span><span>笔记 ${state.snapshot.counts.note || 0}</span><span>附件 ${state.snapshot.counts.asset || 0}</span></div>
       <div class="storage-summary"><span>本地文件：${state.snapshot.localHierarchy?.busy ? '维护中' : state.snapshot.localHierarchy?.errors?.length ? '维护未完成' : state.snapshot.localHierarchy?.pending ? '待更新' : '已更新'}</span>${state.snapshot.localHierarchy?.missing ? `<span>${state.snapshot.localHierarchy.missing} 个原件待接收</span>` : ''}</div>
       ${state.snapshot.localHierarchy?.errors?.length ? `<div class="notice amber">${state.snapshot.localHierarchy.errors.map(item => esc(item.message)).join('<br>')}${button('refresh-cw', 'storage-retry', '重试本地文件维护')}</div>` : ''}
+      ${legacyCleanupNotice()}
+      <div class="storage-actions"><button class="secondary" data-action="empty-directories">${icon('folder-search')}检查废弃空目录</button></div>
       ${state.snapshot.deletion?.files?.length || state.snapshot.deletion?.database ? `<div class="notice"><div><strong>永久删除清理</strong><p>本地文件已释放 ${bytes(state.snapshot.deletion.releasedBytes)} · ${state.snapshot.deletion.pending} 个文件待处理 · 数据库${state.snapshot.deletion.database?.state === 'done' ? '已压缩' : '待压缩'}</p>
         ${state.snapshot.deletion.retiredAI ? `<p>内置 AI 历史：已移除 ${state.snapshot.deletion.retiredAI.records} 条旧记录及 ${state.snapshot.deletion.retiredAI.settings} 项本机配置${state.snapshot.deletion.retiredAI.pending ? '，文件清理或数据库压缩待完成' : ''}。</p>` : ''}
         ${state.snapshot.deletion.files.filter(item => item.state !== 'done').map(item => `<p class="storage-path">${esc(item.relative)}：${esc(item.reason || '等待清理')}</p>`).join('')}
@@ -1074,13 +1108,13 @@ async function showHistory() {
     })
   });
 }
-async function clearTrash() {
+async function clearTrash(legacyOnly = false) {
   await persist();
-  const preview = await api('trashPreview', { domain: state.domain || '' });
-  const rows = items => items.slice(0, 30).map(item => `<li><strong>${esc(item.title)}</strong><span>${esc(typeLabel[item.type] || item.type)}${item.reason ? ` · ${esc(item.reason)}` : ''}</span></li>`).join('');
-  const dialog = openModal('清空回收站', `<div class="trash-confirm">
+  const preview = await api('trashPreview', { domain: legacyOnly ? '' : state.domain || '', legacyOnly });
+  const rows = items => items.slice(0, 30).map(item => `<li><strong>${esc(item.title)}</strong><span>${esc(typeLabel[item.type] || item.type)} · ${esc(libraryName(item.domain))}${item.legacyCleared ? ' · 旧版清空残留' : ''}${item.reason ? ` · ${esc(item.reason)}` : ''}</span></li>`).join('');
+  const dialog = openModal(legacyOnly ? '清理旧版残留' : '清空回收站', `<div class="trash-confirm">
     <p>范围：<strong>${esc(libraryName(preview.domain))}</strong></p>
-    <p>可清空 <strong>${preview.eligible.length}</strong> 项，保留 <strong>${preview.blocked.length}</strong> 项。本次包含该范围内所有回收内容，不受搜索或分页限制。</p>
+    <p>可清空 <strong>${preview.eligible.length}</strong> 项，保留 <strong>${preview.blocked.length}</strong> 项。${legacyOnly ? '仅处理旧版已清空残留及其不再共用的附件，普通回收内容保留' : '本次包含该范围内所有回收内容'}，不受搜索或分页限制。</p>
     ${preview.eligible.length ? `<p class="trash-warning">永久删除正文、修改历史及不再共用的系统托管原件，无法恢复。</p><p>将清理 ${preview.files.length} 个本地文件，预计释放 ${bytes(preview.estimatedBytes)}（不含数据库压缩）。</p><ul class="trash-preview-list">${rows(preview.eligible)}</ul>${preview.eligible.length > 30 ? `<p>另有 ${preview.eligible.length - 30} 项。</p>` : ''}` : '<p>当前没有可清空的内容。</p>'}
     ${preview.blocked.length ? `<details open><summary>以下内容暂时保留</summary><ul class="trash-preview-list">${rows(preview.blocked)}</ul>${preview.blocked.length > 30 ? `<p>另有 ${preview.blocked.length - 30} 项受保护。</p>` : ''}</details>` : ''}
     <p class="muted">共用资料和系统外导入源保留。删除凭据不含正文；其他电脑须升级后同步处理。同步目录的对应传输副本将清理，百度云端历史与回收站、迁移旧目录需要另行清理，不代表所有副本已擦除。</p>
@@ -1093,7 +1127,7 @@ async function clearTrash() {
     confirm.textContent = '正在永久删除...';
     try {
       await persist();
-      const result = await api('trashEmpty', { domain: preview.domain, token: preview.token, confirmed: true });
+      const result = await api('trashEmpty', { domain: preview.domain, legacyOnly: preview.legacyOnly, token: preview.token, confirmed: true });
       const ids = new Set(result.ids), tabs = state.tabs.filter(tab => ids.has(tab.recordId));
       for (const tab of tabs) await noteSaver.forget(tab.id);
       if (ids.has(state.selected?.id)) { state.editor?.destroy(); state.editor = null; state.selected = null; state.selectedTab = null; }
@@ -1341,6 +1375,26 @@ const actions = {
   'library-storage-retry': async target => { await api('libraryDirectory', { id: target.dataset.library }); await render(); },
   'storage-copy': async () => { await navigator.clipboard.writeText(state.snapshot.localDataDirectory); toast('已复制存储路径'); },
   'deletion-retry': async () => { await api('deletionRetry'); await render(); toast('已重试，请查看各项清理状态'); },
+  'legacy-clear': () => clearTrash(true),
+  'empty-directories': async () => {
+    await persist();
+    const plan = await api('emptyDirectoriesPreview');
+    const dialog = openModal('检查废弃空目录', `<p>可清理 ${plan.eligible.length} 项，保留 ${plan.blocked.length} 项。仍在使用的空知识库和系统运行目录会保留。</p>
+      <ul>${plan.eligible.map(item => `<li class="storage-path">${esc(item.name)} · ${item.missing ? '目录已不存在，仅清理登记' : '只剩系统归属标识'}</li>`).join('')}</ul>
+      ${plan.blocked.length ? `<details open><summary>保留原因</summary><ul>${plan.blocked.map(item => `<li class="storage-path">${esc(item.name)}：${esc(item.reason)}</li>`).join('')}</ul></details>` : ''}
+      <p id="directory-clean-error" role="alert" hidden></p>`, `<button class="secondary" data-cancel>取消</button><button class="primary danger-action" id="directory-clean-confirm" ${plan.eligible.length ? '' : 'disabled'}>确认清理空目录</button>`);
+    $('[data-cancel]', dialog).onclick = () => dialog.close();
+    $('#directory-clean-confirm', dialog).onclick = async event => {
+      event.currentTarget.disabled = true;
+      try {
+        const result = await api('emptyDirectoriesClean', { token: plan.token, confirmed: true });
+        if (result.pending) throw new Error(result.results.filter(item => item.state !== 'done').map(item => `${item.name}：${item.reason}`).join('；'));
+        dialog.close(); await render(); toast(`已清理 ${result.removed} 个废弃空目录`);
+      } catch (error) {
+        const box = $('#directory-clean-error', dialog); box.textContent = `${error.message}。请关闭后重新检查。`; box.hidden = false;
+      }
+    };
+  },
   'storage-previous-clean': async () => {
     const plan = await api('storagePreviousPreview');
     const confirmed = await confirmBox('永久清理迁移旧副本', `<p class="storage-path">${esc(plan.directory)}</p><p>将删除 ${plan.files.length} 个系统托管文件（${bytes(plan.bytes)}），包括旧数据库及其笔记历史。额外文件保留，当前工作区不受影响。</p><p>此操作无法撤销。</p>`, '永久清理旧副本');
@@ -1413,7 +1467,7 @@ const actions = {
   'choose-sync-folder': async () => pickDirectory($('#sync-folder')),
   'pairing-key': async () => { const { key } = await api('pairingKey'); $('#sync-key').value = key; $('#sync-key').type = 'text'; toast('请通过独立安全方式在另一台设备填写此密钥'); },
   history: showHistory,
-  'trash-empty': clearTrash,
+  'trash-empty': () => clearTrash(),
   resolve: resolveConflict,
   delete: async () => {
     if (!state.selected) return;
