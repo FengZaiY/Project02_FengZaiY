@@ -29,8 +29,8 @@ try {
     await page.setViewportSize({ width, height });
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
     await page.screenshot({ path: path.join(root, `settings-${width}.png`), fullPage: true });
-    await page.locator('#agent-preferences-form button').scrollIntoViewIfNeeded();
-    const bounds = await page.locator('#agent-preferences-form button').boundingBox();
+    await page.locator('#agent-preferences-form button[type=submit]').scrollIntoViewIfNeeded();
+    const bounds = await page.locator('#agent-preferences-form button[type=submit]').boundingBox();
     assert.ok(bounds.y >= 0 && bounds.y + bounds.height <= height);
     assert.ok((await page.locator('.statusbar').boundingBox()).y < height);
     await page.locator('#storage-settings').scrollIntoViewIfNeeded();

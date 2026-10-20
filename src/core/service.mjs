@@ -71,7 +71,7 @@ export class Service {
     summary.trash -= legacy.filter(item => item.deleted).length;
     return { ...summary, libraries: this.store.directories.describe(this.store.libraries()), sync: this.transport.config(),
       workspace: this.store.local('workspace') || { tabs: [], selectedTab: null },
-      version: '0.1.1', localDataDirectory: this.store.directory, localHierarchy: this.localHierarchy.status() };
+      version: '0.1.2', localDataDirectory: this.store.directory, localHierarchy: this.localHierarchy.status() };
   }
   async call(method, input = {}) {
     if (['syncPlan', 'syncPublish', 'syncImport', 'deviceSetPrimary', 'deviceVerify', 'assetHydrate', 'assetEvict'].includes(method)) {
