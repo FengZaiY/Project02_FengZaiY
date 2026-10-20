@@ -1,4 +1,6 @@
 import './update-manager.css';
+import { studyselfUpdateSource } from '../package.json';
+import { sourceLabel } from '../src/desktop/update-source.mjs';
 
 const phases = { preview: '浏览器开发预览', development: '桌面开发模式', unconfigured: '尚未配置更新来源',
   'configuration-error': '更新来源配置有误', idle: '尚未检查', checking: '正在检查更新', available: '发现新版本',
@@ -7,10 +9,14 @@ const phases = { preview: '浏览器开发预览', development: '桌面开发模
 export function createUpdateUI({ api, native, esc, icon, bytes, formatTime, redrawIcons, toast, prepareInstall }) {
   let host, status, notified, saving = false;
   const disabled = () => !native || !status?.supported || !status.source || status.phase === 'configuration-error';
+  function refreshNotice() {
+    if (!status) return;
+    const nav = document.querySelector('[data-nav=settings]');
+    if (nav) { nav.classList.toggle('has-update', ['available', 'downloaded'].includes(status.phase)); nav.title = ['available', 'downloaded'].includes(status.phase) ? `StudySelf ${status.latestVersion} 可更新` : '系统设置'; }
+  }
   function receive(next) {
     status = next;
-    const nav = document.querySelector('[data-nav=settings]');
-    if (nav) { nav.classList.toggle('has-update', ['available', 'downloaded'].includes(next.phase)); nav.title = ['available', 'downloaded'].includes(next.phase) ? `StudySelf ${next.latestVersion} 可更新` : ''; }
+    refreshNotice();
     if (native && ['available', 'downloaded'].includes(next.phase) && notified !== `${next.phase}:${next.latestVersion}`) {
       notified = `${next.phase}:${next.latestVersion}`;
       toast(`${next.phase === 'downloaded' ? '更新已下载' : '发现新版本'} ${next.latestVersion}，可在系统设置中操作`);
@@ -52,6 +58,7 @@ export function createUpdateUI({ api, native, esc, icon, bytes, formatTime, redr
     finally { release?.(); }
   }
   return {
+    refreshNotice,
     async start() {
       if (!native) return;
       window.desktop.onUpdateStatus?.(receive);
@@ -59,7 +66,7 @@ export function createUpdateUI({ api, native, esc, icon, bytes, formatTime, redr
     },
     async mount(element, version) {
       host = element;
-      if (!native) receive({ phase: 'preview', currentVersion: version, supported: false, autoCheck: false });
+      if (!native) receive({ phase: 'preview', currentVersion: version, supported: false, autoCheck: false, source: sourceLabel(studyselfUpdateSource) });
       else {
         try { receive(await api('updateStatus')); }
         catch (error) { host.textContent = `读取更新状态失败：${error.message}`; }

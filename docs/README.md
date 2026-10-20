@@ -10,6 +10,7 @@
 ## 设计与验收
 
 - [架构说明](architecture.md)：修改历史、当前内容同步、原件断点与权限；退役格式单独标注。
+- [在线发布说明](online-updates.md)：独立发布仓库、更新来源与安装验收。
 - [验证记录](verification.md)：带日期的实际测试结果。
 - [同步验收与可选双机联调](baidu-acceptance.md)：StudySelf 自身的版本、完整性与恢复要求，以及按需进行的部署联调。
 - [计划目录](plans/README.md)：跨模块和多阶段任务。

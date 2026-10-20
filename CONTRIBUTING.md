@@ -45,6 +45,7 @@ Windows 预览的目录按钮通过已鉴权的界面接口调用系统文件夹
 | 草稿直接归档、方案来源关联与处理状态 | `npm run test:drafts`、`node --test tests/draft-workflow.test.mjs`；另运行完整核心、知识库/层级/Agent 界面回归，核对来源版本、部分覆盖、未保存修改、取消、重复、失败回滚、双目录同步及授权 |
 | 草稿与正式笔记共用界面 | `npm run test:drafts`、`npm run test:experience`、`npm run test:attachments`；另以 `node scripts/test-editor-experience.mjs --draft` 和 `node scripts/test-note-attachments.mjs --draft` 验证草稿工具/附件，核对导航切换不重建编辑器、紧凑保存、重开草稿范围及窄窗口 |
 | 系统设置的内置 Skill 管理 | `npm run test:skills`、`npm run test:agents`、`npm test`；核对只读文件、导出版本清单、偏好快照、历史取回、保存期间输入、未保存内容保护与过期版本对照。导出生成记录不表示外部安装成功 |
+| 在线升级更新 | `node --test tests/updates.test.mjs`、`npm run test:updates`、`test:ui`、`test:desktop`；验证固定来源、错误/并发、真实更新库的隔离下载与损坏校验、未保存保护、普通退出不安装、开发环境限制与 Agent 越权 |
 | 笔记富内容、链接、媒体或画板 | 另运行 `npm run test:rich`，检查所有模板、保存重开、原文件播放、画板像素和桌面/窄窗口截图；原生协议/本地文件绑定另测 `test:desktop` |
 | 思维导图可视化编辑 | 另运行 `npm run test:mindmap`、`node --test tests/mindmap.test.mjs`；覆盖源文本保留、实体编码、中文输入、分支移动/循环/折叠、保存重开、取消、撤销、导出及窗口截图 |
 | 正文富媒体尺寸调整 | 另运行 `npm run test:rich-layout`；覆盖导图八方向实际缩放、图表/画板比例、调节点边界、取消/撤销、键盘、长按编排、双击编辑、保存重开、历史与窄窗口，不以布局属性变化代替可见尺寸验证 |
@@ -85,7 +86,7 @@ Windows 预览的目录按钮通过已鉴权的界面接口调用系统文件夹
 
 `npm run dist` 生成 `release/StudySelf-<版本>-Setup.exe`。`npm run test:packaged` 验证 `release/win-unpacked/StudySelf.exe`，不等于验证安装向导、卸载或跨版本升级。
 
-目前没有自动更新服务器，升级使用新安装包。版本号涉及 `package.json`、锁文件、业务状态和界面显示；发布时搜索所有版本引用，避免只改其中一个。交付说明保留实际签名状态及本轮测试范围，不把百度产品能力验证列为交付门槛。
+在线更新源码已接入 electron-updater，默认共用 `FengZaiY/Project02_StudySelf` 的公开 GitHub Releases（package metadata 保存来源）。独立打包任务可通过 `STUDYSELF_UPDATE_GITHUB=owner/repo` 或 `STUDYSELF_UPDATE_URL=https://.../` 二选一覆盖来源，`scripts/release-config.mjs` 同时生成发布配置和安装包内来源。`npm run dist` 使用 `--publish never`，只构建、不上传。详细流程见 [在线发布说明](docs/online-updates.md)。版本号涉及 `package.json`、锁文件、业务状态和界面显示；发布时搜索所有版本引用，避免只改其中一个。交付说明保留实际签名状态及本轮测试范围，不把百度产品能力验证列为交付门槛。
 
 日常修改后保留旧安装包，不把它宣称为包含最新源码。进入独立打包任务时，再基于指定源码构建并验证新安装包，不能沿用旧产物冒充本次交付。
 

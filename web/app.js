@@ -127,7 +127,7 @@ const draftUI = createDraftUI({ state, api, esc, icon, openModal, saveNote, pers
 const skillUI = createSkillManager({ api, esc, icon, safeHtml, formatTime, toast, confirmBox, redrawIcons, run });
 const updateUI = createUpdateUI({ api, native, esc, icon, bytes, formatTime, redrawIcons, toast, prepareInstall: async () => {
   stash();
-  if (importingFiles || state.tabs.some(tab => tab.dirty || noteSaver.state(tab.id) === 'saving') || skillUI.dirty() || $('#modal-backdrop.open')) {
+  if (importingFiles || state.tabs.some(tab => tab.dirty || noteSaver.state(tab.id) === 'saving') || skillUI.dirty() || $('dialog[open]')) {
     throw new Error('请先保存笔记和整理偏好、关闭编辑窗口，并等待文件导入完成后更新');
   }
   const app = $('#app');
@@ -276,6 +276,7 @@ function shell() {
       <main id="main"></main>
       <footer class="statusbar"><span>${icon('hard-drive')}本地保存</span><span>修改历史自动保留</span><span class="status-right">云端上传状态：由客户端确认</span></footer>
     </div>`;
+  updateUI.refreshNotice();
   if (state.domain) $('#domain-filter').insertAdjacentHTML('afterend', button(state.view === 'drafts' ? 'list' : 'list-tree', 'knowledge-browse', state.view === 'drafts' ? '浏览草稿列表' : '浏览知识体系'));
   $('.tab-add').title = newLabel; $('.tab-add').setAttribute('aria-label', newLabel);
   $('#domain-filter').addEventListener('change', e => run(() => selectLibrary(e.target.value)));

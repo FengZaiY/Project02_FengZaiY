@@ -14,7 +14,8 @@ export class UpdateManager {
     catch (error) { this.state.error = error.message; this.state.phase = 'configuration-error'; return; }
     if (!this.state.supported) { this.state.phase = 'development'; return; }
     if (!this.source) { this.state.phase = 'unconfigured'; return; }
-    this.updater = createUpdater(this.source);
+    try { this.updater = createUpdater(this.source); }
+    catch { this.state.phase = 'configuration-error'; this.state.error = '更新组件初始化失败，请检查发布配置。知识库仍可正常使用。'; return; }
     this.updater.autoDownload = false;
     this.updater.autoInstallOnAppQuit = false;
     this.updater.autoRunAppAfterInstall = true;
@@ -88,7 +89,8 @@ export class UpdateManager {
   }
 }
 
-export function assertUpdateIdle(service, storage, activeCalls = 1) {
+export function assertUpdateIdle(service, storage, activeCalls = 1, customStartup = false) {
+  requireState(!customStartup, '当前使用自定义启动目录，请关闭后手动安装并沿用原启动入口，避免重启到其他工作区');
   requireState(!storage.status().restartRequired, '请先应用或取消待生效的存储位置变更');
   requireState(!service.transport.running && !service.localTask && !service.imports.size && !service.agents.starting && activeCalls <= 1,
     '同步、导入或其他操作仍在进行，请稍后更新');

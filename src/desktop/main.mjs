@@ -81,14 +81,14 @@ else {
       else if (method === 'updateInstall') {
         updates.requireDownloaded();
         check(input.rendererReady === true, '请在系统设置中确认并关闭未保存内容后更新');
-        assertUpdateIdle(service, storage, activeCalls);
+        assertUpdateIdle(service, storage, activeCalls, !!profileArg);
         const answer = dialog.showMessageBoxSync(window, { type: 'question', title: '重启并更新',
           message: `安装 StudySelf ${updates.status().latestVersion}？`,
           detail: '应用将退出并打开安装程序。未发布的修改保留在本机，不会自动同步。',
           buttons: ['稍后更新', '重启并更新'], defaultId: 0, cancelId: 0 });
         if (answer !== 1) value = updates.status();
         else {
-          assertUpdateIdle(service, storage, activeCalls);
+          assertUpdateIdle(service, storage, activeCalls, !!profileArg);
           installingUpdate = true; allowClose = true;
           clearInterval(service.timer); service.timer = null;
           service.agents.stop();
@@ -168,7 +168,7 @@ else {
   await window.loadFile(entry);
   service.startTimer();
   if (updates.updater && updates.status().autoCheck && !smokeTest) {
-    const timer = setTimeout(() => { void updates.check().catch(() => {}); }, 5000);
+    const timer = setTimeout(() => { if (updates.status().autoCheck) void updates.check().catch(() => {}); }, 5000);
     timer.unref();
     app.once('before-quit', () => clearTimeout(timer));
   }

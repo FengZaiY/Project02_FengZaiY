@@ -6,6 +6,13 @@
   "description": "Local-first knowledge workspace with reviewed folder-based synchronization",
   "type": "module",
   "main": "src/desktop/main.mjs",
+  "studyselfUpdateSource": {
+    "provider": "github",
+    "owner": "FengZaiY",
+    "repo": "Project02_StudySelf",
+    "private": false,
+    "releaseType": "release"
+  },
   "scripts": {
     "build": "node scripts/build.mjs",
     "start": "npm run build && electron .",
@@ -24,6 +31,7 @@
     "test:note-drag": "node scripts/test-note-tree-drag.mjs",
     "test:agents": "node scripts/test-agents-ui.mjs",
     "test:skills": "node scripts/test-skill-manager.mjs",
+    "test:updates": "node scripts/test-updates-ui.mjs",
     "test:drafts": "node scripts/test-draft-workflow.mjs",
     "test:rich": "node scripts/test-rich-ui.mjs",
     "test:mindmap": "node scripts/test-mindmap-ui.mjs",

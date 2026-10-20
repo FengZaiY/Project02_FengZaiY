@@ -21,6 +21,18 @@ try {
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   await page.waitForFunction(() => !!window.desktop && !!document.querySelector('[data-nav="notes"]'));
+  if (!packaged) {
+    const update = await page.evaluate(() => window.desktop.call('updateStatus'));
+    assert.equal(update.phase, 'development');
+    await assert.rejects(page.evaluate(() => window.desktop.call('updateCheck')), /Windows/);
+    await assert.rejects(page.evaluate(() => window.desktop.call('updateInstall', { rendererReady: true })), /下载/);
+    await page.evaluate(() => window.desktop.call('updateConfigure', { autoCheck: false }));
+    assert.equal((await page.evaluate(() => window.desktop.call('updateStatus'))).autoCheck, false);
+    await page.locator('[data-nav=settings]').click();
+    await page.locator('#upgrade-settings', { hasText: '桌面开发模式' }).waitFor();
+    assert.equal(await page.locator('[data-update=check]').isDisabled(), true);
+    await page.locator('[data-nav=notes]').click();
+  }
   const data = await page.evaluate(async () => {
     const original = await window.desktop.call('save', { type: 'note', data: { title: '桌面启动验证', content: '独立 SQLite 数据库与安全 IPC 已连接。', domain: 'AI' } });
     await window.desktop.call('agentConfigure', { enabled: true });
@@ -174,6 +186,7 @@ try {
   const page = await restarted.firstWindow();
   await page.waitForFunction(() => !!document.querySelector('[data-nav="settings"]'));
   const state = await page.evaluate(() => window.desktop.call('state'));
+  if (!packaged) assert.equal((await page.evaluate(() => window.desktop.call('updateStatus'))).autoCheck, false);
   assert.equal(state.localDataDirectory, migratedProfile);
   assert.equal((await page.evaluate(id => window.desktop.call('record', { id }), migrationNoteId)).data.title, '桌面启动验证');
   assert.equal((await page.evaluate(() => window.desktop.call('pairingKey'))).key, migrationPairingKey);
