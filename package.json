@@ -23,6 +23,8 @@
     "test:hierarchy": "node scripts/test-hierarchy-ui.mjs",
     "test:note-drag": "node scripts/test-note-tree-drag.mjs",
     "test:agents": "node scripts/test-agents-ui.mjs",
+    "test:skills": "node scripts/test-skill-manager.mjs",
+    "test:drafts": "node scripts/test-draft-workflow.mjs",
     "test:rich": "node scripts/test-rich-ui.mjs",
     "test:mindmap": "node scripts/test-mindmap-ui.mjs",
     "test:rich-layout": "node scripts/test-rich-layout.mjs",
@@ -37,7 +39,7 @@
     "test:desktop": "node scripts/test-desktop.mjs",
     "test:packaged": "node scripts/test-desktop.mjs --packaged",
     "benchmark": "node scripts/benchmark.mjs",
-    "dist": "npm run build && electron-builder --win nsis --x64"
+    "dist": "npm run build && electron-builder --config scripts/release-config.mjs --win nsis --x64 --publish never"
   },
   "devDependencies": {
     "@tiptap/core": "^3.31.4",
@@ -93,6 +95,7 @@
     }
   },
   "dependencies": {
+    "electron-updater": "6.6.2",
     "marked": "^17.0.6",
     "parse5": "^8.0.1"
   }

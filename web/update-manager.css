@@ -1,0 +1,9 @@
+.update-heading,.update-state,.update-actions{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.update-heading h2{margin:0}.update-state{margin:16px 0;color:var(--text)}
+.update-details{margin:12px 0}.update-details>div{display:grid;grid-template-columns:110px minmax(0,1fr);gap:12px;margin:8px 0;font-size:13px}
+.update-details dt,.update-note{color:var(--muted)}.update-details dd{margin:0;overflow-wrap:anywhere}
+.update-note{font-size:13px;line-height:1.7}.update-actions{margin:16px 0}.update-actions button{white-space:normal}
+.update-progress{display:grid;gap:8px;margin:16px 0;font-size:13px}.update-progress progress{width:100%;accent-color:#267d60}
+.update-notes{margin-top:16px}.update-notes pre{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;font-size:13px;line-height:1.7;max-height:280px;overflow:auto}
+.nav-item.has-update::after{content:'';width:7px;height:7px;border-radius:50%;background:#b64a39;margin-left:auto;flex-shrink:0}
+.settings-shortcuts{display:flex;gap:8px;flex-wrap:wrap}

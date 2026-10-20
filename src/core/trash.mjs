@@ -7,7 +7,9 @@ function references(data) {
   const ids = new Set([...(data.sourceIds || []), ...(data.assetIds || []),
     data.noteId, data.from, data.to, data.parentNoteId, data.folderId, data.parentId].filter(isId));
   for (const id of richReferences(data).refs) ids.add(id);
+  if (data.draftOrigin) ids.add(data.draftOrigin.id);
   for (const item of data.items || []) {
+    for (const ref of item.draftRefs || []) ids.add(ref.id);
     if (isId(item.targetId)) ids.add(item.targetId);
     for (const id of references(item.data || {})) ids.add(id);
   }

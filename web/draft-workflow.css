@@ -1,0 +1,10 @@
+.draft-filter { display:grid; gap:6px; padding:8px 12px; font-size:12px; color:var(--muted); }
+.draft-filter select { width:100%; min-width:0; padding:7px 28px 7px 8px; }
+.draft-workflow-bar { display:flex; flex-wrap:wrap; align-items:center; gap:8px; padding:8px 16px; border-bottom:1px solid var(--line); flex:none; }
+.draft-workflow-bar button { white-space:normal; text-align:left; }
+.draft-results { min-width:0; }
+.draft-result-heading { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:10px; }
+.draft-results h3 { font-size:14px; margin:20px 0 8px; }
+.draft-result { display:flex; flex-direction:column; align-items:flex-start; gap:5px; width:100%; text-align:left; padding:10px 4px; border:0; border-bottom:1px solid var(--line); background:transparent; overflow-wrap:anywhere; }
+.draft-result small { color:var(--muted); }
+.draft-archive-error { color:var(--red); margin:0; }

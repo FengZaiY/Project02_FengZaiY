@@ -5,6 +5,7 @@ import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { check, uuid, now, sha, canonical, atomicWrite, noSymlink, prettyError } from './util.mjs';
 import { richReferences } from './rich-content.mjs';
+import { cleanDraftRefs, validateDraftRefs } from './draft-workflow.mjs';
 
 const skillRoot = fileURLToPath(new URL('../../skills/studyself-organize/', import.meta.url));
 const skillNames = ['SKILL.md', 'references/preferences.md', 'references/api.md', 'scripts/client.mjs'];
@@ -25,6 +26,19 @@ export class AgentAccess {
     store.db.exec('CREATE TABLE IF NOT EXISTS agent_requests(grant_id TEXT NOT NULL, request_id TEXT NOT NULL, digest TEXT NOT NULL, result TEXT NOT NULL, PRIMARY KEY(grant_id,request_id))');
   }
   skillFiles() { return Object.fromEntries(skillNames.map(name => [name, fs.readFileSync(path.join(skillRoot, name), 'utf8')])); }
+  skillPackage() {
+    const files = this.skillFiles(), preferences = this.preferences();
+    const skillVersion = sha(canonical(files));
+    return { files, preferences, skillVersion, exportVersion: sha(canonical({ skillVersion, preferencesVersion: preferences.version })),
+      lastGenerated: this.store.local('skillLastGenerated') || null };
+  }
+  exportSkill() {
+    const result = this.skillPackage();
+    check(!result.preferences.conflict, '请先合并整理偏好冲突，再导出 Skill', 'CONFLICT');
+    result.lastGenerated = { at: now(), version: result.exportVersion, skillVersion: result.skillVersion, preferencesVersion: result.preferences.version };
+    this.store.local('skillLastGenerated', result.lastGenerated);
+    return result;
+  }
   preferences() {
     const record = this.store.get(preferenceId);
     const baseline = fs.readFileSync(path.join(skillRoot, 'references/preferences.md'), 'utf8');
@@ -81,8 +95,16 @@ export class AgentAccess {
     if (data.items) virtual = new Map(data.items.map(item => [item.targetId, { id: item.targetId, type: 'note', data: item.data, versions: [{ data: item.data }] }]));
     const refs = [...(data.sourceIds || []), ...(data.assetIds || []), ...richReferences(data).refs, ...[data.noteId, data.from, data.to, data.folderId, data.parentId].filter(Boolean)];
     for (const id of refs) this.readable(grant, this.store.get(id), seen, virtual);
+    const checkDraft = ref => {
+      this.readable(grant, this.store.get(ref.id), seen, virtual);
+      const event = this.store.event(ref.versionId), key = `version:${ref.versionId}`;
+      check(event?.entityId === ref.id && event.type === 'draft', '来源草稿版本不可访问', 'FORBIDDEN');
+      if (!seen.has(key)) { seen.add(key); this.checkData(grant, event.data, seen, virtual); }
+    };
+    if (data.draftOrigin) checkDraft(data.draftOrigin);
     if (data.parentNoteId) this.readable(grant, this.store.get(data.parentNoteId) || virtual.get(data.parentNoteId), seen, virtual);
     for (const item of data.items || []) {
+      for (const ref of item.draftRefs || []) checkDraft(ref);
       this.checkData(grant, item.data, seen, virtual);
       if (this.store.get(item.targetId)) this.readable(grant, this.store.get(item.targetId), seen);
     }
@@ -222,8 +244,11 @@ export class AgentAccess {
       for (const item of input.items) {
         const old = record.data.items.find(entry => entry.id === item.id);
         check(old && old.status === 'pending' && !updates.has(item.id), '不能改写已确认项或重复修改同一项');
+        check(item.draftRefs === undefined || (old.draftRefs || []).every(ref => item.draftRefs.some(next => next.id === ref.id)),
+          '不能移除待确认项的来源草稿关联');
         const targetId = this.store.get(old.targetId) ? old.targetId : undefined;
-        updates.set(item.id, { ...this.proposalItem(grant, { ...item, reason: item.reason ?? old.reason, targetId, parents: old.parents }), id: old.id, targetId: old.targetId });
+        updates.set(item.id, { ...this.proposalItem(grant, { ...item, draftRefs: item.draftRefs ?? old.draftRefs,
+          reason: item.reason ?? old.reason, targetId, parents: old.parents }), id: old.id, targetId: old.targetId });
       }
       return write('proposal', { ...record.data, items: record.data.items.map(item => updates.get(item.id) || item) }, record.id, input.parents);
     }
@@ -232,7 +257,9 @@ export class AgentAccess {
     check((input.data.folderId || null) === (record.data.folderId || null), '调整目录归属请提交整理方案，由用户确认');
     check((input.data.parentNoteId || null) === (record.data.parentNoteId || null), '调整知识体系请提交整理方案，由用户确认');
     check(input.data.noteOrder === undefined || input.data.noteOrder === record.data.noteOrder, '笔记排序由用户界面管理，请保留已有顺序');
-    return write(record.type, { ...input.data, ...(record.data.noteOrder !== undefined ? { noteOrder: record.data.noteOrder } : {}) }, record.id, input.parents);
+    check(input.data.draftOrigin === undefined || canonical(input.data.draftOrigin) === canonical(record.data.draftOrigin), '归档来源由用户确认，不允许 Agent 设置');
+    return write(record.type, { ...input.data, ...(record.data.draftOrigin ? { draftOrigin: record.data.draftOrigin } : {}),
+      ...(record.data.noteOrder !== undefined ? { noteOrder: record.data.noteOrder } : {}) }, record.id, input.parents);
   }
   proposalItem(grant, item) {
     const target = item.targetId && this.store.get(item.targetId);
@@ -242,13 +269,22 @@ export class AgentAccess {
       check(target.type === 'note' && !target.deleted && !target.conflict, '目标必须是无冲突的正式笔记');
       check(Array.isArray(item.parents) && canonical([...item.parents].sort()) === canonical(target.heads), '目标基础版本已变化', 'CONFLICT');
     } else check(!item.parents?.length, '新笔记不应指定父版本');
+    check(item.data.draftOrigin === undefined || canonical(item.data.draftOrigin) === canonical(target?.data.draftOrigin), '归档来源由用户确认，不允许 Agent 设置');
+    const draftRefs = item.draftRefs !== undefined ? cleanDraftRefs(item.draftRefs) : undefined;
+    if (draftRefs) {
+      validateDraftRefs(this.store, draftRefs);
+      for (const ref of draftRefs) this.readable(grant, this.store.get(ref.id));
+    }
     const data = target ? { ...(target.data.folderId !== undefined ? { folderId: target.data.folderId } : {}),
       ...(target.data.parentNoteId !== undefined ? { parentNoteId: target.data.parentNoteId } : {}), ...item.data, sensitive: target.data.sensitive || item.data.sensitive === true,
       sourceIds: [...new Set([...(target.data.sourceIds || []), ...(item.data.sourceIds || [])])],
       assetIds: [...new Set([...(target.data.assetIds || []), ...(item.data.assetIds || [])])] } : item.data;
+    if (target?.data.draftOrigin) data.draftOrigin = target.data.draftOrigin;
+    if (draftRefs?.some(ref => this.store.get(ref.id).data.sensitive)) data.sensitive = true;
     check(item.data.noteOrder === undefined || item.data.noteOrder === target?.data.noteOrder, '笔记排序由用户界面管理，请保留已有顺序');
     if (target?.data.noteOrder !== undefined) data.noteOrder = (data.parentNoteId || null) === (target.data.parentNoteId || null) && data.domain === target.data.domain ? target.data.noteOrder : null;
     return { id: uuid(), targetId: target?.id || uuid(), parents: target?.heads || [], data,
+      ...(draftRefs !== undefined ? { draftRefs } : {}),
       ...(item.reason !== undefined ? { reason: item.reason } : {}), status: 'pending' };
   }
   async configure(enabled) {

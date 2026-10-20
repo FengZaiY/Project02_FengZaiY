@@ -230,8 +230,24 @@ The trusted note tree offers before/after sibling zones and a middle child zone.
 
 Open tabs queue placement alongside text in the existing serial writer. Ordering responses update other affected local tabs only when their base heads match. An already dispatched stale sibling save still stops as a conflict; input is retained. Failure rolls back all order writes and removes the pending placement intent, retaining text. Reordering alone never renames note directories or moves originals; changing parent uses existing local hierarchy maintenance. External Agents retain existing order and cannot invoke trusted movement methods. No new cloud or Git dependency is involved.
 
-## Verification
+## Draft Archiving And Review
+
+`draft-workflow.mjs` derives a draft's processing state from reviewed references, with a cache keyed by the latest inserted event. It does not mutate the source draft or introduce a new synced entity type. Direct archiving is a trusted `draftArchive` transaction: validate source heads and unsaved local tabs, select an active library and a valid parent, copy the complete draft data into a new note, retain source/asset IDs and sensitivity, and record `draftOrigin:{id,versionId}`. The target UUID is derived from the source identity and revision. A local retry returns the existing result; concurrent device writes to that identity remain conflicting revisions. Original drafts, history and files remain; cross-library archiving does not move asset ownership.
+
+Proposal items may carry `draftRefs:[{id,versionId,complete?}]`. Omitted complete means partial extraction. Review validates current source heads and dirty source/target tabs inside the same SQLite transaction as all selected writes. It adds draft provenance to sourceIds, propagates source sensitivity and records acceptedVersionId for the exact created note revision. A complete plan is processed only when every item for that draft revision has a valid confirmation receipt and usable result; partial extraction remains partial even after its items are accepted. A new draft revision returns to pending, keeping links to older results. Missing/conflicting/deleted results do not imply success; conflicts in proposal evidence prevent completion. One complete reviewed plan can finish a source without auto-accepting alternate proposals.
+
+The trusted UI exposes a destination dialog, pending/partial/processed filters, linked plans and results. It flushes source edits before direct archiving, rejects changes after the dialog opens, retains the existing editor for filtering/status updates and defaults to pending/partial drafts. Search includes processed drafts. Sidebar draft counts reflect remaining work. Metadata is shared through existing immutable v3 events; old events are unchanged, and all receiving clients must support the new fields. Local hierarchy projection handles the resulting formal note normally.
+
+Agents may submit versioned draft references with proposals and revise only pending items. They cannot remove existing source IDs from pending associations, write direct-archive provenance or confirmation receipts, or call archive/approval methods. Both current and referenced historical draft content are included in recursive authorization, and trash protection follows these references. This is an audit of user-confirmed coverage, not a claim that software can independently prove semantic completeness of extracted knowledge.
 
 Node tests simulate separate profiles and transfer directories, reversal of directions, concurrent edits, dependencies, replay, corrupt transfers, deletes/restores, small/large files, partial approvals, backups, external Agent privacy boundaries, request deduplication, preference versions and workspace adoption.
+
+## Built-in Skill Management
+
+系统设置使用 `web/skill-manager.js` 管理唯一内置 `studyself-organize` Skill，文件预览只读，偏好和历史仍使用原 `agentPreferences` 不可变实体，不新增共享类型。用户补充不会写回随应用发布的文件。历史取回只是编辑操作，后续保存校验基础版本并创建新记录；过期保存需对照并明确选择当前编辑，不静默覆盖。页面切换和保存期间的输入由管理器保留。
+
+受信任 `agentSkill` 返回固定文件集合、当前偏好、内置内容哈希、组合导出版本和本机最近生成信息。`agentSkillExport` 拒绝偏好冲突，冻结当前文件/偏好并记录本机生成元数据；外部 Agent 无权调用。ZIP 附带 `manifest.json` 与偏好快照，`skillVersion` 与 bootstrap 对齐，`exportVersion` 同时覆盖内置内容和偏好版本。不会扫描外部 Agent 安装目录或声称其副本已经更新，也不执行文件内脚本。外部 Agent 仍须在每批写入前读取 bootstrap。
+
+## Verification
 
 Playwright browser tests cover real editing and task navigation. Native tests additionally cover packaged Electron startup, preload IPC, SQLite and Windows encryption. All test material is generated under `artifacts` and does not use a personal cloud account or a paid model.

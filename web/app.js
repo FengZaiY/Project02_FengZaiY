@@ -5,7 +5,8 @@ import { gfm } from 'turndown-plugin-gfm';
 import { Editor } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
 import { TableKit, createTable } from '@tiptap/extension-table';
-import { downloadSkill } from './skill-export.js';
+import { createSkillManager } from './skill-manager.js';
+import { createUpdateUI } from './update-manager.js';
 import { createSyncUI } from './sync-pages.js';
 import { cleanNoteHtml, richExtensions, hydrateRich, editRichBlock, addRichMarkdownRules, diagramTemplates } from './rich-editor.js';
 import { parseNoteLink, safeNoteLink, encodeBlock } from '../src/core/rich-schema.mjs';
@@ -17,7 +18,11 @@ import { attachmentContent, bindAttachmentSources, bindAttachmentDrop } from './
 import { editorMarkers, experienceCodeBlock, mountEditorExperience } from './editor-experience.js';
 import { showHistoryBrowser } from './history-ui.js';
 import { isDocx, readDocx, docxPage } from './docx-preview.js';
+import { createDraftUI, processingLabels } from './draft-workflow.js';
 import './asset-preview.css';
+import './draft-workflow.css';
+import { recordRows } from './record-navigation.js';
+import './record-navigation.css';
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -52,7 +57,7 @@ const navs = [
 const libraryViews = ['notes', 'drafts', 'conflicts', 'trash', 'proposals'];
 const GLOBAL_SCOPE = '__all_libraries__';
 const state = { view: 'notes', domain: '', query: '', snapshot: null, rows: [], tabs: [], selectedTab: null,
-  selected: null, editor: null, sourceVisible: false, listLimit: 150, knowledgeTree: [], collapsedNotes: [], noteView: 'tree' };
+  selected: null, editor: null, sourceVisible: false, listLimit: 150, knowledgeTree: [], collapsedNotes: [], noteView: 'tree', draftFilter: 'active', listSummary: false, navigationHidden: false };
 let persistTimer, queryTimer, refreshTimer, modalCleanup, sourcePreviewUrl, editorExperience;
 let sourceLoadSerial = 0;
 let previewSerial = 0, pendingPreview, sourcePreviewController;
@@ -93,8 +98,9 @@ const noteSaver = createNoteAutosave({
       Object.assign(row, saved);
       const element = $(`.record-row[data-record="${saved.id}"]`);
       if (element) {
-        $('strong', element).textContent = saved.data.title;
-        $('p', element).textContent = excerpt(saved);
+        ($('strong>span', element) || $('strong', element)).textContent = saved.data.title;
+        const summary = $('p', element);
+        if (summary) summary.textContent = excerpt(saved);
         $('time', element).textContent = formatTime(saved.updatedAt);
       }
     }
@@ -105,6 +111,10 @@ const noteSaver = createNoteAutosave({
         renderRecordList();
       }
     }).catch(() => {});
+    if (saved.type === 'draft') {
+      void draftUI.refresh(saved).catch(() => {});
+      if (state.view === 'drafts') void refreshRows().then(renderRecordList).catch(() => {});
+    }
   },
   status: (id, value, error) => {
     updateSaveStatus();
@@ -113,6 +123,19 @@ const noteSaver = createNoteAutosave({
 });
 const syncUI = createSyncUI({ api, esc, icon, formatTime, bytes, render, toast, confirmBox, persist });
 const hierarchyUI = createHierarchyUI({ state, api, esc, icon, button, render: renderRecordList, persist, saveNote, openModal, confirmBox, toast, run, openRecord, libraryName });
+const draftUI = createDraftUI({ state, api, esc, icon, openModal, saveNote, persist, openRecord, hierarchyUI, libraries, run, toast, redrawIcons });
+const skillUI = createSkillManager({ api, esc, icon, safeHtml, formatTime, toast, confirmBox, redrawIcons, run });
+const updateUI = createUpdateUI({ api, native, esc, icon, bytes, formatTime, redrawIcons, toast, prepareInstall: async () => {
+  stash();
+  if (importingFiles || state.tabs.some(tab => tab.dirty || noteSaver.state(tab.id) === 'saving') || skillUI.dirty() || $('#modal-backdrop.open')) {
+    throw new Error('请先保存笔记和整理偏好、关闭编辑窗口，并等待文件导入完成后更新');
+  }
+  const app = $('#app');
+  app.inert = true;
+  try { await persist(); }
+  catch (error) { app.inert = false; throw error; }
+  return () => { app.inert = false; };
+} });
 const noteTreeDrag = createNoteTreeDrag({ state, move: moveKnowledgeNote, render: renderRecordList, run, toast });
 const assetUI = createAssetUI({ state, api, esc, icon, button, bytes, formatTime, libraryName, domainOptions, openModal, confirmBox, toast, run, render: refreshAssetViews, redrawIcons, openRecord, mediaUrl, native, persist });
 function toast(message, error = false) {
@@ -138,7 +161,25 @@ function requireLibrary() {
   if (library.deleted || library.conflict) throw new Error('请先在知识库管理中恢复知识库或处理名称冲突');
   return library;
 }
+function rememberListSummary() {
+  try { localStorage.setItem('studyself-list-summary', String(state.listSummary)); } catch {}
+}
+function toggleNavigation() {
+  const main = $('#main');
+  if (!main?.classList.contains('library-layout')) return;
+  if (matchMedia('(max-width:900px)').matches) {
+    main.classList.toggle('browse-folders');
+    main.classList.remove('navigation-hidden');
+    state.navigationHidden = false;
+  } else {
+    state.navigationHidden = !state.navigationHidden;
+    main.classList.toggle('navigation-hidden', state.navigationHidden);
+  }
+  const visible = getComputedStyle($('.record-list')).display !== 'none';
+  $('[data-action="toggle-navigation"]')?.setAttribute('aria-expanded', String(visible));
+}
 function stash() {
+  skillUI.stash();
   const tab = currentTab();
   if (tab && state.editor && state.selected?.id === tab.recordId) {
     tab.scroll = $('.editor-scroll')?.scrollTop || 0;
@@ -180,6 +221,10 @@ function changed() {
   if (!tab.dirty) tab.baseHeads = [...state.selected.heads];
   tab.recordType = state.selected.type;
   tab.dirty = true;
+  if (state.selected.type === 'draft' && $('#draft-workflow .pill')) {
+    $('#draft-workflow .pill').textContent = '待处理 · 待保存';
+    $('#draft-workflow .pill').classList.remove('green');
+  }
   stash();
   noteSaver.changed(tab.id);
   clearTimeout(persistTimer); persistTimer = setTimeout(() => persist().catch(error => toast(error.message, true)), 500);
@@ -199,6 +244,7 @@ async function restoreWorkspaceTabs(workspace) {
 async function refreshRows() {
   const type = ({ notes: 'note', drafts: 'draft', proposals: 'proposal' })[state.view];
   state.rows = await api('records', { type, domain: state.domain || undefined, query: state.query || undefined,
+    ...(type === 'draft' ? { processing: state.query ? 'all' : state.draftFilter } : {}),
     trash: state.view === 'trash', limit: state.listLimit, preview: true });
   if (state.view === 'conflicts') state.rows = state.rows.filter(row => row.conflict);
 }
@@ -212,10 +258,11 @@ function countFor(view) {
 }
 function shell() {
   const active = navs.find(n => n[0] === state.view);
+  const newLabel = state.view === 'drafts' ? '新建草稿' : '新建笔记';
   $('#app').innerHTML = `
     <aside class="sidebar">
       <a class="brand" href="#" data-action="home"><span class="brand-mark">${icon('notebook-pen')}</span><span>StudySelf<small>个人知识工作区</small></span></a>
-      <button class="new-note primary" data-action="new">${icon('plus')}新建笔记</button>
+      <button class="new-note primary" data-action="new">${icon('plus')}${newLabel}</button>
       <nav>${navs.map(([id, i, text]) => `${id === 'libraries' ? '<div class="nav-divider">工作区管理</div>' : ''}<button class="nav-item ${state.view === id ? 'active' : ''}" data-nav="${id}" title="${esc(text)}" aria-label="${esc(text)}">${icon(i)}<span>${text}</span>${countFor(id) ? `<b>${countFor(id)}</b>` : ''}</button>`).join('')}</nav>
       <div class="device"><span class="device-icon">${icon('monitor')}</span><div><strong>${esc(state.snapshot.deviceName)}</strong><small>本地工作区 · v${state.snapshot.version}</small></div>${button('settings-2', 'device-name', '设备名称')}</div>
       <button class="sidebar-status" data-nav="sync"><span class="status-dot ${state.snapshot.sync.configured ? '' : 'amber'}"></span>${state.snapshot.sync.configured ? '同步目录已配置' : '同步尚未配置'}${icon('chevron-right')}</button>
@@ -229,7 +276,8 @@ function shell() {
       <main id="main"></main>
       <footer class="statusbar"><span>${icon('hard-drive')}本地保存</span><span>修改历史自动保留</span><span class="status-right">云端上传状态：由客户端确认</span></footer>
     </div>`;
-  if (state.domain) $('#domain-filter').insertAdjacentHTML('afterend', button('list-tree', 'knowledge-browse', '浏览知识体系'));
+  if (state.domain) $('#domain-filter').insertAdjacentHTML('afterend', button(state.view === 'drafts' ? 'list' : 'list-tree', 'knowledge-browse', state.view === 'drafts' ? '浏览草稿列表' : '浏览知识体系'));
+  $('.tab-add').title = newLabel; $('.tab-add').setAttribute('aria-label', newLabel);
   $('#domain-filter').addEventListener('change', e => run(() => selectLibrary(e.target.value)));
   $('#search').addEventListener('input', e => {
     state.query = e.target.value;
@@ -261,7 +309,7 @@ async function renderView() {
   redrawIcons();
 }
 async function renderLibrary() {
-  $('#main').className = `library-layout${!state.selected ? ' browse-folders' : ''}`;
+  $('#main').className = `library-layout${!state.selected ? ' browse-folders' : state.navigationHidden ? ' navigation-hidden' : ''}`;
   $('#main').innerHTML = `<section class="record-list"></section>
     <section class="document-area" id="document-area"></section>`;
   renderRecordList();
@@ -274,7 +322,7 @@ async function renderLibrary() {
     $('#document-area').innerHTML = `<div class="reading-layout"><div class="empty-state">${icon('trash-2')}<h2>${state.rows.length ? '选择已删除内容' : '回收站暂无内容'}</h2></div></div>`;
     return;
   }
-  $('#document-area').innerHTML = `<div class="reading-layout"><div class="empty-state">${icon(hasLibraries ? 'notebook-pen' : 'folders')}<h2>${!hasLibraries ? '尚无知识库' : state.view === 'trash' ? '回收站' : state.domain ? esc(libraryName(state.domain)) : '全部知识库'}</h2><button class="primary" data-action="${hasLibraries && state.domain ? 'new' : 'library-new'}">${icon('plus')}${hasLibraries && state.domain ? '新建笔记' : '新建知识库'}</button></div></div>`;
+  $('#document-area').innerHTML = `<div class="reading-layout"><div class="empty-state">${icon(hasLibraries ? 'notebook-pen' : 'folders')}<h2>${!hasLibraries ? '尚无知识库' : state.domain ? esc(libraryName(state.domain)) : '全部知识库'}</h2><button class="primary" data-action="${hasLibraries ? 'new' : 'library-new'}">${icon('plus')}${hasLibraries ? state.view === 'drafts' ? '新建草稿' : '新建笔记' : '新建知识库'}</button></div></div>`;
 }
 function renderRecordList() {
   if (noteTreeDrag.active()) return;
@@ -283,20 +331,26 @@ function renderRecordList() {
   const isNotes = state.view === 'notes', tree = isNotes && state.noteView === 'tree';
   const context = JSON.stringify([state.view, state.domain, state.query, tree]);
   const scrollTop = panel.dataset.context === context ? $('.folder-tree,.list-rows', panel)?.scrollTop || 0 : 0;
-  const title = isNotes ? libraryName(state.domain) : `${libraryName(state.domain)} · ${navs.find(n => n[0] === state.view)[2]}`;
+  const sharedList = isNotes || state.view === 'drafts';
+  const title = sharedList ? libraryName(state.domain) : `${libraryName(state.domain)} · ${navs.find(n => n[0] === state.view)[2]}`;
   const count = isNotes && !state.query ? state.knowledgeTree.filter(item => !state.domain || item.data.domain === state.domain).length
     : `${state.rows.length}${state.rows.length >= state.listLimit ? '+' : ''}`;
   const more = (!tree || state.query) && state.rows.length >= state.listLimit
     ? '<button class="text-button load-more" data-action="load-more">加载更多</button>' : '';
-  panel.innerHTML = `<div class="list-heading" ${tree && state.domain ? `data-note-drop-root="${esc(state.domain)}"` : ''}><strong title="${esc(title)}">${esc(title)}</strong><span>${count}</span>${state.view === 'trash' ? '' : button('plus', state.view === 'proposals' ? 'proposal-new' : 'new', isNotes ? '新建顶层笔记' : '新建')}</div>
+  panel.innerHTML = `<div class="list-heading" ${tree && state.domain ? `data-note-drop-root="${esc(state.domain)}"` : ''}><strong title="${esc(title)}">${esc(title)}</strong><span>${count}</span>${state.view === 'trash' ? '' : button('plus', state.view === 'proposals' ? 'proposal-new' : 'new', isNotes ? '新建顶层笔记' : state.view === 'drafts' ? '新建草稿' : '新建')}</div>
+    ${state.view === 'drafts' ? `<label class="draft-filter">处理状态<select id="draft-filter" aria-label="草稿处理状态" ${state.query ? 'disabled' : ''}>${Object.entries({ active: '待处理 / 部分处理', all: '全部草稿', ...processingLabels }).map(([value, title]) => `<option value="${value}" ${(state.query ? 'all' : state.draftFilter) === value ? 'selected' : ''}>${title}</option>`).join('')}</select></label>` : ''}
     ${isNotes ? `<div class="note-view-switch" role="group" aria-label="笔记视图">
       <button data-action="note-view" data-mode="tree" aria-pressed="${tree}">${icon('list-tree')}知识体系</button>
       <button data-action="note-view" data-mode="list" aria-pressed="${!tree}">${icon('list')}笔记列表</button></div>` : ''}
-    ${tree ? hierarchyUI.tree() : `<div class="list-rows">${state.rows.length ? state.rows.map(row => `<button class="record-row ${state.selected?.id === row.id ? 'selected' : ''}" data-record="${row.id}">
+    ${sharedList && !tree ? `<div class="record-navigation-tools"><span>${isNotes ? '笔记列表' : '草稿列表'}</span>${button('list', 'list-summary', state.listSummary ? '切换为紧凑列表' : '显示正文摘要', `aria-pressed="${state.listSummary}"`)}</div>` : ''}
+    ${tree ? hierarchyUI.tree() : `<div class="list-rows">${state.rows.length ? sharedList ? recordRows({ rows: state.rows, selectedId: state.selected?.id, domain: state.domain, summary: state.listSummary, esc, icon, libraryName, formatTime, excerpt, processingLabels, deliveryLabels: label }) : state.rows.map(row => `<button class="record-row ${state.selected?.id === row.id ? 'selected' : ''}" data-record="${row.id}">
     <div class="row-kicker"><span>${esc(libraryName(row.data.domain))}</span><time>${formatTime(row.updatedAt)}</time></div><strong>${row.conflict ? icon('git-merge') : ''}${esc(row.data.title)}</strong>
-    <p>${esc(excerpt(row))}</p><div class="row-tags">${(row.data.tags || []).slice(0, 2).map(tag => `<span>${esc(tag)}</span>`).join('')}<small class="delivery ${row.status}">${label[row.status]}</small></div></button>`).join('') : `<div class="list-empty">${state.query ? '没有匹配的笔记' : '暂无内容'}</div>`}${more}</div>`}
+    <p>${esc(excerpt(row))}</p><div class="row-tags">${row.processing ? `<span class="processing-status">${processingLabels[row.processing.status]}</span>` : ''}${(row.data.tags || []).slice(0, 2).map(tag => `<span>${esc(tag)}</span>`).join('')}<small class="delivery ${row.status}">${label[row.status]}</small></div></button>`).join('') : `<div class="list-empty">${state.query ? '没有匹配的笔记' : '暂无内容'}</div>`}${more}</div>`}
     ${tree ? more : ''}`;
   panel.dataset.context = context;
+  if ($('#draft-filter')) $('#draft-filter').onchange = event => run(async () => {
+    state.draftFilter = event.target.value; state.listLimit = 150; await refreshRows(); renderRecordList();
+  });
   const scroll = $('.folder-tree,.list-rows', panel);
   if (scroll) scroll.scrollTop = scrollTop;
   redrawIcons();
@@ -312,6 +366,7 @@ async function renderDocument(record) {
     ${record.conflict ? `<div class="notice amber">${icon('git-merge')}存在 ${record.versions.length} 个并发版本，未自动覆盖。<button data-action="resolve">对照处理</button></div>` : ''}
     ${hierarchyIssue && !record.conflict ? `<div class="notice amber">${icon('triangle-alert')}${esc(hierarchyIssue)}${editable ? '<button data-action="note-parent">调整笔记层级</button>' : ''}</div>` : ''}
     ${record.deleted ? `<div class="notice amber">${icon('trash-2')}此内容已进入回收站。<button data-action="restore">恢复内容</button></div>` : ''}
+    ${record.type === 'draft' ? '<div id="draft-workflow" class="draft-workflow-bar" aria-label="草稿归档"></div>' : ''}
     <div class="reading-layout ${state.sourceVisible ? 'with-source' : ''}">
       <aside class="source-pane" id="source-pane" aria-label="原附件" ${state.sourceVisible ? '' : 'hidden'}>${sourceHeading(record)}<div class="source-pane-scroll"><div class="source-list" role="status">正在读取原附件…</div></div></aside>
       <article class="editor-panel">
@@ -324,6 +379,9 @@ async function renderDocument(record) {
         <div class="editor-scroll"><div id="editor-content" class="document-content"></div><div id="annotations"></div></div>
       </article>
     </div>`;
+  if (['note', 'draft'].includes(record.type)) {
+    $('.document-actions').insertAdjacentHTML('afterbegin', button('panel-left', 'toggle-navigation', '显示或隐藏笔记导航', `aria-expanded="${!state.navigationHidden && !matchMedia('(max-width:900px)').matches}"`));
+  }
   if (editable) {
     state.editor = new Editor({
       element: $('#editor-content'), extensions: [StarterKit.configure({ codeBlock: false, link: { openOnClick: false, protocols: ['studyself'], isAllowedUri: safeNoteLink } }), experienceCodeBlock, editorMarkers, TableKit.configure({ table: { resizable: true } }), ...richExtensions({ mediaUrl, edit: editBlock })],
@@ -365,8 +423,25 @@ async function renderDocument(record) {
         ? `<div class="proposal-operation">合并更新已有笔记（保留历史）<button class="text-button" data-record="${esc(item.targetId)}">${icon('file-search')}查看原笔记</button></div>`
         : '<div class="proposal-operation muted">新建笔记</div>');
     });
+    const proposalHost = $('.proposal-items');
+    const draftIds = [...new Set(data.items.flatMap(item => (item.draftRefs || []).map(ref => ref.id)))];
+    if (draftIds.length) {
+      const drafts = new Map(await Promise.all(draftIds.map(async id => [id, await api('record', { id })])));
+      if (proposalHost.isConnected && state.selected?.id === record.id) {
+        $$('.proposal-item', proposalHost).forEach((element, index) => {
+          const item = data.items[index];
+          for (const ref of item.draftRefs || []) {
+            const draft = drafts.get(ref.id);
+            const stale = !draft || draft.deleted || draft.conflict || draft.heads.length !== 1 || draft.heads[0] !== ref.versionId;
+            const complete = data.items.some(entry => entry.draftRefs?.some(source => source.id === ref.id && source.versionId === ref.versionId && source.complete));
+            $('.proposal-destination', element).insertAdjacentHTML('afterend', `<div class="proposal-operation">来源草稿：${draft ? `<button class="text-button" data-record="${ref.id}">${esc(draft.data.title)}</button>` : '尚未到达'}${stale ? ' · 来源已变化，待重新核对' : complete ? ' · 完整整理：全部相关项确认后记为已处理' : ' · 部分整理：确认后仍保留待办'}</div>`);
+          }
+        });
+      }
+    }
   } else $('#editor-content').innerHTML = safeHtml(data.content || '', data.format);
   if (['note', 'draft', 'source'].includes(record.type)) {
+    if (record.type === 'draft') void draftUI.refresh(record).catch(error => toast(error.message, true));
     await renderAnnotations(record);
     void renderBacklinks(record);
   }
@@ -403,7 +478,7 @@ async function renderBacklinks(record) {
     if (!details.open || loaded) return;
     const host = details.querySelector('div'); host.textContent = '正在查找…';
     try {
-      const notes = await api('records', { type: 'note' });
+      const notes = [...await api('records', { type: 'note' }), ...await api('records', { type: 'draft' })];
       if (!details.isConnected || state.selected?.id !== record.id || editor?.isDestroyed) return;
       const matches = notes.filter(note => note.id !== record.id && note.versions.some(version => {
         const template = document.createElement('template'); template.innerHTML = safeHtml(version.data.content, version.data.format);
@@ -667,12 +742,13 @@ async function renderAgents() {
   };
 }
 async function renderSettings() {
-  const { preferences: prefs } = await api('agentSkill');
+  const skill = await api('agentSkill');
   let storage;
   try { storage = await api('storageStatus'); }
   catch { storage = { directory: state.snapshot.localDataDirectory, unavailable: true }; }
   $('#main').className = 'settings-view';
-  $('#main').innerHTML = `<div class="page-heading"><div><h1>系统设置</h1></div><button class="secondary" data-action="agent-export">${icon('download')}导出 Skill</button></div>
+  $('#main').innerHTML = `<div class="page-heading"><div><h1>系统设置</h1></div><div class="settings-shortcuts"><button class="secondary" data-action="update-manage">${icon('download')}升级更新</button><button class="secondary" data-action="skill-manage">${icon('book-open-check')}SKILL 管理</button></div></div>
+    <section class="settings-section" id="upgrade-settings" aria-label="升级更新"></section>
     <section class="settings-section" id="storage-settings"><h2>本地存储</h2>
       <label class="field-label">系统工作目录（根目录）<div class="input-with-action"><input id="storage-current" readonly value="${esc(storage.directory)}">${button('copy', 'storage-copy', '复制存储路径')}${native ? button('folder-open', 'storage-open-folder', '在文件管理器中打开') : ''}</div></label>
       ${!storage.unavailable && !storage.pending ? `<div class="storage-actions"><button class="primary" data-action="storage-change" data-mode="select">${icon('folder-cog')}选择或修改根目录</button></div>` : ''}
@@ -684,14 +760,9 @@ async function renderSettings() {
       ${storage.lastChange?.mode === 'migrate' ? `<div class="notice">原目录保留为迁移前副本，请勿同时打开：<span class="storage-path">${esc(storage.lastChange.previous)}</span></div>` : ''}
       ${storage.unavailable ? '<div class="notice amber">当前服务尚未加载存储设置，请重新启动应用。</div>' : storage.pending ? `<div class="notice amber" id="storage-pending"><div><strong>待重启生效 · ${storage.pending.mode === 'migrate' ? '迁移当前工作区' : '打开已有工作区'}</strong><div class="storage-path">${esc(storage.pending.directory)}</div><p>${native ? '重启时应用变更，当前资料继续保存在原目录。' : '关闭并重新启动预览服务后生效，仅刷新网页不会切换目录。'}</p></div></div><div class="heading-actions">${native ? `<button class="primary" data-action="storage-restart">${icon('rotate-cw')}重启并应用</button>` : ''}<button class="secondary" data-action="storage-cancel">${icon('x')}取消变更</button></div>` : `<div class="heading-actions storage-actions"><button class="secondary" data-action="storage-change" data-mode="migrate">${icon('folder-input')}迁移到新目录</button><button class="secondary" data-action="storage-change" data-mode="open">${icon('folder-open')}打开已有工作区</button></div>`}
     </section>
-    <section class="settings-section"><h2>整理偏好</h2><details><summary>需求基线</summary><div class="prose">${safeHtml(prefs.baseline)}</div></details>
-      ${prefs.conflict ? `<div class="notice amber">存在并发偏好，请对照后保存合并版本。Agent 写入已暂停。</div>${prefs.versions.map(version => `<details><summary>${formatTime(version.createdAt)}</summary><pre class="preference-version">${esc(version.data.content)}</pre></details>`).join('')}` : ''}
-      <form id="agent-preferences-form" class="settings-form"><label>我的补充与调整<textarea name="content" rows="8" maxlength="30000">${esc(prefs.content)}</textarea></label><button type="submit" class="primary">${icon('save')}保存偏好版本</button></form><small class="muted agent-version">当前版本：${esc(prefs.version)}</small></section>`;
-  $('#agent-preferences-form textarea').dataset.savedValue = prefs.content;
-  $('#agent-preferences-form').onsubmit = event => {
-    event.preventDefault(); const form = event.target;
-    run(async () => { await api('agentPreferencesSave', { content: new FormData(form).get('content'), parents: prefs.heads }); await render(); toast('偏好版本已保存；Agent 下次写入前须读取新版本'); });
-  };
+    <section class="settings-section" id="skill-management" aria-label="SKILL 管理"></section>`;
+  await skillUI.mount($('#skill-management'), skill);
+  await updateUI.mount($('#upgrade-settings'), state.snapshot.version);
 }
 function requireStorageSaved() {
   stash();
@@ -1233,9 +1304,14 @@ async function editNoteLink() {
   }); };
 }
 const actions = {
+  ...draftUI.actions,
   ...assetUI.actions,
   ...syncUI.actions,
   ...hierarchyUI.actions,
+  'toggle-navigation': toggleNavigation,
+  'list-summary': () => {
+    state.listSummary = !state.listSummary; rememberListSummary(); renderRecordList();
+  },
   'note-view': async target => {
     if (state.view !== 'notes' || !['tree', 'list'].includes(target.dataset.mode)) return;
     state.noteView = target.dataset.mode;
@@ -1243,7 +1319,13 @@ const actions = {
     await persist();
   },
   'knowledge-browse': async () => {
-    await persist(); state.selected = null; state.selectedTab = null; state.view = 'notes'; await render();
+    if (['notes', 'drafts'].includes(state.view) && state.selected && $('.record-list')) {
+      state.navigationHidden = false;
+      $('#main').classList.remove('navigation-hidden');
+      if (matchMedia('(max-width:900px)').matches) $('#main').classList.toggle('browse-folders');
+      return;
+    }
+    await persist(); state.selected = null; state.selectedTab = null; state.view = state.view === 'drafts' ? 'drafts' : 'notes'; await render();
   },
   'library-storage-retry': async target => { await api('libraryDirectory', { id: target.dataset.library }); await render(); },
   'storage-copy': async () => { await navigator.clipboard.writeText(state.snapshot.localDataDirectory); toast('已复制存储路径'); },
@@ -1258,7 +1340,9 @@ const actions = {
   },
   'note-link': editNoteLink,
   'refresh-view': render,
-  'agent-export': async () => downloadSkill(await api('agentSkill')),
+  'agent-export': () => skillUI.export(),
+  'skill-manage': () => $('#skill-management')?.scrollIntoView({ block: 'start', behavior: 'smooth' }),
+  'update-manage': () => $('#upgrade-settings')?.scrollIntoView({ block: 'start', behavior: 'smooth' }),
   'agent-revoke': async target => {
     if (!await confirmBox('撤销 Agent 授权', '<p>撤销后，该凭证不能再读取或修改资料。</p>', '撤销')) return;
     await api('agentRevoke', { id: target.dataset.grant }); await render();
@@ -1267,12 +1351,20 @@ const actions = {
   home: async () => { state.view = 'notes'; await render(); },
   new: async () => {
     if (!activeLibraries().length) { await editLibrary(); return; }
-    if (!state.domain) { state.view = 'libraries'; await render(); toast('请选择要打开的知识库'); return; }
-    requireLibrary();
     const type = state.view === 'drafts' ? 'draft' : 'note';
-    const record = await api('save', { type, data: { title: '未命名笔记', domain: state.domain,
-      ...(type === 'note' ? { parentNoteId: null } : {}), content: '', format: 'html', tags: [] } });
-    await openRecord(record.id); $('#note-title')?.focus(); $('#note-title')?.select();
+    const create = async domain => {
+      const record = await api('save', { type, data: { title: type === 'draft' ? '未命名草稿' : '未命名笔记', domain,
+        ...(type === 'note' ? { parentNoteId: null } : {}), content: '', format: 'html', tags: [] } });
+      await openRecord(record.id); $('#note-title')?.focus(); $('#note-title')?.select();
+    };
+    if (state.domain) { requireLibrary(); await create(state.domain); return; }
+    const dialog = openModal(type === 'draft' ? '新建草稿' : '新建笔记', `<form id="new-record-form" class="settings-form"><label>知识库<select name="domain" required><option value="">选择知识库</option>${libraries().filter(item => !item.deleted && !item.conflict).map(item => `<option value="${esc(item.data.domain)}">${esc(item.data.title)}</option>`).join('')}</select></label><button class="primary" type="submit">创建</button></form>`);
+    $('#new-record-form').onsubmit = event => {
+      event.preventDefault();
+      const form = event.target, domain = form.elements.domain.value, submit = form.querySelector('button[type="submit"]');
+      submit.disabled = true;
+      run(async () => { try { await create(domain); dialog.close(); } finally { submit.disabled = false; } });
+    };
   },
   save: saveNote,
   'toggle-source': () => setSourceVisible(!state.sourceVisible),
@@ -1387,7 +1479,11 @@ const actions = {
   approve: async () => {
     const itemIds = $$('[data-proposal-item]:checked:not(:disabled)').map(el => el.dataset.proposalItem);
     if (!itemIds.length) throw new Error('请选择待确认的内容');
-    state.selected = await api('approve', { id: state.selected.id, parents: state.selected.heads, itemIds }); await render(); toast('选定部分已入库，其余仍待确认');
+    const record = state.selected;
+    await persist();
+    const saved = await api('approve', { id: record.id, parents: record.heads, itemIds });
+    if (state.selected?.id === record.id) { state.selected = saved; await render(); }
+    toast('选定部分已入库，关联草稿处理状态已更新');
   },
   'proposal-edit': async () => {
     const record = state.selected, selectedId = $('[data-proposal-item]:checked:not(:disabled)')?.dataset.proposalItem;
@@ -1505,22 +1601,27 @@ document.addEventListener('keydown', event => {
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') { event.preventDefault(); run(saveNote); }
 });
 window.addEventListener('beforeunload', event => {
-  if (importingFiles || state.tabs.some(t => t.dirty)) { event.preventDefault(); event.returnValue = ''; }
+  if (importingFiles || state.tabs.some(t => t.dirty) || skillUI.dirty()) { event.preventDefault(); event.returnValue = ''; }
 });
 for (const type of ['dragover', 'drop']) document.addEventListener(type, event => {
   if ([...(event.dataTransfer?.types || [])].includes('Files')) event.preventDefault();
 });
 async function init() {
   await loadState();
+  try { state.listSummary = localStorage.getItem('studyself-list-summary') === 'true'; } catch {}
   state.domain = state.snapshot.workspace.domain || '';
   state.collapsedNotes = state.snapshot.workspace.collapsedNotes || [];
   state.noteView = state.snapshot.workspace.noteView === 'list' ? 'list' : 'tree';
   state.sourceVisible = state.snapshot.workspace.sourceVisible === true;
   await restoreWorkspaceTabs(state.snapshot.workspace);
   const tab = currentTab();
-  if (tab) { state.selected = await api('record', { id: tab.recordId }); state.domain = tab.domain || ''; }
+  if (tab) {
+    state.selected = await api('record', { id: tab.recordId }); state.domain = tab.domain || '';
+    state.view = ({ draft: 'drafts', proposal: 'proposals' })[state.selected?.type || tab.recordType] || 'notes';
+  }
   if (state.domain && !activeLibraries().some(item => item.data.domain === state.domain)) state.domain = '';
   await render();
+  await updateUI.start();
   if (state.snapshot.sync.configured) {
     try {
       const report = await syncUI.scanDownloaded();

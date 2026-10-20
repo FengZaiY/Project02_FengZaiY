@@ -42,6 +42,9 @@ Windows 预览的目录按钮通过已鉴权的界面接口调用系统文件夹
 | 当前内容同步、批次与接收断点 | `node --test tests/current-sync.test.mjs`、全量核心及界面/桌面测试；覆盖缺块、重启、损坏前缀、空间不足、重复与并发 |
 | 退役 Git/独立备份兼容模块 | 现有 `git-sync.test.mjs` 等仅维护旧格式读取证据，不恢复当前产品入口 |
 | `web/` 或跨端业务调用 | `npm run build`、`npm run test:ui`，必要时核心测试 |
+| 草稿直接归档、方案来源关联与处理状态 | `npm run test:drafts`、`node --test tests/draft-workflow.test.mjs`；另运行完整核心、知识库/层级/Agent 界面回归，核对来源版本、部分覆盖、未保存修改、取消、重复、失败回滚、双目录同步及授权 |
+| 草稿与正式笔记共用界面 | `npm run test:drafts`、`npm run test:experience`、`npm run test:attachments`；另以 `node scripts/test-editor-experience.mjs --draft` 和 `node scripts/test-note-attachments.mjs --draft` 验证草稿工具/附件，核对导航切换不重建编辑器、紧凑保存、重开草稿范围及窄窗口 |
+| 系统设置的内置 Skill 管理 | `npm run test:skills`、`npm run test:agents`、`npm test`；核对只读文件、导出版本清单、偏好快照、历史取回、保存期间输入、未保存内容保护与过期版本对照。导出生成记录不表示外部安装成功 |
 | 笔记富内容、链接、媒体或画板 | 另运行 `npm run test:rich`，检查所有模板、保存重开、原文件播放、画板像素和桌面/窄窗口截图；原生协议/本地文件绑定另测 `test:desktop` |
 | 思维导图可视化编辑 | 另运行 `npm run test:mindmap`、`node --test tests/mindmap.test.mjs`；覆盖源文本保留、实体编码、中文输入、分支移动/循环/折叠、保存重开、取消、撤销、导出及窗口截图 |
 | 正文富媒体尺寸调整 | 另运行 `npm run test:rich-layout`；覆盖导图八方向实际缩放、图表/画板比例、调节点边界、取消/撤销、键盘、长按编排、双击编辑、保存重开、历史与窄窗口，不以布局属性变化代替可见尺寸验证 |

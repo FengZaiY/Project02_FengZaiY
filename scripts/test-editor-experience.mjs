@@ -4,16 +4,18 @@ import path from 'node:path';
 import assert from 'node:assert/strict';
 import { createServer } from '../src/server.mjs';
 
-const root = path.resolve('artifacts/editor-experience');
+const draftMode = process.argv.includes('--draft');
+const recordType = draftMode ? 'draft' : 'note';
+const root = path.resolve(draftMode ? 'artifacts/draft-editor-experience' : 'artifacts/editor-experience');
 fs.mkdirSync(root, { recursive: true });
 const app = await createServer({ directory: fs.mkdtempSync(path.join(root, 'profile-')), port: 0 });
 const library = app.service.store.saveLibrary({ title: '学习资料' });
 const otherLibrary = app.service.store.saveLibrary({ title: '其他领域' });
 const target = app.service.store.write({ type: 'note', data: { title: '参考概念', domain: library.id, content: '参考内容摘要', format: 'markdown' } });
 const other = app.service.store.write({ type: 'note', data: { title: '跨库参考', domain: otherLibrary.id, content: '其他领域' } });
-const original = app.service.store.write({ type: 'note', data: { title: '交互验证', domain: library.id, format: 'html', content: '<h2>基础概念</h2><p>旧版需要取回的说明</p><p>重复原文</p><p>重复原文</p><h2>实践步骤</h2><p>结尾</p>' } });
+const original = app.service.store.write({ type: recordType, data: { title: '交互验证', domain: library.id, format: 'html', content: '<h2>基础概念</h2><p>旧版需要取回的说明</p><p>重复原文</p><p>重复原文</p><h2>实践步骤</h2><p>结尾</p>' } });
 const oldRevision = original.heads[0];
-app.service.store.write({ id: original.id, type: 'note', parents: original.heads, data: { ...original.data, content: original.data.content.replace('旧版需要取回的说明', '新版说明') } });
+app.service.store.write({ id: original.id, type: recordType, parents: original.heads, data: { ...original.data, content: original.data.content.replace('旧版需要取回的说明', '新版说明') } });
 app.service.store.write({ type: 'annotation', data: { title: '重复备注', domain: library.id, noteId: original.id, quote: '重复原文', content: '测试定位' } });
 app.service.store.write({ type: 'annotation', data: { title: '失配备注', domain: library.id, noteId: original.id, quote: '已经被改掉的原句', content: '保留的心得' } });
 let browser, page;
@@ -23,7 +25,9 @@ try {
   catch { browser = await chromium.launch({ headless: true, channel: 'msedge' }); }
   page = await browser.newPage({ viewport: { width: 1220, height: 892 } });
   page.on('pageerror', error => errors.push(error.message));
-  await page.goto(app.url); await page.locator(`[data-record="${original.id}"]`).click(); await page.locator('.tiptap').waitFor();
+  await page.goto(app.url);
+  if (draftMode) await page.locator('[data-nav=drafts]').click();
+  await page.locator(`[data-record="${original.id}"]`).click(); await page.locator('.tiptap').waitFor();
   await page.evaluate(() => {
     window.initialEditor = document.querySelector('.tiptap').editor;
     window.copiedText = '';
@@ -204,6 +208,7 @@ try {
   assert.ok(app.service.store.history(original.id).some(event => event.id === oldRevision));
   assert.doesNotMatch(app.service.store.get(original.id).data.content, /editor-match|selection-tools|editor-command-menu/);
   assert.match(app.service.store.get(original.id).data.content, new RegExp(`studyself://note/${target.id}`));
+  if (draftMode) await page.locator('[data-nav=notes]').click();
   await page.locator(`[data-record="${target.id}"]`).click();
   await page.waitForFunction(() => document.querySelector('#note-title')?.value === '参考概念');
   await page.locator('.backlinks summary').click();

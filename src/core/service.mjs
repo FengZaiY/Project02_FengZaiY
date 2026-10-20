@@ -10,6 +10,7 @@ import { LocalHierarchy } from './local-hierarchy.mjs';
 import { AssetManagement } from './asset-management.mjs';
 import { previewTrash, emptyTrash } from './trash.mjs';
 import { previewAssetMerge, mergeAssets } from './asset-merge.mjs';
+import { archiveDraft, draftWorkflows } from './draft-workflow.mjs';
 
 const sharedTab = tab => Object.fromEntries(['id', 'recordId', 'title', 'domain', 'scroll']
   .filter(key => Object.hasOwn(tab, key)).map(key => [key, tab[key]]));
@@ -64,6 +65,8 @@ export class Service {
   state() {
     const legacy = [...this.store.list({ type: 'folder' }), ...this.store.list({ type: 'folder', trash: true })];
     const summary = this.store.summary();
+    const workflows = draftWorkflows(this.store);
+    summary.counts.draft = this.store.list({ type: 'draft' }).filter(record => workflows.get(record.id)?.status !== 'processed').length;
     summary.conflicts -= legacy.filter(item => item.conflict).length;
     summary.trash -= legacy.filter(item => item.deleted).length;
     return { ...summary, libraries: this.store.directories.describe(this.store.libraries()), sync: this.transport.config(),
@@ -88,7 +91,8 @@ export class Service {
       case 'agentGrant': return this.agents.createGrant(input);
       case 'agentRevoke': return this.agents.revoke(input.id);
       case 'agentPreferencesSave': return this.agents.savePreferences(input);
-      case 'agentSkill': return { files: this.agents.skillFiles(), preferences: this.agents.preferences() };
+      case 'agentSkill': return this.agents.skillPackage();
+      case 'agentSkillExport': return this.agents.exportSkill();
       case 'librarySave': return this.store.saveLibrary(input);
       case 'noteTree': return this.store.noteTree(input.domain).map(({ data, versions, ...node }) =>
         ({ ...node, data: { title: data.title, domain: data.domain, parentNoteId: data.parentNoteId, noteOrder: data.noteOrder } }));
@@ -108,11 +112,20 @@ export class Service {
         return { directory: this.store.directories.ensure(record) };
       }
       case 'records': {
-        const records = this.store.list(input).filter(record => !['model', 'provider', 'usage', 'task', 'agentPreferences', 'folder'].includes(record.type));
+        let records = this.store.list({ ...input, limit: undefined }).filter(record => !['model', 'provider', 'usage', 'task', 'agentPreferences', 'folder'].includes(record.type));
+        if (input.type === 'draft') {
+          const workflows = draftWorkflows(this.store);
+          records = records.map(record => ({ ...record, processing: workflows.get(record.id) }));
+          if (input.processing && input.processing !== 'all') records = records.filter(record => input.processing === 'active'
+            ? record.processing.status !== 'processed' : record.processing.status === input.processing);
+        }
+        if (input.limit) records = records.slice(0, input.limit);
         return input.preview ? records.map(record => ({ ...record, versions: [],
           data: { ...record.data, content: record.data.content?.slice(0, 1500), messages: record.data.messages?.slice(-1) } })) : records;
       }
       case 'record': return this.store.get(input.id);
+      case 'draftArchive': return archiveDraft(this.store, input);
+      case 'draftWorkflow': return draftWorkflows(this.store).get(input.id) || null;
       case 'save': {
         check(['note', 'draft', 'source', 'annotation', 'relation', 'proposal', 'workspace'].includes(input.type), '该类型不允许直接修改；内置聊天与模型管理已移除');
         if (input.notePlacement) {
@@ -137,7 +150,9 @@ export class Service {
         return this.store.write({ type: 'proposal', data: { title: input.title || '待确认整理方案', domain: input.domain || '通用',
           ...(input.folderId ? { folderId: input.folderId } : {}),
           items: input.items.map(item => ({ id: uuid(), targetId: item.targetId || uuid(), parents: item.parents || [],
+            ...(item.draftRefs !== undefined ? { draftRefs: item.draftRefs } : {}),
             data: { title: item.title, content: item.content || '', domain: input.domain || '通用', tags: item.tags || [],
+              ...(item.format !== undefined ? { format: item.format } : {}),
               ...(item.folderId || input.folderId ? { folderId: item.folderId || input.folderId } : {}),
               ...(item.parentNoteId !== undefined || input.parentNoteId !== undefined ? { parentNoteId: item.parentNoteId ?? input.parentNoteId ?? null } : {}),
               sourceIds: item.sourceIds || [], assetIds: item.assetIds || [], sensitive: item.sensitive === true },

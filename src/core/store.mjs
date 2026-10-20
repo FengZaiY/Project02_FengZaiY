@@ -5,6 +5,7 @@ import os from 'node:os';
 import { randomBytes } from 'node:crypto';
 import { TYPES, CONTENT_TYPES } from './catalog.mjs';
 import { richReferences } from './rich-content.mjs';
+import { cleanDraftRefs, requireSaved, validateDraftRefs } from './draft-workflow.mjs';
 import { validateAssetChange } from './asset-management.mjs';
 import { LibraryDirectories, legacyLibraryId } from './library-directories.mjs';
 import { folderTree, folderEmpty, placedTypes, validatePlacement } from './hierarchy.mjs';
@@ -15,7 +16,7 @@ const GLOBAL_SCOPE = '__all_libraries__';
 
 const COMMON = ['title', 'domain', 'tags', 'sensitive'];
 const FIELDS = {
-  note: [...COMMON, 'content', 'format', 'sourceIds', 'assetIds', 'parentNoteId', 'noteOrder'],
+  note: [...COMMON, 'content', 'format', 'sourceIds', 'assetIds', 'parentNoteId', 'noteOrder', 'draftOrigin'],
   draft: [...COMMON, 'content', 'format', 'sourceIds', 'assetIds'],
   conversation: [...COMMON, 'messages', 'modelId', 'assetIds'],
   source: [...COMMON, 'content', 'format', 'url', 'assetIds'],
@@ -46,6 +47,7 @@ export function cleanData(type, data) {
     if (Object.hasOwn(result, field)) check(result[field] === null || isId(result[field]), '目录标识无效');
   }
   if (Object.hasOwn(result, 'noteOrder')) check(validNoteOrder(result.noteOrder), '笔记顺序无效或过长');
+  if (Object.hasOwn(result, 'draftOrigin')) result.draftOrigin = cleanDraftRefs([result.draftOrigin])[0];
   check(Buffer.byteLength(canonical(result)) <= 1024 * 1024, 'A single revision must be smaller than 1 MB');
   if (type === 'library') {
     check(result.title.trim().length > 0 && result.title.length <= 100, '知识库名称须为 1 至 100 个字符');
@@ -111,7 +113,10 @@ export function cleanData(type, data) {
       const body = cleanData('note', item.data);
       check(Array.isArray(item.parents) && item.parents.every(isId), 'Invalid proposal base versions');
       check(item.reason === undefined || typeof item.reason === 'string' && item.reason.length <= 4000, '方案理由最多 4000 字');
+      check(item.acceptedVersionId === undefined || item.status === 'accepted' && isId(item.acceptedVersionId), '方案确认版本无效');
       return { id: item.id, targetId: item.targetId, parents: item.parents, data: body, ...(item.reason !== undefined ? { reason: item.reason } : {}),
+        ...(item.draftRefs !== undefined ? { draftRefs: cleanDraftRefs(item.draftRefs) } : {}),
+        ...(item.acceptedVersionId !== undefined ? { acceptedVersionId: item.acceptedVersionId } : {}),
         status: item.status === 'accepted' ? 'accepted' : 'pending' };
     });
   }
@@ -511,12 +516,21 @@ export class Store {
       check(canonical(record.heads) === canonical([...parents].sort()), 'Proposal has changed', 'CONFLICT');
       check(Array.isArray(itemIds) && itemIds.length > 0 && itemIds.every(id => record.data.items.some(i => i.id === id)), 'Select valid proposal items');
       const items = structuredClone(record.data.items);
-      for (const item of orderedProposalItems(this, items, itemIds)) {
+      const selected = orderedProposalItems(this, items, itemIds);
+      if (!selected.length) return record;
+      for (const item of selected) {
+        validateDraftRefs(this, item.draftRefs);
+        requireSaved(this, [item.targetId]);
         check(item.data.domain !== GLOBAL_SCOPE, '请先为方案选择目标知识库');
         const library = this.libraries().find(entry => entry.data.domain === item.data.domain);
         check(!library || (!library.deleted && !library.conflict), '方案目标知识库已删除或存在冲突');
-        this.writeRaw({ id: item.targetId, type: 'note', data: item.data, parents: item.parents });
+        if (item.draftRefs?.length) {
+          item.data.sourceIds = [...new Set([...(item.data.sourceIds || []), ...item.draftRefs.map(ref => ref.id)])];
+          item.data.sensitive ||= item.draftRefs.some(ref => this.get(ref.id).data.sensitive);
+        }
+        const event = this.writeRaw({ id: item.targetId, type: 'note', data: item.data, parents: item.parents });
         item.status = 'accepted';
+        if (item.draftRefs?.length) item.acceptedVersionId = event.id;
       }
       this.writeRaw({ id: proposalId, type: 'proposal', data: { ...record.data, items }, parents: record.heads });
       return this.get(proposalId);

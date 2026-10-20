@@ -28,10 +28,13 @@ export function skillZip(files) {
   return new Blob([...chunks, ...directory, end], { type: 'application/zip' });
 }
 
-export function downloadSkill({ files, preferences }) {
+export function skillExportFiles({ files, preferences, skillVersion, exportVersion }) {
   if (preferences.conflict) throw new Error('请先合并整理偏好冲突，再导出 Skill');
-  const contents = { ...files, 'references/preferences.md': `${preferences.baseline}\n\n## 用户补充（导出快照）\n\n${preferences.content || '暂无补充'}\n\n偏好版本：${preferences.version}\n` };
-  const url = URL.createObjectURL(skillZip(contents)), link = document.createElement('a');
+  return { ...files, 'references/preferences.md': `${preferences.baseline}\n\n## 用户补充（导出快照）\n\n${preferences.content || '暂无补充'}\n\n偏好版本：${preferences.version}\n`,
+    ...(skillVersion && exportVersion ? { 'manifest.json': JSON.stringify({ name: 'studyself-organize', protocolVersion: 1, skillVersion, preferencesVersion: preferences.version, exportVersion }, null, 2) } : {}) };
+}
+export function downloadSkill(bundle) {
+  const url = URL.createObjectURL(skillZip(skillExportFiles(bundle))), link = document.createElement('a');
   link.href = url; link.download = 'studyself-organize.zip'; link.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }

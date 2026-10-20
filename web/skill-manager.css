@@ -1,0 +1,28 @@
+.skill-heading,.skill-heading>div,.skill-summary,.skill-form-actions { display:flex; align-items:center; flex-wrap:wrap; gap:10px; }
+.skill-heading { justify-content:space-between; }
+.skill-heading h2 { width:100%; margin-bottom:0; }
+.skill-heading strong { font-size:14px; overflow-wrap:anywhere; }
+.skill-summary { margin-top:14px; font-size:12px; color:var(--muted); }
+.skill-versions { display:flex; flex-wrap:wrap; gap:14px 28px; margin:16px 0; font-size:12px; }
+.skill-versions dt { color:var(--muted); margin-bottom:5px; }
+.skill-versions dd { margin:0; overflow-wrap:anywhere; }
+.skill-export-note { color:var(--muted); font-size:12px; line-height:1.7; }
+.skill-tabs { display:flex; flex-wrap:wrap; border-bottom:1px solid var(--line); margin:18px 0; gap:6px; }
+.skill-tabs button { border-radius:0; border-bottom:2px solid transparent; padding:9px 12px; }
+.skill-tabs button[aria-selected=true] { color:var(--green); border-bottom-color:var(--green); }
+[data-skill-panel][hidden] { display:none; }
+.skill-file-layout { display:grid; grid-template-columns:minmax(150px,220px) minmax(0,1fr); gap:16px; margin-bottom:12px; }
+.skill-file-layout nav { display:flex; flex-direction:column; gap:3px; }
+.skill-file-layout nav button { justify-content:flex-start; text-align:left; white-space:normal; padding:8px; font-size:12px; }
+.skill-file-layout nav span { overflow-wrap:anywhere; min-width:0; }
+.skill-file-layout [aria-current=true] { background:var(--green-soft); color:var(--green); }
+.skill-file-layout section { min-width:0; }
+.skill-file-toolbar { display:flex; align-items:center; justify-content:space-between; gap:8px; font-size:12px; }
+.skill-file-toolbar strong { overflow-wrap:anywhere; }
+#skill-file-body { background:#f6f8f7; border:1px solid var(--line); border-radius:4px; padding:14px; max-height:420px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; font:12px/1.8 Consolas,monospace; }
+#skill-form-error { color:var(--red); overflow-wrap:anywhere; }
+.skill-history { padding:12px 0; border-bottom:1px solid var(--line); }
+.skill-history summary { cursor:pointer; font-size:12px; }
+.skill-history pre { max-height:260px; overflow:auto; }
+#skill-edit-status { color:var(--muted); font-size:12px; }
+@media(max-width:700px) { .skill-file-layout { grid-template-columns:minmax(0,1fr); } .skill-file-layout nav { flex-direction:row; flex-wrap:wrap; } }

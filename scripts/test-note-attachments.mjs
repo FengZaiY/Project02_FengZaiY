@@ -4,7 +4,8 @@ import path from 'node:path';
 import assert from 'node:assert/strict';
 import { createServer } from '../src/server.mjs';
 
-const root = path.resolve('artifacts/ui-note-attachments');
+const draftMode = process.argv.includes('--draft');
+const root = path.resolve(draftMode ? 'artifacts/ui-draft-attachments' : 'artifacts/ui-note-attachments');
 fs.mkdirSync(root, { recursive: true });
 const app = await createServer({ directory: fs.mkdtempSync(path.join(root, 'profile-')), port: 0 });
 let browser;
@@ -18,7 +19,7 @@ try {
     return app.service.call('assetImport', { path: file, domain });
   };
   const a = await create('课程讲义.txt'), b = await create('补充资料.txt'), inline = await create('正文资料.txt'), outside = await create('其他库私有资料.txt', other.id);
-  const note = store.write({ type: 'note', data: { title: '原附件管理', domain: library.id, assetIds: [a.id],
+  const note = store.write({ type: draftMode ? 'draft' : 'note', data: { title: '原附件管理', domain: library.id, assetIds: [a.id],
     format: 'html', content: `<p>我的学习笔记</p><p><a href="studyself://asset/${inline.id}">正文引用讲义</a></p>` } });
   const shared = store.write({ type: 'note', data: { title: '另一篇笔记', domain: library.id, assetIds: [a.id] } });
   try { browser = await chromium.launch({ headless: true }); }
@@ -26,6 +27,7 @@ try {
   const page = await browser.newPage({ viewport: { width: 1220, height: 892 } });
   page.on('pageerror', error => errors.push(error.message));
   await page.goto(app.url);
+  if (draftMode) await page.locator('[data-nav=drafts]').click();
   await page.locator(`[data-record="${note.id}"]`).click();
   await page.getByRole('button', { name: '原附件', exact: true }).click();
   const row = id => page.locator(`[data-source-asset="${id}"]`);
@@ -160,7 +162,7 @@ try {
   for (let i = 0; i < 5; i++) await splitter.press('ArrowRight');
   // A remote update must not be silently overwritten or turned into a branch.
   const remoteBase = store.get(note.id);
-  const remote = store.write({ id: note.id, type: 'note', parents: remoteBase.heads, data: { ...remoteBase.data, content: '<p>另一端的新正文</p>' } });
+  const remote = store.write({ id: note.id, type: note.type, parents: remoteBase.heads, data: { ...remoteBase.data, content: '<p>另一端的新正文</p>' } });
   await action(imported.id, '解除与当前笔记的关联');
   await page.locator('[data-confirm]').click();
   await page.locator('[data-action=save][data-status=conflict]').waitFor();

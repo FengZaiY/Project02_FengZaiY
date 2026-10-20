@@ -79,6 +79,20 @@
 
 仅选子项而未入库的新父项未被选中时，系统拒绝本次确认并提示依赖；先确认父项或同时确认父子项。确认事务中按依赖写入，任何旧目标版本冲突或无效层级都会整体回滚本次选择，其他先前已确认项不受影响。
 
+## 草稿归档关联
+
+`propose` 每个方案项可携带 `draftRefs: [{id, versionId, complete?}]`（与 data 同级，最多 100 个不同草稿）。id 必须是可访问草稿，versionId 必须是该草稿当前唯一 heads[0]；冲突、回收、未保存或过期资料需要先由用户处理。关联草稿及该历史版本的全部引用和敏感标记同样接受授权检查。
+
+默认仅表示部分提炼。只有整份方案覆盖该来源版本全部内容时，才在相应关联上声明 `complete:true`，并在 content/reason 解释范围和遗漏。用户能在预览看到“完整整理/部分整理”。同一方案针对该草稿版本的所有关联项均经用户确认、结果笔记存在且无冲突时，完整方案才把草稿计为已处理；部分覆盖即使全部项确认仍计部分处理。任一完整方案完成即可结束该版本待办，不自动确认其他备选方案。
+
+例如单项完整整理：`{draftRefs:[{id:"<草稿 ID>",versionId:"<当前 heads[0]>",complete:true}],data:{title:"整理结果",domain:"<目标库>",content:"完整整理正文"}}`。多项拆解时每个相关项都必须带关联，不能漏掉待处理部分以提前完成。只有 sourceIds 不会推断归档状态，旧方案不会被追认完成。
+
+`proposalRevise` 省略 draftRefs 时保留原关联；显式提供时不得移除旧草稿 ID。来源有新修改时先重读正文，再调整相关待确认项及 versionId；已确认项保留其原来源版本。确认产生只读 acceptedVersionId，并将来源草稿加入正式笔记 sourceIds；这不删除原件或草稿历史。
+
+正式笔记可能包含系统维护的 `draftOrigin:{id,versionId}`，代表用户直接归档。Agent 修改或提案融合该笔记时系统保留此字段，Agent 不能新增或改写它。`draftArchive`、`draftWorkflow` 和确认接口均属受信任界面，不通过 Agent RPC 开放。处理状态不作为可写字段；保存偏好与确认权仍归用户。
+
+关联元数据随 v3 清单传输，使用这些字段前所有同步电脑须更新；不改写旧事件哈希。运行时 bootstrap 读取最新协议和 Skill，旧导出包不会自动改写安装目录。
+
 ## 富内容正文
 
 在 `format: "html"` 正文使用 `h1` 至 `h6`、表格、`mark` 文字高亮、`aside data-callout="note"` 高亮块。任务列表使用 `ul data-type="taskList"`，项为 `li data-type="taskItem" data-checked="true|false"`，项内正文放在 `div` 中。

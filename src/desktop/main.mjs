@@ -3,7 +3,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { StorageLocation } from '../core/storage-location.mjs';
-import { check, prettyError, uuid, isId, noSymlink } from '../core/util.mjs';
+import { check, prettyError, uuid, isId, noSymlink, atomicWrite } from '../core/util.mjs';
+import updaterPackage from 'electron-updater';
+import { UpdateManager, assertUpdateIdle } from './updates.mjs';
 import { mediaResponse } from '../core/media.mjs';
 import { importClipboardImage } from './clipboard-import.mjs';
 
@@ -17,7 +19,8 @@ if (smokeTest) {
   // Keep smoke-test Chromium state and its single-instance lock away from the user's app.
   if (profileArg) app.setPath('userData', path.join(path.resolve(profileArg.slice('--data-dir='.length)), 'electron-profile'));
 }
-let service, storage, window;
+let service, storage, window, updates;
+let activeCalls = 0, installingUpdate = false, allowClose = false;
 if (!app.requestSingleInstanceLock()) app.quit();
 else {
   app.on('second-instance', () => { if (window) { if (window.isMinimized()) window.restore(); window.focus(); } });
@@ -49,11 +52,49 @@ else {
     if (url !== new URL(`file:///${entry.replace(/\\/g, '/')}`).href) event.preventDefault();
   });
   window.webContents.session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
+  const updateSettingsFile = path.join(app.getPath('userData'), 'update-settings.json');
+  let updateSettings = {};
+  try { updateSettings = JSON.parse(fs.readFileSync(updateSettingsFile, 'utf8')); } catch {}
+  const metadata = JSON.parse(fs.readFileSync(path.join(base, 'package.json'), 'utf8'));
+  updates = new UpdateManager({ version: app.getVersion(), packaged: app.isPackaged, source: metadata.studyselfUpdateSource,
+    autoCheck: updateSettings.autoCheck !== false,
+    saveAutoCheck: autoCheck => atomicWrite(updateSettingsFile, JSON.stringify({ autoCheck })),
+    createUpdater: source => new updaterPackage.NsisUpdater(source),
+    notify: status => {
+      if (installingUpdate && status.phase === 'error') {
+        installingUpdate = false; allowClose = false;
+        service.startTimer(); void service.agents.resume();
+      }
+      if (!window.isDestroyed()) window.webContents.send('studyself:update-status', status);
+    } });
   ipcMain.handle('studyself:call', async (event, { method, input = {} }) => {
+    let counted = false;
     try {
       check(event.sender === window.webContents && event.senderFrame === window.webContents.mainFrame, 'Untrusted request');
+      check(!installingUpdate || method === 'updateStatus', '正在退出并安装更新，请稍候');
+      activeCalls++; counted = true;
       let value;
-      if (method === 'importClipboardImage') {
+      if (method === 'updateStatus') value = updates.status();
+      else if (method === 'updateConfigure') value = updates.configure(input);
+      else if (method === 'updateCheck') value = await updates.check();
+      else if (method === 'updateDownload') value = await updates.download();
+      else if (method === 'updateInstall') {
+        updates.requireDownloaded();
+        check(input.rendererReady === true, '请在系统设置中确认并关闭未保存内容后更新');
+        assertUpdateIdle(service, storage, activeCalls);
+        const answer = dialog.showMessageBoxSync(window, { type: 'question', title: '重启并更新',
+          message: `安装 StudySelf ${updates.status().latestVersion}？`,
+          detail: '应用将退出并打开安装程序。未发布的修改保留在本机，不会自动同步。',
+          buttons: ['稍后更新', '重启并更新'], defaultId: 0, cancelId: 0 });
+        if (answer !== 1) value = updates.status();
+        else {
+          assertUpdateIdle(service, storage, activeCalls);
+          installingUpdate = true; allowClose = true;
+          clearInterval(service.timer); service.timer = null;
+          service.agents.stop();
+          value = updates.install();
+        }
+      } else if (method === 'importClipboardImage') {
         value = await importClipboardImage(service, input);
       } else if (method === 'storageOpenFolder') {
         const error = await shell.openPath(service.store.directory);
@@ -118,14 +159,19 @@ else {
           await writeFile(result.filePath, buffer);
         }
         value = !result.canceled;
-      } else if (method === 'version') value = { version: app.getVersion(), updates: 'manual-installer' };
+      } else if (method === 'version') value = { version: app.getVersion(), updates: 'online-release' };
       else value = await service.call(method, input);
       return { value };
     } catch (error) { return { error: prettyError(error) }; }
+    finally { if (counted) activeCalls--; }
   });
   await window.loadFile(entry);
   service.startTimer();
-  let allowClose = false;
+  if (updates.updater && updates.status().autoCheck && !smokeTest) {
+    const timer = setTimeout(() => { void updates.check().catch(() => {}); }, 5000);
+    timer.unref();
+    app.once('before-quit', () => clearTimeout(timer));
+  }
   window.on('close', event => {
     if (allowClose || smokeTest) return;
     event.preventDefault();

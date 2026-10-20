@@ -3,7 +3,7 @@ export function createHierarchyUI({ state, api, esc, icon, button, render, persi
   const notes = domain => state.knowledgeTree.filter(item => item.data.domain === domain);
   function options(domain, selected = '', excluded, proposed = []) {
     const candidates = notes(domain).filter(item => item.id !== excluded && !item.issue);
-    const descendants = new Set([excluded]);
+    const descendants = new Set(excluded ? [excluded] : []);
     for (let i = 0; i < 16; i++) for (const item of candidates) if (descendants.has(item.data.parentNoteId)) descendants.add(item.id);
     const pending = proposed.filter(item => item.status !== 'accepted' && item.targetId !== excluded && item.data.domain === domain
       && !candidates.some(note => note.id === item.targetId));

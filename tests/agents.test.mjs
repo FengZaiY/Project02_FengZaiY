@@ -9,7 +9,8 @@ import { FolderTransport, makePairingKey } from '../src/core/transport.mjs';
 import { BackupManager } from '../src/core/backup.mjs';
 import { uuid, sha } from '../src/core/util.mjs';
 import { call as client } from '../skills/studyself-organize/scripts/client.mjs';
-import { skillZip } from '../web/skill-export.js';
+import { skillZip, skillExportFiles } from '../web/skill-export.js';
+import JSZip from 'jszip';
 
 const root = path.resolve('artifacts/agent-tests');
 fs.mkdirSync(root, { recursive: true });
@@ -259,4 +260,48 @@ test('workspace publication strips retired chat payloads and portable skill ZIP 
   assert.equal(zip.readUInt32LE(zip.length - 22), 0x06054b50);
   assert.equal(zip.readUInt16LE(zip.length - 12), 4);
   fs.writeFileSync(path.join(root, 'studyself-organize.zip'), zip);
+});
+
+test('built-in skill export versions match bootstrap and preserve an exact portable snapshot', async t => {
+  const { service, store, rpc } = await setup(t);
+  const initial = await service.call('agentSkill');
+  assert.equal(initial.lastGenerated, null);
+  assert.equal(initial.skillVersion, (await rpc('bootstrap')).skillVersion);
+  const prefs = service.agents.savePreferences({ content: '保留出处 <script>不可执行</script>', parents: [] });
+  const next = await service.call('agentSkill');
+  assert.equal(next.skillVersion, initial.skillVersion);
+  assert.notEqual(next.exportVersion, initial.exportVersion);
+  const historyCount = store.history(prefs.id).length;
+  const generated = await service.call('agentSkillExport');
+  assert.equal(store.history(prefs.id).length, historyCount, 'export is not a knowledge revision');
+  assert.equal(generated.lastGenerated.version, generated.exportVersion);
+  const files = skillExportFiles(generated), zip = await JSZip.loadAsync(await skillZip(files).arrayBuffer());
+  for (const [name, text] of Object.entries(files)) assert.equal(await zip.file(`studyself-organize/${name}`).async('string'), text);
+  assert.match(files['references/preferences.md'], /保留出处 <script>/);
+  assert.equal(JSON.parse(files['manifest.json']).preferencesVersion, prefs.version);
+  const serialized = JSON.stringify(files);
+  assert.equal(serialized.includes(service.store.directory), false);
+  assert.equal(serialized.includes(service.agents.grants()[0].hash), false);
+  for (const method of ['agentSkill', 'agentSkillExport', 'agentPreferencesSave']) await assert.rejects(rpc(method), /FORBIDDEN/);
+  const updated = service.agents.savePreferences({ content: '新补充', parents: prefs.heads });
+  assert.notEqual((await service.call('agentSkill')).exportVersion, generated.lastGenerated.version);
+  assert.deepEqual((await service.call('agentSkill')).lastGenerated, generated.lastGenerated);
+  assert.equal(updated.content, '新补充');
+});
+
+test('skill preference history restoration appends a revision and stale/conflicting exports stay protected', async t => {
+  const { service, store } = await setup(t);
+  const first = service.agents.savePreferences({ content: '原始偏好', parents: [] });
+  const second = service.agents.savePreferences({ content: '新的偏好', parents: first.heads });
+  const historical = store.history(first.id).find(event => event.id === first.heads[0]);
+  const restored = service.agents.savePreferences({ content: historical.data.content, parents: second.heads });
+  assert.equal(restored.content, '原始偏好');
+  assert.equal(store.history(first.id).length, 3);
+  assert.deepEqual(store.event(historical.id), historical);
+  assert.throws(() => service.agents.savePreferences({ content: '过期覆盖', parents: first.heads }), { code: 'CONFLICT' });
+  const generated = await service.call('agentSkillExport');
+  store.write({ id: first.id, type: 'agentPreferences', parents: second.heads, allowBranch: true,
+    data: { title: '整理偏好', domain: '__settings__', content: '另一电脑' } });
+  await assert.rejects(service.call('agentSkillExport'), { code: 'CONFLICT' });
+  assert.deepEqual((await service.call('agentSkill')).lastGenerated, generated.lastGenerated);
 });
