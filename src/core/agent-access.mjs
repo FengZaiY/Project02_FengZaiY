@@ -5,7 +5,10 @@ import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { check, uuid, now, sha, canonical, atomicWrite, noSymlink, prettyError } from './util.mjs';
 import { richReferences } from './rich-content.mjs';
+import { preservePresentation, samePresentation, validatePageBasis } from './presentation.mjs';
+import { presentationLimits } from './presentation-schema.mjs';
 import { cleanDraftRefs, validateDraftRefs } from './draft-workflow.mjs';
+import { handleMcp } from './agent-mcp.mjs';
 
 const skillRoot = fileURLToPath(new URL('../../skills/studyself-organize/', import.meta.url));
 const skillNames = ['SKILL.md', 'references/preferences.md', 'references/api.md', 'scripts/client.mjs'];
@@ -56,6 +59,7 @@ export class AgentAccess {
   status() {
     return { enabled: !!this.server?.listening, requestedEnabled: this.store.local('agentEnabled') === true,
       url: this.server?.listening ? `http://127.0.0.1:${this.server.address().port}` : null,
+      mcpUrl: this.server?.listening ? `http://127.0.0.1:${this.server.address().port}/mcp` : null,
       error: this.error, grants: this.grants().map(({ hash, ...grant }) => grant),
       audit: this.store.local('agentAudit') || [], preferences: this.preferences(), protocolVersion: 1 };
   }
@@ -105,6 +109,11 @@ export class AgentAccess {
       if (!seen.has(key)) { seen.add(key); this.checkData(grant, event.data, seen, virtual); }
     };
     if (data.draftOrigin) checkDraft(data.draftOrigin);
+    for (const ref of data.presentation?.basis?.sources || []) {
+      const event = this.store.event(ref.versionId), key = `version:${ref.versionId}`;
+      check(event?.entityId === ref.id && readableTypes.includes(event.type), '页面依据版本不可访问', 'FORBIDDEN');
+      if (!seen.has(key)) { seen.add(key); this.checkData(grant, event.data, seen, virtual); }
+    }
     if (data.parentNoteId) this.readable(grant, this.store.get(data.parentNoteId) || virtual.get(data.parentNoteId), seen, virtual);
     for (const item of data.items || []) {
       for (const ref of item.draftRefs || []) checkDraft(ref);
@@ -159,7 +168,7 @@ export class AgentAccess {
   read(grant, method, input) {
     if (method === 'bootstrap') {
       const files = this.skillFiles();
-      return { protocolVersion: 1, skillVersion: sha(canonical(files)), skill: files['SKILL.md'], apiReference: files['references/api.md'],
+      return { protocolVersion: 1, capabilities: { mcp: { transport: 'streamable-http', toolPrefix: 'studyself_' }, presentation: { version: 1, runtime: 'quickjs-page-v1', limits: presentationLimits } }, skillVersion: sha(canonical(files)), skill: files['SKILL.md'], apiReference: files['references/api.md'],
         preferences: this.preferences(), access: { domains: grant.domains, permissions: grant.permissions, sensitive: grant.sensitive, expiresAt: grant.expiresAt } };
     }
     if (method === 'libraries') return this.store.libraries().filter(item => this.canRead(grant, item)).map(({ id, data, heads, conflict }) => ({ id, data, heads, conflict }));
@@ -250,12 +259,14 @@ export class AgentAccess {
         check(item.draftRefs === undefined || (old.draftRefs || []).every(ref => item.draftRefs.some(next => next.id === ref.id)),
           '不能移除待确认项的来源草稿关联');
         const targetId = this.store.get(old.targetId) ? old.targetId : undefined;
-        updates.set(item.id, { ...this.proposalItem(grant, { ...item, draftRefs: item.draftRefs ?? old.draftRefs,
+        updates.set(item.id, { ...this.proposalItem(grant, { ...item, data: preservePresentation(item.data, old.data), draftRefs: item.draftRefs ?? old.draftRefs,
           reason: item.reason ?? old.reason, targetId, parents: old.parents }), id: old.id, targetId: old.targetId });
       }
       return write('proposal', { ...record.data, items: record.data.items.map(item => updates.get(item.id) || item) }, record.id, input.parents);
     }
     check(record.type === (method === 'noteUpdate' ? 'note' : 'draft'), '记录类型不符');
+    if (method === 'noteUpdate') check(!Object.hasOwn(input.data, 'presentation') || samePresentation(input.data.presentation, record.data.presentation), '交互页面替换或移除须提交方案，由用户确认', 'FORBIDDEN');
+    input = { ...input, data: preservePresentation(input.data, record.data) };
     check(input.data.domain === record.data.domain, '改换知识库请提交方案，不直接移动');
     check((input.data.folderId || null) === (record.data.folderId || null), '调整目录归属请提交整理方案，由用户确认');
     check((input.data.parentNoteId || null) === (record.data.parentNoteId || null), '调整知识体系请提交整理方案，由用户确认');
@@ -278,6 +289,8 @@ export class AgentAccess {
       validateDraftRefs(this.store, draftRefs);
       for (const ref of draftRefs) this.readable(grant, this.store.get(ref.id));
     }
+    item = { ...item, data: preservePresentation(item.data, target?.data) };
+    if (!samePresentation(item.data.presentation, target?.data.presentation)) validatePageBasis(this.store, item.data);
     const data = target ? { ...(target.data.folderId !== undefined ? { folderId: target.data.folderId } : {}),
       ...(target.data.parentNoteId !== undefined ? { parentNoteId: target.data.parentNoteId } : {}), ...item.data, sensitive: target.data.sensitive || item.data.sensitive === true,
       sourceIds: [...new Set([...(target.data.sourceIds || []), ...(item.data.sourceIds || [])])],
@@ -311,9 +324,15 @@ export class AgentAccess {
       res.setHeader('X-Content-Type-Options', 'nosniff');
       try {
         check(req.headers.host === `127.0.0.1:${server.address()?.port}` && !req.headers.origin, '仅接受本机 Agent 请求，不允许浏览器跨域', 'FORBIDDEN');
-        check(req.method === 'POST' && req.url === '/v1/rpc', 'Unsupported endpoint');
+        const mcp = req.url === '/mcp';
+        check(mcp || (req.method === 'POST' && req.url === '/v1/rpc'), 'Unsupported endpoint');
         const token = req.headers.authorization?.replace(/^Bearer /, '');
         this.authenticate(token);
+        if (mcp && req.method !== 'POST') {
+          res.writeHead(405, { Allow: 'POST', 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ jsonrpc: '2.0', id: null, error: { code: -32000, message: '只支持 POST；本机 MCP 不提供独立 SSE 或会话删除接口' } }));
+          return;
+        }
         check(req.headers['content-type']?.split(';')[0] === 'application/json', 'Expected application/json');
         let size = 0; const chunks = [];
         for await (const chunk of req) {
@@ -322,14 +341,32 @@ export class AgentAccess {
           chunks.push(chunk);
         }
         const grant = this.authenticate(token);
-        const value = this.dispatch(grant, JSON.parse(Buffer.concat(chunks).toString('utf8')));
+        let body;
+        try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
+        catch {
+          if (!mcp) throw Object.assign(new Error('JSON 格式无效'), { code: 'INVALID' });
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'JSON 格式无效' } }));
+          return;
+        }
+        if (mcp) {
+          if (Array.isArray(body)) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ jsonrpc: '2.0', id: null, error: { code: -32600, message: '每次 MCP 请求只允许一条消息' } }));
+            return;
+          }
+          await handleMcp(this, token, req, res, body); return;
+        }
+        const value = this.dispatch(grant, body);
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(JSON.stringify({ value }));
       } catch (error) {
+        if (res.headersSent || res.destroyed) { if (!res.destroyed) res.end(); return; }
         res.writeHead(error.code === 'UNAUTHORIZED' ? 401 : error.code === 'FORBIDDEN' ? 403 : ['CONFLICT', 'PREFERENCES_CHANGED'].includes(error.code) ? 409 : 400,
           { 'Content-Type': 'application/json; charset=utf-8' });
         const known = ['INVALID', 'CONFLICT', 'PREFERENCES_CHANGED', 'UNAUTHORIZED', 'FORBIDDEN', 'ASSET_UNAVAILABLE'];
-        res.end(JSON.stringify({ error: known.includes(error.code) ? prettyError(error) : { code: 'ERROR', message: '请求未完成，请检查参数或在系统内核对文件状态' } }));
+        const failure = known.includes(error.code) ? prettyError(error) : { code: 'ERROR', message: '请求未完成，请检查参数或在系统内核对文件状态' };
+        res.end(JSON.stringify(req.url === '/mcp' ? { jsonrpc: '2.0', id: null, error: { code: -32000, message: failure.message, data: { code: failure.code } } } : { error: failure }));
       }
     });
     server.requestTimeout = 15000; server.headersTimeout = 10000; server.maxConnections = 16;

@@ -1,5 +1,15 @@
 # Architecture
 
+## Interactive note presentations
+
+Notes, drafts and proposed note data optionally contain `presentation.v = 1`: validated HTML/CSS, QuickJS source, JSON initial data, declared asset/note IDs, and a body hash plus source revision IDs. `content`/`format` remain the complete searchable/editable knowledge. The hash is SHA-256 of UTF-8 `JSON.stringify([format || 'markdown', content || ''])`. Bodies and pages share the existing immutable revision, 1 MiB limit, encrypted current sync and history. JSON projections retain the whole definition; Markdown/PDF deliver static knowledge and disclose that runnable interaction is excluded. No bulk conversion or changed old hashes.
+
+Omitted presentation fields inherit the selected parent definition; explicit null removes it. Body-only changes retain the prior page and default to the updated body. Conflicting page definitions require an explicit choice. Agent `noteUpdate` cannot replace/remove a formal page even with edit permission. `propose`/`proposalRevise` carry reviewed designs; confirmation validates target/source revisions, saved state and declared originals inside the existing selected-item transaction. Unchanged inherited pages may remain stale. New designs cannot be confirmed with stale body hashes or source revisions. The shared reference scanner includes page resources and design sources, with historical sensitivity checks in Agent reads and history protection in deletion. Attachment merging conservatively refuses page references that cannot be rewritten safely.
+
+The renderer mounts a no-script `srcdoc` document in the note surface (`sandbox=allow-same-origin`, no allow-scripts), allowing only the trusted parent to render validated content. It never evaluates page programs there. A dedicated Worker embeds local QuickJS Wasm with a 32 MiB guest heap, 1 s initialization and 200 ms callbacks; an independent host watchdog terminates stuck workers. The guest has only JSON data and the bounded `page` SDK, no browser, filesystem, database, network or credential objects. Commands are validated again in the host. Trusted code renders local ECharts SVG, KaTeX and Mermaid; user HTML cannot declare script, external URLs, forms, subframes or event attributes. CSP enables Wasm compilation but not arbitrary JS eval; iframe CSP denies script/connect and permits only host-mapped media/local fonts. Initial nodes, message size, batches, timers, chart size/count and queued inputs are capped.
+
+Mode switches preserve the original Tiptap instance and attachment pane, dispose guest programs/media/charts, and ignore detached asynchronous results. Stop/restart are explicit, temporary controls do not write note versions. Proposal/history previews are on demand, never automatic Agent execution or confirmation. The SDK supports controls/events, visibility, text/validated HTML/styles, charts, formulas/diagrams, timer steps and bounded animations; arbitrary browser packages, remote embeds and persistent app state are outside this contract. Sync peers must upgrade before using the field.
+
 ## Process boundaries
 
 `src/core` is independent of Electron. Each device owns one SQLite database with WAL journaling. The Windows renderer has no Node integration. A sandboxed preload exposes only a bounded RPC entry point; the main process checks the sending frame. Windows secrets use `safeStorage`. The browser development adapter binds only to loopback, checks Host and Origin, and requires a random per-process token on mutation requests.
@@ -249,6 +259,14 @@ The trusted UI exposes a destination dialog, pending/partial/processed filters, 
 Agents may submit versioned draft references with proposals and revise only pending items. They cannot remove existing source IDs from pending associations, write direct-archive provenance or confirmation receipts, or call archive/approval methods. Both current and referenced historical draft content are included in recursive authorization, and trash protection follows these references. This is an audit of user-confirmed coverage, not a claim that software can independently prove semantic completeness of extracted knowledge.
 
 Node tests simulate separate profiles and transfer directories, reversal of directions, concurrent edits, dependencies, replay, corrupt transfers, deletes/restores, small/large files, partial approvals, backups, external Agent privacy boundaries, request deduplication, preference versions and workspace adoption.
+
+## Local MCP Adapter
+
+`agent-mcp.mjs` uses the official MCP SDK with a stateless Streamable HTTP transport on the existing Agent port at `/mcp`. The original `/v1/rpc` remains compatible. Each HTTP request validates Host, rejects Origin and authenticates the local Bearer credential before bounded body parsing; tool callbacks reauthenticate before calling the same `AgentAccess.dispatch`. No transport-specific write path or new authority is introduced.
+
+Tools are named and schema-validated, with permission-filtered discovery. Write arguments carry the existing preference version and request ID; MCP and HTTP share transaction receipts. Data and nested references still pass existing historical/sensitive authorization. Tool failures preserve known business error codes without exposing filesystem paths. The server emits JSON responses, does not retain sessions, and refuses batches, standalone SSE GET and session deletion; SDK transports are closed with the response. System RPC, approvals, erasures, configuration and credential management remain UI-only.
+
+`web/agent-mcp.js` shows the current MCP endpoint and copyable Codex / generic HTTP configurations without secrets. Skill bootstrap is the live source of protocol and preference instructions. The SDK and Zod are production dependencies for Electron and preview; local source verification does not imply a rebuilt installer or third-party client certification. See [connection guide](agent-mcp.md).
 
 ## Built-in Skill Management
 

@@ -5,13 +5,15 @@ import assert from 'node:assert/strict';
 import { createServer } from '../src/server.mjs';
 import { call } from '../skills/studyself-organize/scripts/client.mjs';
 import { uuid } from '../src/core/util.mjs';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 
 const root = path.resolve('artifacts/ui-agents');
 fs.mkdirSync(root, { recursive: true });
 const app = await createServer({ directory: fs.mkdtempSync(path.join(root, 'profile-')), port: 0 });
 const library = app.service.store.saveLibrary({ title: '自主研究' });
 const existingPreferences = app.service.agents.savePreferences({ content: '已有偏好：保留完整出处。', parents: [] });
-let browser;
+let browser, mcpClient;
 const errors = [];
 try {
   try { browser = await chromium.launch({ headless: true }); }
@@ -31,9 +33,20 @@ try {
   await page.locator('#agent-enabled').waitFor();
   assert.equal(await page.locator('#agent-preferences-form,[data-action="agent-export"]').count(), 0);
   assert.equal(await page.locator('#agent-enabled').isChecked(), false);
+  assert.equal(await page.locator('#agent-mcp-copy-config').isDisabled(), true);
   await page.locator('#agent-enabled').check();
   await page.waitForFunction(() => document.querySelector('#agent-url')?.textContent.startsWith('http:'));
   const url = await page.locator('#agent-url').innerText();
+  assert.equal(await page.locator('#agent-mcp-url').innerText(), `${url}/mcp`);
+  assert.match(await page.locator('#agent-mcp-config').inputValue(), /bearer_token_env_var = "STUDYSELF_AGENT_TOKEN"/);
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+  await page.locator('#agent-mcp-copy-url').click();
+  assert.equal(await page.evaluate(() => navigator.clipboard.readText()), `${url}/mcp`);
+  await page.locator('#agent-mcp-client').selectOption('http');
+  await page.locator('#agent-mcp-copy-config').click();
+  const copied = JSON.parse(await page.evaluate(() => navigator.clipboard.readText()));
+  assert.equal(copied.mcpServers.studyself.url, `${url}/mcp`);
+  assert.match(copied.mcpServers.studyself.headers.Authorization, /填写/);
   await page.locator('#agent-grant-form input[name=name]').fill('外部整理助手');
   await page.locator('#agent-grant-form input[name=domains]').check();
   await page.locator('#agent-grant-form button[type=submit]').click();
@@ -51,12 +64,17 @@ try {
   await page.locator('#agent-preferences-form').waitFor();
   assert.equal(await page.locator('#agent-preferences-form textarea').inputValue(), '每个案例附适用条件，不做默认优劣排名。');
   const boot = await call('bootstrap', {}, undefined, env);
+  mcpClient = new Client({ name: 'studyself-ui-test', version: '1.0.0' });
+  await mcpClient.connect(new StreamableHTTPClientTransport(new URL(`${url}/mcp`), { requestInit: { headers: { Authorization: `Bearer ${token}` } } }));
+  assert.ok((await mcpClient.listTools()).tools.some(tool => tool.name === 'studyself_propose'));
   assert.match(boot.preferences.content, /适用条件/);
   const source = await call('sourceCreate', { preferencesVersion: boot.preferences.version,
     data: { title: '课程原文', domain: library.id, content: '原始课程资料', url: 'https://example.invalid/course' } }, uuid(), env);
-  const proposal = await call('propose', { preferencesVersion: boot.preferences.version, title: '外部 Agent 整理方案', domain: library.id,
+  const proposed = await mcpClient.callTool({ name: 'studyself_propose', arguments: { requestId: uuid(), preferencesVersion: boot.preferences.version, title: '外部 Agent 整理方案', domain: library.id,
     content: '待补充：第二节课程截图',
-    items: ['概念', '案例'].map(title => ({ data: { title, domain: library.id, content: `${title}的待确认正文`, sourceIds: [source.id] } })) }, uuid(), env);
+    items: ['概念', '案例'].map(title => ({ data: { title, domain: library.id, content: `${title}的待确认正文`, sourceIds: [source.id] } })) } });
+  assert.ok(!proposed.isError, proposed.content[0].text);
+  const proposal = proposed.structuredContent.value;
   await page.locator('[data-nav="proposals"]').click();
   await page.locator(`[data-record="${proposal.id}"]`).click();
   await page.locator('.proposal-summary', { hasText: '第二节课程截图' }).waitFor();
@@ -80,6 +98,11 @@ try {
     const footer = await page.locator('.statusbar').boundingBox();
     assert.ok(footer.y + footer.height <= height + 1);
     await page.screenshot({ path: path.join(root, `agents-${width}.png`), fullPage: true });
+    await page.locator('#agent-mcp-client').selectOption('http');
+    await page.locator('#agent-mcp-config').scrollIntoViewIfNeeded();
+    const configBox = await page.locator('#agent-mcp-config').boundingBox();
+    assert.ok(configBox.x >= 0 && configBox.x + configBox.width <= width, 'MCP configuration fits viewport');
+    await page.screenshot({ path: path.join(root, `mcp-${width}.png`), fullPage: true });
     await page.locator('#main').evaluate(element => { element.scrollTop = element.scrollHeight; });
     const audit = await page.locator('.settings-section').last().boundingBox();
     assert.ok(audit.y < height && audit.y + audit.height <= height + 1, 'audit is reachable');
@@ -110,9 +133,11 @@ try {
   await page.locator('#modal [data-confirm]').click();
   await page.waitForFunction(() => document.querySelector('#main')?.textContent.includes('已撤销'));
   await assert.rejects(call('bootstrap', {}, undefined, env), /UNAUTHORIZED/);
+  await assert.rejects(mcpClient.listTools(), /401|授权/);
   await page.locator('#agent-enabled').uncheck();
   await page.waitForFunction(() => document.querySelector('#agent-url')?.textContent === '未开启');
+  assert.equal(await page.locator('#agent-mcp-url').innerText(), '未开启');
   assert.deepEqual(errors, []);
-  fs.writeFileSync(path.join(root, 'report.json'), JSON.stringify({ passed: true, errors, checks: ['system settings entry', 'preserve existing preferences', 'no settings in Agent page', 'enable', 'grant', 'preferences persistence', 'real local HTTP proposal', 'partial approval', 'settings skill ZIP', 'revoke', 'disable', 'scroll and resize'] }, null, 2));
+  fs.writeFileSync(path.join(root, 'report.json'), JSON.stringify({ passed: true, errors, checks: ['system settings entry', 'preserve existing preferences', 'no settings in Agent page', 'enable', 'grant', 'preferences persistence', 'HTTP source and MCP proposal', 'MCP config and clipboard', 'partial approval', 'settings skill ZIP', 'HTTP and MCP revoke', 'disable', 'scroll and resize'] }, null, 2));
   console.log('PASS: Agent authorization, external API to reviewed proposal, preferences, Skill export and revocation.');
-} finally { await browser?.close(); await app.close(); }
+} finally { await mcpClient?.close(); await browser?.close(); await app.close(); }

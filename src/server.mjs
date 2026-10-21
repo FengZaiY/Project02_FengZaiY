@@ -72,7 +72,7 @@ export async function createServer({ directory = path.join(project, '.local', 'p
       }
       check(req.method === 'GET', 'Unsupported request method');
       const staticNames = new Map([['/', 'index.html'], ['/index.html', 'index.html'], ['/app.js', 'app.js'], ['/app.js.map', 'app.js.map'],
-        ['/docx-worker.js', 'docx-worker.js'], ['/style.css', 'style.css']]);
+        ['/docx-worker.js', 'docx-worker.js'], ['/presentation-worker.js', 'presentation-worker.js'], ['/page-formula.css', 'page-formula.css'], ['/style.css', 'style.css']]);
       const generated = /^\/(?:app\.css|fonts\/[A-Za-z0-9_-]+\.(?:woff2?|ttf))$/.test(url.pathname) ? url.pathname.slice(1) : undefined;
       const name = staticNames.get(url.pathname) || generated;
       if (!name) { res.writeHead(404); res.end('Not found'); return; }

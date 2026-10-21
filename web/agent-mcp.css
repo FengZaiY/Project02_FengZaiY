@@ -1,0 +1,7 @@
+.agent-mcp { min-width: 0; }
+.agent-mcp .definition-list > div { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.agent-mcp .definition-list code { min-width: 0; overflow-wrap: anywhere; }
+.agent-mcp-controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 12px 0 8px; }
+.agent-mcp-controls select { min-width: 180px; max-width: 100%; padding-right: 30px; }
+.agent-mcp textarea { display: block; box-sizing: border-box; width: 100%; min-width: 0; resize: vertical; font-family: Consolas, monospace; line-height: 1.6; padding: 10px; }
+.agent-mcp .muted { overflow-wrap: anywhere; }

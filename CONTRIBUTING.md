@@ -34,6 +34,8 @@ Windows 预览的目录按钮通过已鉴权的界面接口调用系统文件夹
 
 ## 验证矩阵
 
+MCP 适配使用生产依赖 `@modelcontextprotocol/sdk` 和 `zod`，与原 HTTP 共用授权及业务执行。修改后运行 `node --test tests/agent-mcp.test.mjs tests/agents.test.mjs`、`npm run test:agents`、`npm run test:skills` 和 `npm run test:desktop`。工具目录不是权限校验的替代，禁止将受信任界面 RPC 暴露为通用 MCP 调用器。客户端连接配置见 [接入说明](docs/agent-mcp.md)。
+
 | 改动类型 | 至少执行 |
 |---|---|
 | 文档和目录约定 | `npm run check:project` |
@@ -43,6 +45,7 @@ Windows 预览的目录按钮通过已鉴权的界面接口调用系统文件夹
 | 退役 AI 数据迁移 | `node --test tests/retired-ai.test.mjs`、全量核心、`test:ui`、`test:agents`、`test:skills`、`test:storage`；检查旧密钥和正文删除、正常笔记与草稿保护、旧同步重复/新分支拦截、工作区替换身份一致及失败回滚 |
 | 退役 Git/独立备份兼容模块 | 现有 `git-sync.test.mjs` 等仅维护旧格式读取证据，不恢复当前产品入口 |
 | `web/` 或跨端业务调用 | `npm run build`、`npm run test:ui`，必要时核心测试 |
+| 交互笔记契约、运行时或页面设计流程 | `npm test`、`npm run build`、`npm run test:presentation`、`test:ui`、`test:rich`、`test:experience`、`test:agents`、`test:skills`、`test:drafts`、`test:assets`、`test:libraries`、`test:desktop`；检查方案/局部重做/待更新/恢复、资源及历史授权、事务回滚、加密双目录同步、隔离逃逸/死循环/超量消息，以及 1220/931/600 实际截图。图表须实际可见，不能只凭存在 canvas 或内存像素断言成功 |
 | 草稿直接归档、方案来源关联与处理状态 | `npm run test:drafts`、`node --test tests/draft-workflow.test.mjs`；另运行完整核心、知识库/层级/Agent 界面回归，核对来源版本、部分覆盖、未保存修改、取消、重复、失败回滚、双目录同步及授权 |
 | 草稿与正式笔记共用界面 | `npm run test:drafts`、`npm run test:experience`、`npm run test:attachments`；另以 `node scripts/test-editor-experience.mjs --draft` 和 `node scripts/test-note-attachments.mjs --draft` 验证草稿工具/附件，核对导航切换不重建编辑器、紧凑保存、重开草稿范围及窄窗口 |
 | 系统设置的内置 Skill 管理 | `npm run test:skills`、`npm run test:agents`、`npm test`；核对只读文件、导出版本清单、偏好快照、历史取回、保存期间输入、未保存内容保护与过期版本对照。导出生成记录不表示外部安装成功 |

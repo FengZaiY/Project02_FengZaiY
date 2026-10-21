@@ -1,6 +1,18 @@
 # 本机 API v1
 
-地址由系统“外部 Agent”页显示，通常是 `http://127.0.0.1:<端口>`。仅本机使用，应用必须运行，端口保存于设备，不固定假设端口号。不提供 MCP，本 Skill 使用 HTTP。
+地址由系统“外部 Agent”页显示。仅本机使用，应用必须运行，端口保存于设备，不固定假设端口号。支持 MCP Streamable HTTP 与原 HTTP RPC，共用相同授权、审计及写入幂等记录。
+
+## MCP 接入
+
+连接 `http://127.0.0.1:<端口>/mcp`，在请求头传 `Authorization: Bearer <凭证>`。使用标准 MCP 客户端握手与发现工具；无服务端会话，不提供旧 HTTP+SSE、stdio 或 OAuth 授权流程。只接受本机请求，Host 必须匹配，拒绝 Origin；仅支持云端执行或浏览器跨域的客户端不能直接连接。
+
+工具名是 `studyself_` + 下划线方法名，例如 `studyself_bootstrap`、`studyself_record`、`studyself_draft_create`、`studyself_propose`、`studyself_proposal_revise`。每个工具都有输入 schema，目录按凭证权限过滤。下文各方法的 input 字段直接作为工具 arguments，写入在同一层提供 `requestId` 与 `preferencesVersion`；不要再包装成任意 method/input 转发。
+
+成功返回 `structuredContent: {value: ...}` 与同值 JSON 文本。业务失败返回 `isError: true` 与含 `error.code/message` 的文本；过期凭证在 HTTP 层返回 401。写入重试复用相同 requestId 和正文；跨 MCP / HTTP 重放同样幂等。先调用 bootstrap 读取实际规则和授权，每批写入前再次读取。不自动调用确认入库或系统设置。
+
+MCP 配置示例不包含真实凭证，由受信任界面显示/复制。已连接 MCP 的 Agent 不需要脚本环境变量或 Node；凭证在宿主连接设置中管理。Skill 安装副本仍只是快照，bootstrap 返回的最新规则优先。
+
+## 兼容 HTTP RPC
 
 `POST /v1/rpc`，请求头 `Authorization: Bearer <凭证>`、`Content-Type: application/json`。
 不得发送 Origin；浏览器脚本不允许跨域接入。接口地址与开发预览页面地址不同。
@@ -130,6 +142,44 @@ Mermaid 界面模板包括流程、框架/架构（flowchart 分组）、思维�
 授权检查会独立解析正文和来源网址中的内部引用，包括 Markdown 链接，不依赖 `sourceIds` / `assetIds` 是否列全。新媒体块保存时补全附件列表；历史内容及其哈希不改写。省略引用列表不能绕过跨库或敏感权限。局部修改保留原始块、来源和任务状态；两台电脑都需更新后再编辑富内容，旧编辑器可能丢弃未知节点。
 
 Markdown 导出保留富内容块的 HTML/JSON 和内部链接，但不是原文件打包；第三方 Markdown 阅读器不保证可渲染或解析 StudySelf 链接。
+
+## 交互式整页笔记（presentation v1）
+
+先读取 `bootstrap.capabilities.presentation`：version=1、runtime=quickjs-page-v1 及 limits。HTTP 协议仍为 1；同步电脑需要升级支持新字段，旧事件与哈希不改写。note/draft 的 data 和 propose 候选可携带可选 `presentation`。content/format 始终保留完整知识正文用于编辑、搜索和静态导出。
+
+结构：`{v:1,html,css,script,data,assetIds:[],noteIds:[],basis:{contentHash,sources:[{id,versionId}]}}`。所有字段必填；html/css/script 是字符串，data 是 JSON 对象。contentHash 为小写 SHA-256：对 UTF-8 的 `JSON.stringify([正文format || "markdown", 正文content || ""])` 求哈希，不使用整个 data。sources 列出实际设计依据的稳定 ID 和读取时唯一 heads[0]，不要把目标笔记自己列为其外部依据；目标版本由 parents 校验。
+
+正文/页面整体小于 1 MiB；HTML 最多 200000 字、CSS/script 各 100000 字、data 最多 200000 字，最多 2000 个页面节点、各 100 个附件/笔记/依据引用。资源先正常导入，用稳定 ID 引用。程序和 data 不放原文件、路径或凭证。HTML 可用语义章节、表格、折叠、按钮及 text/number/range/checkbox/radio 输入；元素 id 用字母开头的字母数字下划线短横线，最长 80 字。图片/视频写 `<img data-asset-id="UUID">` / `<video data-asset-id="UUID" controls>`；笔记跳转写 `<button data-note-id="UUID">查看笔记</button>`。引用须在对应 manifest 列表声明。不能用 script、iframe、链接/资源 URL、内联事件、form 或任意属性；CSS 不允许 URL、导入及字体加载。公式和图表通过下述接口呈现。
+
+script 在隔离 QuickJS 中运行，不存在 DOM/window/fetch/Node/文件系统/数据库。只能使用 `page`：
+
+| 接口 | 行为 |
+|---|---|
+| `page.data` | 本次运行的初始数据副本，可作临时状态，不自动保存 |
+| `page.on(id,event,fn)` | event 为 click/input/change/select；回调收到 id/type/value/checked，图表 select 另含 name/index |
+| `page.text(id,text)` / `page.html(id,html)` | 更新文字/经相同规则校验的 HTML |
+| `page.style(id,css)` / `page.show(id,bool)` / `page.value(id,value)` | 替换内联样式、显隐、更新输入值 |
+| `page.chart(id,options)` | 在有明确尺寸的元素上绘制本地 ECharts；纯 JSON 选项，不能使用 formatter、外部图片、链接或 toolbox；每页最多 8 张、单图最多 400 万 CSS 像素 |
+| `page.formula(id,source)` / `page.diagram(id,source)` | 沿用已有 KaTeX/Mermaid 严格渲染 |
+| `page.every(timerId,ms,fn)` / `page.cancel(timerId)` | 每页最多 16 个计时器，间隔 50 至 60000 毫秒；繁忙时跳过计时帧 |
+| `page.animate(id,frames,options)` | 最多 30 关键帧；opacity/transform/backgroundColor/color/offset；duration 50 至 60000、iterations 1 至 100；其他可选项 direction/easing/fill |
+
+每轮最多 200 条命令及 256 KiB 消息；QuickJS 堆内存 32 MiB，初始化计算 1 秒，回调 200 毫秒。超时、错误或非法输出停止交互，用户仍可读正文和重新运行。离开/切换会释放运行实例，不能依赖临时状态跨页保留。不调用原生 setTimeout/setInterval，使用 page.every/cancel。
+
+最小示例（contentHash 须由本次完整正文计算）：
+
+```json
+{
+  "v": 1,
+  "html": "<h2>参数实验</h2><label for=\"n\">输入</label><input id=\"n\" type=\"number\" value=\"2\"><output id=\"result\">4</output>",
+  "css": "body{max-width:900px;margin:auto}output{display:block;font-size:24px}",
+  "script": "page.on('n','input',e=>page.text('result',String(Number(e.value)*2)));",
+  "data": {}, "assetIds": [], "noteIds": [],
+  "basis": {"contentHash": "<按本次正文计算的64位SHA256>", "sources": []}
+}
+```
+
+正式页面替换/移除只走方案，不能借 edit 权限 noteUpdate；移除明确传 null。旧客户端省略 presentation 时保留原设计；proposalRevise 省略时保留原候选设计。正文变化后旧摘要使页面显示待更新，不能只换摘要来假装已重做。仅修改正文而原样保留旧页面的方案允许待更新状态；提交新设计和确认时分别核验正文摘要/依据版本，确认还校验原件完整性；过期、未保存、冲突或缺件阻止当前批次。依据的历史版本、页面附件/笔记引用都参与范围和敏感授权，省略 sourceIds/assetIds 不能绕过；页面本身不取得 Agent 凭证或自动写入能力。
 
 ## 可靠性
 

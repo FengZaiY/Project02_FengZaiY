@@ -1,5 +1,9 @@
 # 0.1.0 验证记录
 
+最新 MCP 接入结果见 [2026-10-21 MCP 验证](verification-agent-mcp-2026-10-21.md)。
+
+最新交互笔记结果见 [2026-10-21 交互式笔记验证](verification-interactive-notes-2026-10-21.md)。
+
 最新同级拖动与排序结果见 [2026-10-14 笔记排序验证](verification-note-order-2026-10-14.md)。
 
 最新笔记分级拖动及目录跟随结果见 [2026-10-14 笔记树拖动验证](verification-note-tree-drag-2026-10-14.md)。

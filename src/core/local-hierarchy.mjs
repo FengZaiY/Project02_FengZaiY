@@ -167,7 +167,7 @@ export class LocalHierarchy {
             used.add(this.write(path.join(directory, `${stem}.json`), JSON.stringify({ format: 1, id: record.id, type: record.type,
               data: record.data, heads: record.heads, versions: record.versions, deleted: record.deleted, original }, null, 2), files));
             if (typeof record.data.content === 'string') used.add(this.write(path.join(directory, `${stem}.md`),
-              `# ${record.data.title}\n\n${record.data.content}\n`, files));
+              `# ${record.data.title}\n\n${record.data.content}\n${record.data.presentation ? '\n本文件为知识正文，不包含可运行交互；完整页面定义保留在同名 JSON 中。\n' : ''}`, files));
             report.records++;
           } catch (error) { report.errors.push({ id: record.id, message: error.message }); }
         }

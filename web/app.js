@@ -6,6 +6,7 @@ import { Editor } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
 import { TableKit, createTable } from '@tiptap/extension-table';
 import { createSkillManager } from './skill-manager.js';
+import { mcpConnectionMarkup, bindMcpConnection } from './agent-mcp.js';
 import { createUpdateUI } from './update-manager.js';
 import { createSyncUI } from './sync-pages.js';
 import { cleanNoteHtml, richExtensions, hydrateRich, editRichBlock, addRichMarkdownRules, diagramTemplates } from './rich-editor.js';
@@ -24,6 +25,8 @@ import './asset-preview.css';
 import './draft-workflow.css';
 import { recordRows } from './record-navigation.js';
 import './record-navigation.css';
+import { mountPageMode } from './presentation-mode.js';
+import { mountPresentation } from './presentation-view.js';
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -61,6 +64,7 @@ const GLOBAL_SCOPE = '__all_libraries__';
 const state = { view: 'notes', domain: '', query: '', snapshot: null, rows: [], tabs: [], selectedTab: null,
   selected: null, editor: null, sourceVisible: false, listLimit: 150, knowledgeTree: [], collapsedNotes: [], noteView: 'tree', draftFilter: 'active', listSummary: false, navigationHidden: false };
 let persistTimer, queryTimer, refreshTimer, modalCleanup, sourcePreviewUrl, editorExperience;
+let pageMode;
 let sourceLoadSerial = 0;
 let previewSerial = 0, pendingPreview, sourcePreviewController;
 let persistQueue = Promise.resolve(), importingFiles = 0;
@@ -93,6 +97,7 @@ const noteSaver = createNoteAutosave({
     tab.domain = saved.data.domain;
     if (unchanged) { tab.dirty = false; delete tab.draft; delete tab.baseHeads; }
     else { tab.baseHeads = [...saved.heads]; }
+    void pageMode?.refresh();
     if (state.selected?.id === saved.id && $('#source-pane')?.dataset.ready === 'true') void renderSources(saved);
     void persist().catch(error => toast(`正文已保存，工作区位置保存失败：${error.message}`, true));
     const row = state.rows.find(item => item.id === saved.id);
@@ -257,6 +262,7 @@ function changed() {
     $('#draft-workflow .pill').classList.remove('green');
   }
   stash();
+  void pageMode?.refresh();
   noteSaver.changed(tab.id);
   clearTimeout(persistTimer); persistTimer = setTimeout(() => persist().catch(error => toast(error.message, true)), 500);
 }
@@ -330,6 +336,7 @@ async function renderView() {
   if (importingFiles) return;
   previewSerial++; pendingPreview?.abort();
   assetUI.dispose();
+  pageMode?.destroy(); pageMode = null;
   if (sourcePreviewUrl) { URL.revokeObjectURL(sourcePreviewUrl); sourcePreviewUrl = null; }
   stash(); state.editor?.destroy(); state.editor = null;
   if (libraryViews.includes(state.view)) await renderLibrary();
@@ -389,6 +396,7 @@ function renderRecordList() {
   redrawIcons();
 }
 async function renderDocument(record) {
+  pageMode?.destroy(); pageMode = null;
   const tab = currentTab();
   const data = tab?.recordId === record.id && tab.draft ? tab.draft : record.data;
   const editable = ['note', 'draft', 'source', 'annotation'].includes(record.type) && !record.deleted && !record.conflict;
@@ -437,6 +445,7 @@ async function renderDocument(record) {
     });
     editorExperience = experience;
     mountedEditor.on('destroy', () => { experience.destroy(); if (editorExperience === experience) editorExperience = null; });
+    mountedEditor.on('destroy', () => { pageMode?.destroy(); pageMode = null; });
     updateSaveStatus();
     $('#note-title').addEventListener('input', changed);
     $('#heading-level').onchange = event => { const chain = state.editor.chain().focus(); const level = Number(event.target.value); if (level) chain.setHeading({ level }).run(); else chain.setParagraph().run(); };
@@ -451,6 +460,10 @@ async function renderDocument(record) {
     $('#editor-content').innerHTML = `${data.content ? `<section class="proposal-summary prose">${safeHtml(data.content)}</section>` : ''}<div class="proposal-items">${data.items.map(item => `<section class="proposal-item"><label class="check-row"><input type="checkbox" data-proposal-item="${item.id}" ${item.status === 'accepted' ? 'disabled checked' : ''}><strong>${esc(item.data.title)}</strong><span class="pill ${item.status === 'accepted' ? 'green' : ''}">${item.status === 'accepted' ? '已确认' : '待确认'}</span></label><div class="proposal-destination">${icon('folder')}目标：${esc(libraryName(item.data.domain))}<span>出处 ${item.data.sourceIds?.length || 0} · 附件 ${item.data.assetIds?.length || 0}</span></div><div class="prose">${safeHtml(item.data.content, item.data.format)}</div></section>`).join('')}</div><div class="sticky-actions"><button class="primary" data-action="approve">确认选中部分</button><button class="secondary" data-action="proposal-edit">修改待确认部分</button></div>`;
     $$('.proposal-item').forEach((element, index) => {
       const item = data.items[index];
+      if (item.data.presentation) {
+        const preview = document.createElement('button'); preview.className = 'secondary'; preview.textContent = '预览交互页面';
+        preview.onclick = () => previewPresentation(item.data); element.append(preview);
+      }
       $('.proposal-destination', element).insertAdjacentHTML('afterend', `<div class="proposal-operation">上级笔记：${esc(hierarchyUI.proposalPath(data.items, item))}</div>${item.reason ? `<div class="proposal-reason">${esc(item.reason)}</div>` : ''}`);
       $('.proposal-destination', element).insertAdjacentHTML('afterend', item.parents?.length
         ? `<div class="proposal-operation">合并更新已有笔记（保留历史）<button class="text-button" data-record="${esc(item.targetId)}">${icon('file-search')}查看原笔记</button></div>`
@@ -473,6 +486,10 @@ async function renderDocument(record) {
       }
     }
   } else $('#editor-content').innerHTML = safeHtml(data.content || '', data.format);
+  if (['note', 'draft'].includes(record.type)) pageMode = mountPageMode($('.editor-panel'), {
+    getData: () => currentTab()?.draft || state.selected?.data || data, mediaUrl,
+    openNote: id => run(() => openRecord(id)), editable: !!state.editor
+  });
   if (['note', 'draft', 'source'].includes(record.type)) {
     if (record.type === 'draft') void draftUI.refresh(record).catch(error => toast(error.message, true));
     await renderAnnotations(record);
@@ -738,11 +755,12 @@ async function renderSync() {
 async function renderAgents() {
   const access = await api('agentStatus');
   $('#main').className = 'settings-view';
-  $('#main').innerHTML = `<div class="page-heading"><div><div class="eyebrow">本机授权 · HTTP API v1</div><h1>外部 Agent</h1></div></div>
+  $('#main').innerHTML = `<div class="page-heading"><div><div class="eyebrow">本机授权 · MCP / HTTP</div><h1>外部 Agent</h1></div></div>
     <section class="settings-section"><h2>连接</h2><label class="check-row"><input id="agent-enabled" type="checkbox" ${access.enabled || access.requestedEnabled ? 'checked' : ''}>允许本机外部 Agent 访问</label>
       <div class="definition-list"><div><span>接口地址</span><code id="agent-url">${esc(access.url || '未开启')}</code></div><div><span>网络范围</span><strong>仅 127.0.0.1</strong></div></div>
       ${access.error ? `<div class="notice danger">${esc(access.error)}</div>` : ''}
       <div class="notice amber">${icon('shield-alert')}凭证可访问所选资料，请仅交给可信 Agent。模型调用和费用由外部 Agent 管理。</div></section>
+    ${mcpConnectionMarkup(access, { esc, icon })}
     <section class="settings-section"><h2>新建授权</h2><form id="agent-grant-form" class="settings-form"><div class="form-grid"><label>Agent 名称<input name="name" maxlength="100" required></label><label>有效天数<input name="days" type="number" value="30" min="1" max="365" required></label></div>
       <fieldset class="agent-scopes"><legend>可访问的知识库</legend>${activeLibraries().filter(item => !item.deleted && !item.conflict).map(item => `<label class="check-row"><input name="domains" type="checkbox" value="${esc(item.data.domain)}">${esc(item.data.title)}</label>`).join('') || '<span class="muted">尚无可授权知识库</span>'}</fieldset>
       <div class="muted">基础权限：读取、收集、提交待确认方案。确认入库由你完成。</div>
@@ -750,6 +768,7 @@ async function renderAgents() {
       <button class="primary" type="submit">${icon('key-round')}生成访问凭证</button></form></section>
     <section class="settings-section"><h2>已授权 Agent</h2>${access.grants.length ? `<div class="table-scroll"><table class="data-table"><thead><tr><th>名称 / 有效期</th><th>知识库</th><th>权限 / 状态</th><th></th></tr></thead><tbody>${access.grants.map(grant => `<tr><td><strong>${esc(grant.name)}</strong><small>${formatTime(grant.expiresAt)}</small></td><td>${grant.domains.map(domain => esc(libraryName(domain))).join('、')}</td><td>${grant.revoked ? '已撤销' : Date.parse(grant.expiresAt) <= Date.now() ? '已到期' : '有效'}<small>${grant.permissions.includes('edit') ? '直接修改 · ' : ''}${grant.permissions.includes('trash') ? '回收站 · ' : ''}${grant.sensitive ? '含敏感资料' : '不含敏感资料'}</small></td><td>${!grant.revoked ? button('key-round', 'agent-revoke', '撤销授权', `data-grant="${grant.id}"`) : ''}</td></tr>`).join('')}</tbody></table></div>` : '<div class="section-empty">尚无授权</div>'}</section>
     <section class="settings-section"><h2>最近访问</h2>${access.audit.length ? `<div class="table-scroll"><table class="data-table"><thead><tr><th>时间</th><th>Agent</th><th>操作</th><th>结果</th></tr></thead><tbody>${access.audit.slice(0, 30).map(item => `<tr><td>${formatTime(item.at)}</td><td>${esc(item.name)}</td><td>${esc(item.method)}</td><td>${esc(item.result)}</td></tr>`).join('')}</tbody></table></div>` : '<div class="section-empty">尚无访问记录</div>'}</section>`;
+  bindMcpConnection(access, { root: $('#main'), run, toast });
   $('#agent-enabled').onchange = event => run(async () => {
     event.target.disabled = true;
     try { await api('agentConfigure', { enabled: event.target.checked }); await render(); }
@@ -840,10 +859,17 @@ async function changeStorage(mode) {
     } finally { submit.disabled = false; }
   };
 }
+function previewPresentation(data) {
+  const dialog = openModal(`交互页面 · ${data.title}`, '<div class="presentation-host"></div>');
+  dialog.classList.add('presentation-dialog');
+  const host = $('.presentation-host', dialog);
+  mountPresentation(host, data, { mediaUrl, openNote: id => run(async () => { dialog.close(); await openRecord(id); }) });
+  modalCleanup = () => { host._presentation?.destroy(); dialog.classList.remove('presentation-dialog'); };
+}
 function openModal(title, body, footer = '') {
   const dialog = $('#modal');
   if (dialog.open) { dialog.close(); modalCleanup?.(); modalCleanup = null; }
-  dialog.classList.remove('material-dialog', 'asset-preview-dialog');
+  dialog.classList.remove('material-dialog', 'asset-preview-dialog', 'presentation-dialog');
   dialog.innerHTML = `<div class="modal-heading"><h2>${esc(title)}</h2><button class="icon-button" data-modal-close aria-label="关闭">${icon('x')}</button></div><div class="modal-body">${body}</div>${footer ? `<div class="modal-footer">${footer}</div>` : ''}`;
   dialog.showModal(); redrawIcons();
   hydrateRich(dialog, mediaUrl);
@@ -1097,6 +1123,7 @@ async function showHistory() {
   if (state.selected?.id !== requestedId) return;
   const record = state.selected, heads = [...record.heads];
   showHistoryBrowser({ history, current: record, editor: state.editor, openModal, safeHtml, esc, formatTime,
+    previewPresentation,
     hydrate: host => hydrateRich(host, mediaUrl), toast, restore: event => run(async () => {
     const accepted = await confirmBox('恢复历史版本', '<p>将创建一个新版本，当前内容和已有历史不会删除。</p>', '恢复');
     if (!accepted) return;
@@ -1148,16 +1175,27 @@ async function resolveConflict() {
     const version = record.versions.find(v => v.id === button.dataset.useVersion);
     const accepted = await confirmBox('确认处理冲突', '<p>选择的内容将成为新版本，其他版本仍保留在历史中。</p>');
     if (!accepted) return;
-    state.selected = await api('save', { id: record.id, type: record.type, data: version.data, parents: record.heads, deleted: version.deleted });
+    const data = ['note', 'draft'].includes(record.type) ? { ...version.data, presentation: version.data.presentation ?? null } : version.data;
+    state.selected = await api('save', { id: record.id, type: record.type, data, parents: record.heads, deleted: version.deleted });
     const tab = currentTab(); if (tab) { tab.dirty = false; delete tab.draft; }
     if (tab) await noteSaver.forget(tab.id);
     await render();
   }));
   const merge = $('[data-manual-merge]', dialog);
+  let pageChoice;
+  if (merge && record.versions.some(version => version.data.presentation)) {
+    const label = document.createElement('label'); label.textContent = '融合后保留的页面';
+    pageChoice = document.createElement('select'); pageChoice.setAttribute('aria-label', '融合后保留的页面');
+    pageChoice.innerHTML = '<option value="">请选择页面版本</option>' + record.versions.map((version, index) => `<option value="${version.id}">版本 ${index + 1}${version.data.presentation ? '的页面（正文变化后待更新）' : '（无页面）'}</option>`).join('');
+    label.append(pageChoice); merge.before(label);
+  }
   if (merge) merge.onclick = () => run(async () => {
+    if (pageChoice && !pageChoice.value) throw new Error('请先选择融合后保留的页面版本；其他页面仍保留在历史中');
     const text = await inputBox('手动融合', '融合后的正文（Markdown）', record.versions.filter(v => !v.deleted).map(v => markdownConverter.turndown(safeHtml(v.data.content, v.data.format))).join('\n\n---\n\n'), true);
     if (text === null) return;
-    state.selected = await api('save', { id: record.id, type: record.type, data: { ...record.data, content: text, format: 'markdown' }, parents: record.heads });
+    const data = { ...record.data, content: text, format: 'markdown' };
+    if (pageChoice) data.presentation = record.versions.find(version => version.id === pageChoice.value).data.presentation ?? null;
+    state.selected = await api('save', { id: record.id, type: record.type, data, parents: record.heads });
     const tab = currentTab(); if (tab) { tab.dirty = false; delete tab.draft; }
     if (tab) await noteSaver.forget(tab.id);
     await render();
@@ -1534,12 +1572,13 @@ const actions = {
     if (state.selected.conflict) throw new Error('请先处理并发版本，再导出正文');
     if (currentTab()?.dirty) await saveNote();
     const record = state.selected, markdown = markdownConverter.turndown(safeHtml(record.data.content, record.data.format));
-    const text = `# ${record.data.title}\n\n${markdown}\n\n---\n知识库：${libraryName(record.data.domain)}\n标签：${record.data.tags.join(', ')}\n`;
+    const text = `# ${record.data.title}\n\n${markdown}\n\n---\n知识库：${libraryName(record.data.domain)}\n标签：${record.data.tags.join(', ')}\n${record.data.presentation ? '\n本文件为知识正文，不包含可运行交互页面。\n' : ''}`;
     const url = URL.createObjectURL(new Blob([text], { type: 'text/markdown;charset=utf-8' }));
     const a = document.createElement('a'); a.href = url; a.download = `${record.data.title.replace(/[<>:"/\\|?*]/g, '_')}.md`; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
   },
   pdf: async () => {
     if (state.selected?.conflict) throw new Error('请先处理并发版本，再导出正文');
+    if (state.selected?.data.presentation) toast('PDF 导出知识正文，不包含可运行交互');
     if (native) await api('printPdf'); else window.print();
   },
   'proposal-new': async () => {

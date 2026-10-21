@@ -7,6 +7,8 @@ import { filterErased, mergeErasures } from './erasures.mjs';
 import { retirementReceipts, retiredAI, replacementWorkspaces } from './retired-ai.mjs';
 import { TYPES, CONTENT_TYPES } from './catalog.mjs';
 import { richReferences } from './rich-content.mjs';
+import { validatePresentation } from './presentation-schema.mjs';
+import { preservePresentation, samePresentation, validatePageBasis } from './presentation.mjs';
 import { cleanDraftRefs, requireSaved, validateDraftRefs } from './draft-workflow.mjs';
 import { validateAssetChange } from './asset-management.mjs';
 import { LibraryDirectories, legacyLibraryId } from './library-directories.mjs';
@@ -18,8 +20,8 @@ const GLOBAL_SCOPE = '__all_libraries__';
 
 const COMMON = ['title', 'domain', 'tags', 'sensitive'];
 const FIELDS = {
-  note: [...COMMON, 'content', 'format', 'sourceIds', 'assetIds', 'parentNoteId', 'noteOrder', 'draftOrigin'],
-  draft: [...COMMON, 'content', 'format', 'sourceIds', 'assetIds'],
+  note: [...COMMON, 'content', 'format', 'sourceIds', 'assetIds', 'parentNoteId', 'noteOrder', 'draftOrigin', 'presentation'],
+  draft: [...COMMON, 'content', 'format', 'sourceIds', 'assetIds', 'presentation'],
   conversation: [...COMMON, 'messages', 'modelId', 'assetIds'],
   source: [...COMMON, 'content', 'format', 'url', 'assetIds'],
   annotation: [...COMMON, 'content', 'noteId', 'quote'],
@@ -50,6 +52,7 @@ export function cleanData(type, data) {
   }
   if (Object.hasOwn(result, 'noteOrder')) check(validNoteOrder(result.noteOrder), '笔记顺序无效或过长');
   if (Object.hasOwn(result, 'draftOrigin')) result.draftOrigin = cleanDraftRefs([result.draftOrigin])[0];
+  if (Object.hasOwn(result, 'presentation')) validatePresentation(result.presentation);
   check(Buffer.byteLength(canonical(result)) <= 1024 * 1024, 'A single revision must be smaller than 1 MB');
   if (type === 'library') {
     check(result.title.trim().length > 0 && result.title.length <= 100, '知识库名称须为 1 至 100 个字符');
@@ -283,6 +286,12 @@ export class Store {
     check(!this.retiredAI || !retiredAI(type), '内置 AI 历史已删除，不再创建或恢复', 'RETIRED');
     check(!this.permanentDeleting, '永久删除正在处理，请稍后操作', 'BUSY');
     check(!this.local('v2Journal'), '版本操作尚未恢复，请重启恢复后再编辑', 'RECOVERY_REQUIRED');
+    if (['note', 'draft'].includes(type) && !Object.hasOwn(data, 'presentation')) {
+      const bases = parents.map(parent => this.event(parent)?.data);
+      const pages = new Set(bases.map(base => canonical(base?.presentation ?? null)));
+      check(pages.size <= 1, '并发页面不同，请明确选择保留的交互页面', 'CONFLICT');
+      data = preservePresentation(data, bases[0]);
+    }
     if (['note', 'draft', 'source'].includes(type)) {
       const { assets } = richReferences(data);
       if (assets.length) data = { ...data, assetIds: [...new Set([...(data.assetIds || []), ...assets])] };
@@ -450,7 +459,9 @@ export class Store {
     check(!this.isPurged(id), '此内容已永久清空，不能恢复', 'PURGED');
     const event = this.event(revision);
     check(event?.entityId === id, 'Version not found');
-    return this.write({ id, type: event.type, data: event.data, parents, deleted: false });
+    const data = ['note', 'draft'].includes(event.type) && this.get(id)?.versions.some(version => version.data.presentation) && !Object.hasOwn(event.data, 'presentation')
+      ? { ...event.data, presentation: null } : event.data;
+    return this.write({ id, type: event.type, data, parents, deleted: false });
   }
   history(id) {
     if (this.isPurged(id)) return [];
@@ -553,6 +564,7 @@ export class Store {
       for (const item of selected) {
         validateDraftRefs(this, item.draftRefs);
         requireSaved(this, [item.targetId]);
+        if (!samePresentation(item.data.presentation, this.get(item.targetId)?.data.presentation)) validatePageBasis(this, item.data, { originals: true });
         check(item.data.domain !== GLOBAL_SCOPE, '请先为方案选择目标知识库');
         const library = this.libraries().find(entry => entry.data.domain === item.data.domain);
         check(!library || (!library.deleted && !library.conflict), '方案目标知识库已删除或存在冲突');

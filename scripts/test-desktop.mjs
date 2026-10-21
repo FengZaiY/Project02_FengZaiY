@@ -4,6 +4,9 @@ import path from 'node:path';
 import fs from 'node:fs';
 import assert from 'node:assert/strict';
 import { docxFixture } from './fixtures/docx.mjs';
+import { presentationFixture } from './fixtures/presentation.mjs';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 
 const root = path.resolve('artifacts/desktop');
 fs.mkdirSync(root, { recursive: true });
@@ -48,6 +51,15 @@ try {
   assert.ok(!JSON.stringify(data.access).includes(data.token));
   const response = await fetch(`${data.access.url}/v1/rpc`, { method: 'POST', headers: { Authorization: `Bearer ${data.token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ method: 'record', input: { id: data.note.id } }) });
   assert.equal((await response.json()).value.data.title, '桌面启动验证');
+  if (!packaged) {
+    const mcp = new Client({ name: 'studyself-desktop-test', version: '1.0.0' });
+    try {
+      await mcp.connect(new StreamableHTTPClientTransport(new URL(data.access.mcpUrl), { requestInit: { headers: { Authorization: `Bearer ${data.token}` } } }));
+      assert.ok((await mcp.listTools()).tools.some(tool => tool.name === 'studyself_propose'));
+      const result = await mcp.callTool({ name: 'studyself_record', arguments: { id: data.note.id } });
+      assert.equal(result.structuredContent.value.data.title, '桌面启动验证');
+    } finally { await mcp.close(); }
+  }
   await page.reload();
   await page.locator('[data-record]', { hasText: '桌面启动验证' }).click();
   await page.locator('.tiptap').waitFor();
@@ -55,6 +67,21 @@ try {
   const imageData = await page.evaluate(() => { const canvas = document.createElement('canvas'); canvas.width = 240; canvas.height = 140; const ctx = canvas.getContext('2d'); ctx.fillStyle = '#3a8197'; ctx.fillRect(0, 0, 240, 140); ctx.fillStyle = '#f4da78'; ctx.fillRect(30, 30, 180, 80); return canvas.toDataURL('image/png').split(',')[1]; });
   fs.writeFileSync(imagePath, Buffer.from(imageData, 'base64'));
   const asset = await page.evaluate(file => window.desktop.call('assetImport', { path: file, domain: 'AI' }), imagePath);
+  if (!packaged) {
+    const body = { title: '桌面交互页面', domain: 'AI', content: '<p>可编辑正文</p>', format: 'html' };
+    const presentation = presentationFixture(body, { assetIds: [asset.id] });
+    presentation.html += `<img data-asset-id="${asset.id}" alt="交互图片">`;
+    const interactive = await page.evaluate(data => window.desktop.call('save', { type: 'note', data }), { ...body, presentation });
+    await page.reload(); await page.locator(`[data-record="${interactive.id}"]`).click();
+    await page.locator('.page-runtime-bar [role=status]', { hasText: '交互运行中' }).waitFor();
+    const frame = page.frameLocator('iframe.interactive-page');
+    await frame.locator('#chart svg').waitFor();
+    await frame.locator('img').evaluate(el => new Promise((resolve, reject) => { if (el.naturalWidth === 240) resolve(); else { el.onload = resolve; el.onerror = reject; } }));
+    await page.screenshot({ path: path.join(root, 'interactive-page-native.png') });
+    await page.getByRole('button', { name: '正文编辑', exact: true }).click();
+    await page.locator('.tiptap').waitFor({ state: 'visible' });
+    await page.locator(`[data-record="${data.note.id}"]`).click();
+  }
   await page.evaluate(async ({ asset, note }) => {
     const block = { v: 1, kind: 'image', label: '原生媒体', assetId: asset.id };
     const formula = { v: 1, kind: 'formula', label: '公式', source: 'E=mc^2' };
