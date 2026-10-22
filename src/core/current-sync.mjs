@@ -3,6 +3,7 @@ import path from 'node:path';
 import { DirectoryChannel, assetObjects, assetAAD, localAsset, sealBinary, validateAssets } from './sync-objects.mjs';
 import { describeAsset, assetChunk, diskSpace, receiveResumable } from './resumable-files.mjs';
 import { EMPTY_CONTROL, eventHeads, mergeControl, primaryRole, orderedEvents } from './sync-state.mjs';
+import { managementRevision, managementState } from './device-management.mjs';
 import { LocalHierarchy } from './local-hierarchy.mjs';
 import { filterErased, mergeErasures } from './erasures.mjs';
 import { readErasureReceipts, readHistoryPart, cleanErasedTransport } from './erasure-sync.mjs';
@@ -17,7 +18,7 @@ const MIN_BATCH = 4 * 1024 * 1024 + 36;
 const MAX_MANIFEST = 32 * 1024 * 1024;
 const tick = () => new Promise(resolve => setImmediate(resolve));
 const manifestDigest = manifest => sha(canonical({ parts: manifest.parts, control: manifest.control, assets: manifest.assets,
-  ...(manifest.format === 4 ? { erasures: manifest.erasures } : {}) }));
+  ...(manifest.format >= 4 ? { erasures: manifest.erasures } : {}) }));
 
 export class CurrentSync {
   constructor(store, options = {}) {
@@ -29,7 +30,7 @@ export class CurrentSync {
   }
   config() {
     const key = this.store.secret('pairing');
-    return { protocol: this.store.erasures().length ? 4 : 3, configured: !!key && !!this.store.local('syncFolder'), enabled: false, manual: true,
+    return { protocol: this.control().management?.length ? 5 : this.store.erasures().length ? 4 : 3, configured: !!key && !!this.store.local('syncFolder'), enabled: false, manual: true,
       folder: this.store.local('syncFolder') || '', channel: key ? sha(Buffer.from(key, 'hex')).slice(0, 16) : null,
       attachmentMode: 'all-files', lastReport: this.store.local('v3LastReport'), cloudUploadVerified: false };
   }
@@ -83,6 +84,15 @@ export class CurrentSync {
   guardEditing() {
     check(!(this.store.local('workspace')?.tabs || []).some(tab => tab.dirty), '请先保存未保存的笔记标签', 'UNSAVED');
   }
+  guardParticipation() {
+    const status = this.devices(), local = status.devices.find(device => device.local);
+    check(!local?.suspended && !local?.statusConflict, '本机已停用或设备状态存在冲突，请由主力机恢复后拉取最新管理状态', 'FORBIDDEN');
+  }
+  applyControl(control) {
+    this.store.local('v3Control', control);
+    const local = managementState(control, primaryRole(control)).states.get(this.store.deviceId);
+    if (local?.name && !local.nameConflict) this.store.setMeta('deviceName', local.name);
+  }
   status() {
     const plan = this.value('plan'), latest = this.value('latest');
     const pendingChanges = this.store.unexported().length;
@@ -104,6 +114,7 @@ export class CurrentSync {
   }
   async plan({ batchBytes = DEFAULT_BATCH } = {}) {
     return this.exclusive(async () => {
+      this.guardParticipation();
       this.guardEditing();
       check(Number.isSafeInteger(batchBytes) && batchBytes >= MIN_BATCH && batchBytes <= 4 * 1024 ** 3, '批次大小须在 5 MiB 至 4 GiB 之间');
       if (this.value('plan') && !['complete', 'cancelled'].includes(this.progress()?.state)) return this.status();
@@ -131,7 +142,8 @@ export class CurrentSync {
         descriptor.chunks.forEach((chunk, index) => objects.push({ kind: 'asset', ...chunk, assetIndex, index, reusable: known.has(asset.hash) }));
       }
       const erasures = this.store.erasures();
-      const manifest = { format: erasures.length ? 4 : 3, ...(erasures.length ? { erasures } : {}), id: uuid(), deviceId: this.store.deviceId, deviceName: this.store.getMeta('deviceName'),
+      const format = this.control().management?.length ? 5 : erasures.length ? 4 : 3;
+      const manifest = { format, ...(format >= 4 ? { erasures } : {}), id: uuid(), deviceId: this.store.deviceId, deviceName: this.store.getMeta('deviceName'),
         at: now(), parts, assets, control: mergeControl(EMPTY_CONTROL, this.control()) };
       manifest.digest = manifestDigest(manifest);
       if (this.value('latest')?.digest === manifest.digest) return { ...this.status(), unchanged: true };
@@ -173,7 +185,10 @@ export class CurrentSync {
     }
     return this.exclusive(async () => {
       this.guardEditing();
+      this.guardParticipation();
       const plan = this.value('plan'), channel = this.channel(), progress = { ...this.progress(), state: 'running', reason: '' };
+      check(canonical(plan.manifest.control.management || []) === canonical(this.control().management || [])
+        && canonical(plan.manifest.control.roles) === canonical(this.control().roles), '设备管理或主力角色已变化，请取消旧发布任务后重新发布', 'CONFLICT');
       this.saveProgress(progress);
       const save = (state, reason) => { Object.assign(progress, { state, reason }); this.saveProgress(progress); return this.status(); };
       let batchBytes = 0;
@@ -222,11 +237,12 @@ export class CurrentSync {
     });
   }
   validateManifest(manifest, deviceId) {
-    check([3, 4].includes(manifest?.format) && isId(manifest.id) && manifest.deviceId === deviceId && isId(deviceId)
+    check([3, 4, 5].includes(manifest?.format) && isId(manifest.id) && manifest.deviceId === deviceId && isId(deviceId)
       && typeof manifest.deviceName === 'string' && manifest.deviceName.length <= 100 && Number.isFinite(Date.parse(manifest.at)), '无效的最新内容清单');
-    check(Object.keys(manifest).sort().join() === (manifest.format === 4
+    check(Object.keys(manifest).sort().join() === (manifest.format >= 4
       ? 'assets,at,control,deviceId,deviceName,digest,erasures,format,id,parts' : 'assets,at,control,deviceId,deviceName,digest,format,id,parts'), '清单含未知字段');
-    if (manifest.format === 4) mergeErasures(manifest.erasures);
+    if (manifest.format >= 4) mergeErasures(manifest.erasures);
+    check(manifest.format === 5 || !manifest.control?.management?.length, '设备管理需要 format 5，请升级所有同步电脑');
     check(Array.isArray(manifest.parts) && manifest.parts.length <= 100000, 'Invalid history parts');
     const names = new Set();
     for (const part of manifest.parts) {
@@ -271,12 +287,22 @@ export class CurrentSync {
   async importLatest({ metadataOnly = false } = {}) {
     return this.exclusive(async () => {
       this.guardEditing();
-      const channel = this.channel(), incoming = channel.names('.sscurrent').map(name => this.loadCurrent(name)), union = new Map(), descriptors = new Map();
+      const channel = this.channel(), manifests = channel.names('.sscurrent').map(name => this.loadCurrent(name)), union = new Map(), descriptors = new Map();
+      check(manifests.length, '尚未发现最新内容，请先在百度客户端下载');
+      let control = manifests.reduce((value, manifest) => mergeControl(value, manifest.control), this.control());
+      const management = managementState(control, primaryRole(control)), local = management.states.get(this.store.deviceId);
+      if (local?.suspended || local?.statusConflict) {
+        this.store.transaction(() => this.applyControl(control));
+        return { imported: 0, unchanged: true, managementOnly: true, devices: manifests.length,
+          receiptWarning: '本机已停用，仅接收设备管理状态，笔记和原件保留' };
+      }
+      const incoming = manifests.filter(manifest => {
+        const device = management.states.get(manifest.deviceId); return !device?.suspended && !device?.statusConflict;
+      });
       const histories = new Map(incoming.map(manifest => [manifest.id, manifest.parts.flatMap(part => readHistoryPart(channel, part))]));
       let erasures = mergeErasures(this.store.erasures(), readErasureReceipts(channel), ...incoming.map(manifest => manifest.erasures || []));
       erasures = mergeErasures(erasures, retirementReceipts(this.store, [...this.store.allEvents(), ...[...histories.values()].flat()], erasures));
       const erasedIds = new Set(erasures.map(item => item.entityId));
-      let control = this.control();
       for (const manifest of incoming) {
         const original = histories.get(manifest.id);
         const events = [...filterErased(original, erasures), ...replacementWorkspaces(original, erasures)];
@@ -293,7 +319,7 @@ export class CurrentSync {
         }
         control = mergeControl(control, manifest.control);
       }
-      check(incoming.length, '尚未发现最新内容，请先在百度客户端下载');
+      check(incoming.length, '所有已发现设备均已停用，请等待主力机发布');
       prepareRemoteErasure(this.store, erasures, [...union.values()]);
       const role = primaryRole(control);
       check(!metadataOnly || role.primary && !role.conflict && role.primary !== this.store.deviceId, '仅已确定的非主力机可以只导入索引');
@@ -315,7 +341,7 @@ export class CurrentSync {
           if (this.store.insert(event, true)) count++;
           this.store.db.prepare('DELETE FROM pending WHERE id=?').run(event.id);
         }
-        this.store.local('v3Control', mergeControl(this.control(), control));
+        this.applyControl(mergeControl(this.control(), control));
         for (const [hash, file] of paths) for (const id of descriptors.get(hash).ids) this.store.bindAsset(id, file, this.store.assetLocation(id)?.pinned === 1);
         const remotes = this.value('remotes') || {}, seen = this.value('seen') || {};
         for (const manifest of incoming) { remotes[manifest.deviceId] = manifest; seen[manifest.id] = sha(canonical(manifest)); }
@@ -325,7 +351,8 @@ export class CurrentSync {
       if (erasures.length) cleanErasedTransport(this);
       let receiptWarning;
       try { await this.verifyPrimary(); } catch (error) { receiptWarning = error.message; }
-      return { imported: count, unchanged: !count, metadataOnly, devices: incoming.length, receiptWarning, cleanup };
+      return { imported: count, unchanged: !count, metadataOnly, devices: incoming.length,
+        skippedDevices: manifests.length - incoming.length, receiptWarning, cleanup };
     });
   }
   confirmUpload({ id, confirmed }) {
@@ -346,26 +373,70 @@ export class CurrentSync {
   }
   devices() {
     const control = this.control(), role = primaryRole(control), devices = new Map(), remotes = this.value('remotes') || {};
+    const management = managementState(control, role);
     for (const item of [...control.devices].sort((a, b) => a.at.localeCompare(b.at) || a.id.localeCompare(b.id))) devices.set(item.deviceId, item);
-    return { ...role, devices: [...devices.values()].map(item => ({ ...item, local: item.deviceId === this.store.deviceId,
+    return { ...role, revision: managementRevision(control), canManage: !role.conflict && role.primary === this.store.deviceId,
+      transfer: management.transfer, transferConflict: management.transferConflict,
+      devices: [...devices.values()].map(item => ({ ...item, ...management.states.get(item.deviceId),
+      name: management.states.get(item.deviceId)?.name || item.name, local: item.deviceId === this.store.deviceId,
       primary: item.deviceId === role.primary, lastReceivedAt: remotes[item.deviceId] ? this.value('receivedAt') : null })),
     completeness: this.store.local('v3Completeness') };
   }
-  async setPrimary({ deviceId, parents, confirmed }) {
+  async manageDevice({ deviceId, action, name, revision, requestId, confirmed }) {
+    return this.exclusive(async () => {
+      check(confirmed === true && isId(requestId), '请明确确认设备管理操作');
+      const control = this.control(), role = primaryRole(control), management = managementState(control, role);
+      const existing = control.management?.find(event => event.id === requestId);
+      if (existing) {
+        check(existing.actor === this.store.deviceId && existing.deviceId === deviceId && existing.action === action
+          && existing.name === name, '重复请求内容不一致', 'CONFLICT');
+        return this.devices();
+      }
+      check(!role.conflict && role.primary === this.store.deviceId, '仅当前唯一主力机可以管理设备', 'FORBIDDEN');
+      check(revision === managementRevision(control), '设备状态已变化，请刷新后重新确认', 'CONFLICT');
+      check(management.states.has(deviceId), '设备不存在');
+      const local = management.states.get(this.store.deviceId), target = management.states.get(deviceId);
+      check(!local?.suspended || (action === 'resume' && deviceId === this.store.deviceId), '请先恢复本机设备状态');
+      if (action === 'suspend') check(deviceId !== role.primary && management.transfer?.deviceId !== deviceId,
+        '不能停用主力机或待接管设备，请先完成或取消主力机转移');
+      if (action === 'transfer') check(deviceId !== role.primary && !target.suspended && !target.statusConflict,
+        '请选择已启用且无状态冲突的其他设备');
+      if (action === 'cancel-transfer') check(management.transfer || management.transferConflict, '没有待处理的主力机转移');
+      const event = { id: requestId, at: now(), actor: this.store.deviceId, epoch: role.epoch, parents: management.heads,
+        deviceId, action, ...(action === 'rename' ? { name } : {}) };
+      const next = mergeControl(control, { ...EMPTY_CONTROL, management: [event] });
+      this.store.transaction(() => this.applyControl(next));
+      return this.devices();
+    });
+  }
+  async setPrimary({ deviceId, parents, confirmed, revision, transferId }) {
     return this.exclusive(async () => {
       check(confirmed === true && deviceId === this.store.deviceId, '必须在目标主力机上明确确认');
       const control = this.control(), role = primaryRole(control);
+      const management = managementState(control, role), local = management.states.get(deviceId);
+      check(!local?.suspended && !local?.statusConflict, '本机已停用或状态冲突，不能接管主力角色', 'FORBIDDEN');
+      if (control.management?.length) check(revision === managementRevision(control), '设备状态已变化，请刷新后重新确认', 'CONFLICT');
       check(Array.isArray(parents) && canonical([...parents].sort()) === canonical(role.heads.map(item => item.id).sort()), '主力角色已变化，请刷新');
+      if (role.primary === deviceId) return this.devices();
+      if (role.conflict) check(role.recoveryDevices.includes(deviceId), '请在主力角色冲突的参与设备上处理', 'FORBIDDEN');
+      if (role.primary && role.primary !== deviceId) check(!management.transferConflict && management.transfer?.id === transferId
+        && management.transfer?.deviceId === deviceId, '请先由当前主力机发起转移并拉取最新内容', 'FORBIDDEN');
       const files = await this.currentFiles(); check(!files.missing.length, '当前资料未齐全，不能设为主力机');
-      control.roles.push({ id: uuid(), primary: deviceId, parents, at: now() });
-      this.store.local('v3Control', control); this.store.local('v3Completeness', { total: files.total, available: files.total, at: files.at });
+      check(managementRevision(this.control()) === managementRevision(control), '校验期间设备状态已变化，请重新确认', 'CONFLICT');
+      control.roles.push({ id: uuid(), primary: deviceId, parents, at: now(), ...(role.primary ? { transferId } : {}),
+        ...(control.management?.length ? { managementParents: management.heads, ...(role.conflict ? { recovery: true } : {}) } : {}) });
+      const next = mergeControl(EMPTY_CONTROL, control);
+      this.store.transaction(() => {
+        this.applyControl(next); this.store.local('v3Completeness', { total: files.total, available: files.total, at: files.at });
+      });
       return this.devices();
     });
   }
   async verifyPrimary() {
     const role = primaryRole(this.control()), files = await this.currentFiles();
     this.store.local('v3Completeness', { total: files.total, available: files.available.length, missing: files.missing.length, at: files.at });
-    if (role.conflict || role.primary !== this.store.deviceId || files.missing.length || !this.config().configured) return { ...files, receipt: false };
+    const local = managementState(this.control(), role).states.get(this.store.deviceId);
+    if (local?.suspended || local?.statusConflict || role.conflict || role.primary !== this.store.deviceId || files.missing.length || !this.config().configured) return { ...files, receipt: false };
     const published = new Set(this.knownAssets().map(asset => asset.hash));
     const hashes = files.available.map(asset => asset.hash).filter(hash => published.has(hash)).sort();
     const digest = sha(canonical({ epoch: role.epoch, hashes }));
@@ -389,6 +460,7 @@ export class CurrentSync {
   }
   async hydrate({ id }) {
     return this.exclusive(async () => {
+      this.guardParticipation();
       const record = this.store.get(id); check(record?.type === 'asset', '请选择附件');
       const asset = this.knownAssets().find(asset => asset.hash === record.data.sha256);
       check(asset, '请先拉取最新文件索引');
@@ -400,6 +472,7 @@ export class CurrentSync {
   }
   async evict({ id, confirmed }) {
     return this.exclusive(async () => {
+      this.guardParticipation();
       this.guardEditing(); check(confirmed === true, '释放原件需要明确确认');
       const role = primaryRole(this.control()); check(role.primary && !role.conflict, '请先确定唯一主力机');
       check(role.primary !== this.store.deviceId, '主力机当前资料和回收站原件必须保留');

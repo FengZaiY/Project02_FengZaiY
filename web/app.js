@@ -27,6 +27,7 @@ import { recordRows } from './record-navigation.js';
 import './record-navigation.css';
 import { mountPageMode } from './presentation-mode.js';
 import { mountPresentation } from './presentation-view.js';
+import { copyText } from './editor-text.js';
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -128,10 +129,10 @@ const noteSaver = createNoteAutosave({
     if (error) toast(value === 'conflict' ? '出现新版本，自动保存已暂停；当前编辑仍保留，请点击保存处理' : `自动保存未完成：${error.message}。当前编辑已保留，可点击保存重试`, true);
   }
 });
-const syncUI = createSyncUI({ api, esc, icon, formatTime, bytes, render, toast, confirmBox, persist });
+const syncUI = createSyncUI({ api, esc, icon, formatTime, bytes, render, toast, confirmBox, inputBox, persist });
 const hierarchyUI = createHierarchyUI({ state, api, esc, icon, button, render: renderRecordList, persist, saveNote, openModal, confirmBox, toast, run, openRecord, libraryName });
 const draftUI = createDraftUI({ state, api, esc, icon, openModal, saveNote, persist, openRecord, hierarchyUI, libraries, run, toast, redrawIcons });
-const skillUI = createSkillManager({ api, esc, icon, safeHtml, formatTime, toast, confirmBox, redrawIcons, run });
+const skillUI = createSkillManager({ api, esc, icon, safeHtml, formatTime, toast, confirmBox, redrawIcons, run, pickDirectory });
 installExitCheck({ bridge: window.desktop, api, esc, openModal, toast, persist,
   snapshot: () => {
     stash();
@@ -289,6 +290,7 @@ function domainOptions(selected = '', all = true) {
   return `<option value="">${all ? '全部知识库' : '选择知识库'}</option>${activeLibraries().map(item => `<option value="${esc(item.data.domain)}" ${selected === item.data.domain ? 'selected' : ''}>${esc(item.data.title)}${item.deleted ? '（待恢复）' : ''}${item.conflict ? '（冲突）' : ''}</option>`).join('')}`;
 }
 function countFor(view) {
+  if (view === 'settings') return state.snapshot.skillInstallations?.attention || 0;
   if (view === 'conflicts') return state.snapshot.conflicts;
   if (view === 'trash') return state.snapshot.trash;
   return state.snapshot.counts[({ notes: 'note', drafts: 'draft', proposals: 'proposal', assets: 'asset' })[view]] || 0;
@@ -488,7 +490,18 @@ async function renderDocument(record) {
   } else $('#editor-content').innerHTML = safeHtml(data.content || '', data.format);
   if (['note', 'draft'].includes(record.type)) pageMode = mountPageMode($('.editor-panel'), {
     getData: () => currentTab()?.draft || state.selected?.data || data, mediaUrl,
-    openNote: id => run(() => openRecord(id)), editable: !!state.editor
+    openNote: id => run(() => openRecord(id)), editable: !!state.editor,
+    requestDesign: () => run(async () => {
+      const ready = () => state.selected?.id === record.id && !state.editor?.view.composing
+        && !state.tabs.some(tab => tab.recordId === record.id && (tab.dirty || noteSaver.state(tab.id) === 'saving'));
+      if (!ready()) throw new Error('请先保存当前笔记，再复制设计请求');
+      const latest = await api('record', { id: record.id });
+      if (!ready()) throw new Error('当前笔记已变化，请保存后重新复制设计请求');
+      if (!latest || latest.deleted || latest.conflict) throw new Error('笔记不可用或存在冲突，请先处理后再设计页面');
+      const target = JSON.stringify({ id: latest.id, type: latest.type, title: latest.data.title, domain: latest.data.domain, heads: latest.heads });
+      await copyText(`请通过 StudySelf 连接读取 bootstrap、最新 Skill 与整理偏好。目标笔记标识及当前所见版本：${target}。先读取最新正文、已有 presentation、已授权的相关新增资料及其版本，再为这篇笔记设计或调整交互阅读页面（presentation v1）。保留人工修改、完整正文、出处、附件和不同观点，根据内容选择合适的编排、视图、图表或计算交互，不编造资料。提交整理方案，说明内容、编排、交互变化及理由，等待我预览确认，不直接发布页面；涉及草稿时保留 draftRefs 及具体版本。连接不可用时先告知，不绕过授权。`);
+      toast('设计请求已复制，请交给已连接的外部 Agent');
+    })
   });
   if (['note', 'draft', 'source'].includes(record.type)) {
     if (record.type === 'draft') void draftUI.refresh(record).catch(error => toast(error.message, true));
@@ -1742,6 +1755,14 @@ async function init() {
   refreshTimer = setInterval(async () => {
     try {
       const snapshot = await api('state'); state.snapshot = snapshot;
+      await skillUI.refreshInstallations();
+      const settings = $('[data-nav=settings]');
+      if (settings) {
+        let badge = settings.querySelector('b');
+        const attention = snapshot.skillInstallations?.attention || 0;
+        if (attention && !badge) { badge = document.createElement('b'); settings.append(badge); }
+        if (badge) { badge.textContent = String(attention); badge.hidden = !attention; badge.title = 'Skill 安装有更新或需要处理'; }
+      }
       if (state.view === 'sync' && !$('#sync-folder')?.matches(':focus') && !$('#sync-key')?.matches(':focus')) {
         // Preserve unsaved configuration fields rather than replacing the form during polling.
         const footer = $('.statusbar');

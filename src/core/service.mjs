@@ -5,6 +5,7 @@ import { migrateRetiredAI, cleanRetiredTabs, retiredAI } from './retired-ai.mjs'
 import { makePairingKey, importAttachment } from './transport.mjs';
 import { CurrentSync } from './current-sync.mjs';
 import { AgentAccess } from './agent-access.mjs';
+import { SkillInstallations } from './skill-installations.mjs';
 import { uuid, check, now, atomicWrite } from './util.mjs';
 import { workspaceLock } from './workspace-lock.mjs';
 import { LocalHierarchy } from './local-hierarchy.mjs';
@@ -31,6 +32,7 @@ export class Service {
       this.transport = new CurrentSync(this.store);
       this.store.migrateNoteHierarchy();
       this.agents = new AgentAccess(this.store);
+      this.skillInstallations = new SkillInstallations(this.store, this.agents);
       this.localHierarchy = new LocalHierarchy(this.store);
       this.materials = new AssetManagement(this.store);
       this.store.local('hierarchyEnabled', true);
@@ -47,6 +49,9 @@ export class Service {
   startTimer() {
     if (this.timer) return;
     this.timer = setInterval(() => {
+      if (!this.closed && !this.store.permanentDeleting && !this.imports.size && !this.transport.running && !this.storage?.status().pending) {
+        try { this.skillInstallations.tick(); } catch { /* Per-installation errors are retained for the settings page. */ }
+      }
       const status = this.localHierarchy.status();
       if (!this.closed && !this.store.permanentDeleting && !this.imports.size && status.enabled && status.pending && !status.busy && !this.transport.running && !status.errors?.length) {
         this.organizeLocal({ verify: false });
@@ -77,7 +82,8 @@ export class Service {
     summary.trash -= legacy.filter(item => item.deleted).length;
     return { ...summary, libraries: this.store.directories.describe(this.store.libraries()), sync: this.transport.config(),
       workspace: this.store.local('workspace') || { tabs: [], selectedTab: null },
-      version: '0.1.5', localDataDirectory: this.store.directory, localHierarchy: this.localHierarchy.status(), deletion: deletionStatus(this.store) };
+      version: '0.1.6', localDataDirectory: this.store.directory, localHierarchy: this.localHierarchy.status(), deletion: deletionStatus(this.store),
+      skillInstallations: this.skillInstallations.summary() };
   }
   async finishDeletion() {
     this.store.permanentDeleting = true;
@@ -96,7 +102,7 @@ export class Service {
   async call(method, input = {}) {
     await this.ready;
     check(!this.store.permanentDeleting || ['state', 'deletionStatus'].includes(method), '永久删除正在处理，请稍后操作', 'BUSY');
-    if (['syncPlan', 'syncPublish', 'syncImport', 'deviceSetPrimary', 'deviceVerify', 'assetHydrate', 'assetEvict'].includes(method)) {
+    if (['syncPlan', 'syncPublish', 'syncImport', 'deviceManage', 'deviceSetPrimary', 'deviceVerify', 'assetHydrate', 'assetEvict'].includes(method)) {
       if (this.imports.size) await Promise.allSettled([...this.imports]);
       if (this.localTask) await this.localTask;
     }
@@ -123,6 +129,12 @@ export class Service {
       case 'agentPreferencesSave': return this.agents.savePreferences(input);
       case 'agentSkill': return this.agents.skillPackage();
       case 'agentSkillExport': return this.agents.exportSkill();
+      case 'skillInstallList': return this.skillInstallations.list();
+      case 'skillInstallCheck': return this.skillInstallations.check();
+      case 'skillInstallPreview': return this.skillInstallations.preview(input);
+      case 'skillInstallConfirm': return this.skillInstallations.confirm(input);
+      case 'skillInstallConfigure': return this.skillInstallations.configure(input);
+      case 'skillInstallUnlink': return this.skillInstallations.unlink(input);
       case 'librarySave': return this.store.saveLibrary(input);
       case 'noteTree': return this.store.noteTree(input.domain).map(({ data, versions, ...node }) =>
         ({ ...node, data: { title: data.title, domain: data.domain, parentNoteId: data.parentNoteId, noteOrder: data.noteOrder } }));
@@ -214,15 +226,24 @@ export class Service {
       case 'syncConfirmBatch': return this.transport.confirmBatch(input);
       case 'syncConfirmUpload': return this.transport.confirmUpload(input);
       case 'deviceStatus': return this.transport.devices();
+      case 'deviceManage': return this.transport.manageDevice(input);
       case 'deviceSetPrimary': return this.transport.setPrimary(input);
       case 'deviceVerify': return this.transport.exclusive(() => this.transport.verifyPrimary());
       case 'assetHydrate': return this.transport.hydrate(input);
       case 'assetEvict': return this.transport.evict(input);
       case 'syncPause': return this.transport.pause();
-      case 'deviceName':
+      case 'deviceName': {
         check(typeof input.name === 'string' && input.name.trim().length > 0, 'Enter a device name');
         check(!this.transport.running, '请等待同步操作完成');
+        const status = this.transport.devices();
+        if (status.primary || status.conflict) {
+          check(status.canManage, '设备名称由当前唯一主力机统一管理', 'FORBIDDEN');
+          await this.transport.manageDevice({ deviceId: this.store.deviceId, action: 'rename', name: input.name.trim(),
+            revision: status.revision, requestId: uuid(), confirmed: true });
+          return this.state();
+        }
         this.store.setMeta('deviceName', input.name.slice(0, 100)); this.transport.announce(); return this.state();
+      }
       case 'assetImport': {
         check(!this.transport.running, '请等待当前同步完成后导入');
         const task = (async () => {

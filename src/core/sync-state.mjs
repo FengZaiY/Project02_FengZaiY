@@ -1,5 +1,6 @@
 import { validateEvent } from './store.mjs';
 import { canonical, check, isId } from './util.mjs';
+import { validateManagement, transferDisputed } from './device-management.mjs';
 
 export const EMPTY_CONTROL = { devices: [], roles: [] };
 
@@ -18,7 +19,12 @@ export function mergeControl(left = EMPTY_CONTROL, right = EMPTY_CONTROL) {
         check(Object.keys(item).sort().join() === 'at,deviceId,id,name' && isId(item.deviceId)
           && typeof item.name === 'string' && item.name.length <= 100, 'Invalid device name');
       } else {
-        check(Object.keys(item).sort().join() === 'at,id,parents,primary' && isId(item.primary)
+        const fields = ['at', 'id', 'parents', 'primary', ...(item.transferId ? ['transferId'] : []),
+          ...(item.managementParents ? ['managementParents'] : []), ...(item.recovery ? ['recovery'] : [])];
+        check(Object.keys(item).sort().join() === fields.sort().join() && isId(item.primary)
+          && (!item.transferId || isId(item.transferId))
+          && (!item.managementParents || Array.isArray(item.managementParents) && item.managementParents.every(isId))
+          && (!item.recovery || item.recovery === true && !item.transferId && item.managementParents)
           && Array.isArray(item.parents) && item.parents.every(isId) && !item.parents.includes(item.id), 'Invalid primary role');
       }
       check(!values.has(item.id) || canonical(values.get(item.id)) === canonical(item), 'Device entry collision');
@@ -27,6 +33,16 @@ export function mergeControl(left = EMPTY_CONTROL, right = EMPTY_CONTROL) {
     return [...values.values()].sort((a, b) => a.id.localeCompare(b.id));
   };
   const result = { devices: union('devices'), roles: union('roles') };
+  if (left.management !== undefined || right.management !== undefined) {
+    check((left.management === undefined || Array.isArray(left.management)) && (right.management === undefined || Array.isArray(right.management)), '设备管理记录无效');
+    const events = new Map();
+    for (const item of [...(left.management || []), ...(right.management || [])]) {
+      check(item && isId(item.id), '设备管理记录无效');
+      check(!events.has(item.id) || canonical(events.get(item.id)) === canonical(item), '设备管理记录标识冲突');
+      events.set(item.id, item);
+    }
+    result.management = [...events.values()].sort((a, b) => a.id.localeCompare(b.id));
+  }
   const devices = new Set(result.devices.map(item => item.deviceId));
   check(result.roles.every(role => devices.has(role.primary)), 'Primary device is not registered');
   const known = new Set(result.roles.map(item => item.id));
@@ -37,6 +53,7 @@ export function mergeControl(left = EMPTY_CONTROL, right = EMPTY_CONTROL) {
     check(ready.length, 'Cyclic primary roles');
     ready.forEach(role => done.add(role.id));
   }
+  validateManagement(result);
   return result;
 }
 
@@ -44,8 +61,11 @@ export function primaryRole(control) {
   const roles = mergeControl(EMPTY_CONTROL, control).roles;
   const parents = new Set(roles.flatMap(role => role.parents));
   const heads = roles.filter(role => !parents.has(role.id));
-  return { heads, conflict: heads.length > 1, primary: heads.length === 1 ? heads[0].primary : null,
-    epoch: heads.length === 1 ? heads[0].id : null };
+  const handoverConflict = heads.some(role => transferDisputed(control, role)), conflict = heads.length > 1 || handoverConflict;
+  const recoveryDevices = [...new Set(heads.flatMap(role => [role.primary,
+    control.management?.find(event => event.id === role.transferId)?.actor]).filter(Boolean))];
+  return { heads, conflict, handoverConflict, recoveryDevices, primary: heads.length === 1 && !conflict ? heads[0].primary : null,
+    epoch: heads.length === 1 && !conflict ? heads[0].id : null };
 }
 
 // Validate the complete history before any database mutations. No older snapshot is required.

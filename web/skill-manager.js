@@ -1,10 +1,12 @@
 import { downloadSkill } from './skill-export.js';
+import { createSkillInstallations } from './skill-installations.js';
 import './skill-manager.css';
 
-export function createSkillManager({ api, esc, icon, safeHtml, formatTime, toast, confirmBox, redrawIcons, run }) {
+export function createSkillManager({ api, esc, icon, safeHtml, formatTime, toast, confirmBox, redrawIcons, run, pickDirectory }) {
   let host, bundle, pending = null, selectedTab = 'preferences', selectedFile = 'SKILL.md';
   const $ = selector => host?.querySelector(selector);
   const dirty = () => !!pending && pending.content !== pending.saved;
+  const installs = createSkillInstallations({ api, esc, icon, formatTime, toast, confirmBox, redrawIcons, run, pickDirectory, dirty });
   function stash() {
     const input = $('#agent-preferences-form textarea');
     if (input?.isConnected && pending) pending.content = input.value;
@@ -30,10 +32,11 @@ export function createSkillManager({ api, esc, icon, safeHtml, formatTime, toast
     const prefs = bundle.preferences;
     if (!dirty()) pending = { content: prefs.content, saved: prefs.content, heads: [...prefs.heads] };
     host.innerHTML = `<div class="skill-heading"><div><h2>SKILL 管理</h2><strong>studyself-organize</strong><span class="pill">系统内置</span></div><button class="secondary" data-action="agent-export" ${prefs.conflict ? 'disabled' : ''}>${icon('download')}导出 Skill</button></div>
-      <div class="skill-summary"><span>知识整理与方案提交</span><span>${Object.keys(bundle.files).length} 个文件</span><span>协议 1</span></div>
+      <div class="skill-summary"><span>知识整理与方案提交</span><span>${Object.keys(bundle.files).length} 个文件</span><span>协议 1</span><span id="skill-install-attention" role="status"></span></div>
       <dl class="skill-versions"><div><dt>内置版本</dt><dd title="${esc(bundle.skillVersion)}">${esc(bundle.skillVersion.slice(0, 12))}</dd></div><div><dt>偏好版本</dt><dd title="${esc(prefs.version)}">${esc(prefs.version.slice(0, 12))}</dd></div><div><dt>最近生成导出</dt><dd>${bundle.lastGenerated ? `${formatTime(bundle.lastGenerated.at)} · ${bundle.lastGenerated.version === bundle.exportVersion ? '与当前一致' : '内容已更新，需重新导出'}` : '尚未导出'}</dd></div></dl>
-      <p class="skill-export-note">导出为文件快照；外部 Agent 的安装状态未知。更新后需重新导出并替换安装副本。</p>
-      <div class="skill-tabs" role="tablist" aria-label="Skill 管理视图">${[['preferences', '整理偏好'], ['files', 'Skill 文件'], ['history', '偏好历史']].map(([id, title]) => `<button role="tab" id="skill-tab-${id}" aria-controls="skill-panel-${id}" data-skill-tab="${id}">${title}</button>`).join('')}</div>
+      <p class="skill-export-note">导出包是文件快照。已关联安装可自动检查及更新；未关联副本需自行替换。</p>
+      <div class="skill-tabs" role="tablist" aria-label="Skill 管理视图">${[['preferences', '整理偏好'], ['installs', '安装更新'], ['files', 'Skill 文件'], ['history', '偏好历史']].map(([id, title]) => `<button role="tab" id="skill-tab-${id}" aria-controls="skill-panel-${id}" data-skill-tab="${id}">${title}</button>`).join('')}</div>
+      <div id="skill-panel-installs" role="tabpanel" aria-labelledby="skill-tab-installs" data-skill-panel="installs" hidden></div>
       <div id="skill-panel-preferences" role="tabpanel" aria-labelledby="skill-tab-preferences" data-skill-panel="preferences">
         <details><summary>需求基线</summary><div class="prose">${safeHtml(prefs.baseline)}</div></details>
         ${prefs.conflict ? `<div class="notice amber">存在并发偏好，请对照后保存合并版本。Agent 写入已暂停。</div>${prefs.versions.map(version => `<details><summary>${formatTime(version.createdAt)} · ${esc(version.id.slice(0, 8))}</summary><pre class="preference-version">${esc(version.data.content)}</pre></details>`).join('')}` : ''}
@@ -79,12 +82,20 @@ export function createSkillManager({ api, esc, icon, safeHtml, formatTime, toast
     };
     host.querySelectorAll('[data-skill-tab]').forEach(button => { button.onclick = () => {
       selectTab(button.dataset.skillTab);
+      if (selectedTab === 'installs') void installs.mount($('#skill-panel-installs')).catch(error => toast(error.message, true));
       if (selectedTab === 'history') void history().catch(error => { if (host?.isConnected) $('#skill-history-list').textContent = error.message; });
     }; });
     host.querySelectorAll('[data-skill-file]').forEach(button => { button.onclick = () => showFile(button.dataset.skillFile); });
     $('#skill-file-copy').onclick = () => run(async () => { await navigator.clipboard.writeText(bundle.files[selectedFile]); toast('已复制文件内容'); });
     showFile(selectedFile); selectTab(selectedTab); editStatus(); redrawIcons();
+    const mountHost = host;
+    void api('skillInstallList').then(items => {
+      if (host !== mountHost || !mountHost.isConnected) return;
+      const count = items.filter(item => item.status !== 'current').length;
+      $('#skill-install-attention').textContent = count ? `${count} 个安装有更新或需要处理` : '';
+    }).catch(error => toast(error.message, true));
     if (selectedTab === 'history') void history().catch(error => { if (host?.isConnected) $('#skill-history-list').textContent = error.message; });
+    if (selectedTab === 'installs') await installs.mount($('#skill-panel-installs'));
   }
   async function history() {
     const target = $('#skill-history-list');
@@ -101,7 +112,9 @@ export function createSkillManager({ api, esc, icon, safeHtml, formatTime, toast
     });
     redrawIcons();
   }
-  return { mount, stash, dirty,
+  return { mount, stash, dirty, refreshInstallations: async () => {
+    if (host?.isConnected && selectedTab === 'installs' && !document.querySelector('dialog[open]') && !host.querySelector('[data-install-mode]:focus')) await installs.refresh();
+  },
     export: async () => {
       stash(); if (dirty()) throw new Error('请先保存或撤销未保存的整理偏好，再导出 Skill');
       const next = await api('agentSkillExport'); downloadSkill(next);

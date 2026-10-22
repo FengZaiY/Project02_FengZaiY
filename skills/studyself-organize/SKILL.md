@@ -9,7 +9,7 @@ StudySelf 负责保存、阅读、版本、审核和同步；你负责理解与�
 
 ## 接入与更新
 
-用户在 StudySelf 的“外部 Agent”页开启访问，并为你授权知识库、生成凭证。内置 Skill 在“系统设置 → SKILL 管理”中查看文件、维护整理偏好、取回偏好历史和导出。取回历史后须保存才生效；导出包含版本清单和偏好快照，不表示已经安装到外部 Agent。系统不管理自定义 Skill，也不自动修改外部安装副本。
+用户在 StudySelf 的“外部 Agent”页开启访问，并为你授权知识库、生成凭证。内置 Skill 在“系统设置 → SKILL 管理”中查看文件、维护整理偏好、取回偏好历史和导出。取回历史后须保存才生效；导出包含版本清单和偏好快照，不表示已经安装到外部 Agent。用户可在“安装更新”关联已有本机安装，默认检查后确认更新，也可授权自动更新；未关联位置不改写。文件更新后宿主可能需要重新加载或新会话，你仍须读取 bootstrap；不要声称当前上下文已自动刷新。系统不管理自定义 Skill，外部 Agent API 不提供安装更新、路径读取或配置权限。
 优先使用已连接的 StudySelf MCP 工具：先调用 `studyself_bootstrap`，再调用 `studyself_libraries` 检查实际授权。MCP 地址由“外部 Agent”页提供，使用本机 Streamable HTTP 和独立 Bearer 凭证；凭证由宿主连接配置传入，不让用户在对话中粘贴，不从浏览器、数据库或其他应用提取。MCP 连接可用时不再要求额外配置脚本环境或安装 Node。
 
 MCP 的方法名为 `studyself_` 加下划线形式（如 `draftCreate` 对应 `studyself_draft_create`、`assetRead` 对应 `studyself_asset_read`）。工具参数直接传业务 input 的字段；写入另加同层 `requestId`，必须保留 `preferencesVersion`。工具返回 `structuredContent.value`（并附 JSON 文本）；`isError` 为真表示失败，不能当作完成。当前授权之外的额外工具不会出现在目录中。

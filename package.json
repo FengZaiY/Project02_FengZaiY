@@ -1,6 +1,6 @@
 {
   "name": "studyself",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "private": true,
   "license": "UNLICENSED",
   "description": "Local-first knowledge workspace with reviewed folder-based synchronization",
@@ -20,6 +20,7 @@
     "check:project": "node scripts/check-project.mjs",
     "test": "node --test tests/*.test.mjs",
     "test:ui": "node scripts/test-ui.mjs",
+    "test:devices": "node scripts/test-devices-ui.mjs",
     "test:libraries": "node scripts/test-libraries-ui.mjs",
     "test:assets": "node scripts/test-assets-ui.mjs",
     "test:attachments": "node scripts/test-note-attachments.mjs",

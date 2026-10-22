@@ -1,0 +1,5 @@
+.device-table { table-layout:fixed; min-width:0; width:100%; }
+.device-table th:first-child { width:30%; }
+.device-table td { overflow-wrap:anywhere; white-space:normal; }
+.device-table .device-actions { display:flex; flex-wrap:wrap; gap:4px; }
+.device-table small { color:var(--muted); }

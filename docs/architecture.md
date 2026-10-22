@@ -138,6 +138,12 @@ Publication freezes saved events in a persistent local plan. `statfs` estimates 
 
 Device retention guards remain: conflicting primary roles block release, secondaries require a current-primary hash receipt, no unsent changes, no pinned/active/local-file-link references, and a managed verified path. Primary originals remain protected. Per-note history restore does not require Git; cloud-level history is managed through Baidu. Restored old manifests on an existing workspace merge without silently discarding later edits.
 
+Device administration (`device-management.mjs`) adds an optional immutable `control.management` DAG. Entries bind actor, role epoch, target, parents, action and (only for rename) name. Only the current unique primary may create them through the trusted `deviceManage` service method; the Agent HTTP/MCP surface does not expose it. A control digest protects stale confirmations, and request IDs make identical retries idempotent. Device labels and suspension are projected by causal ancestry, never wall-clock order; conflicting names retain candidates, and conflicting suspend/resume events keep the device paused until the primary resolves them. Local-device naming also follows primary ownership once a primary exists.
+
+Transfer is requested by the old primary and accepted on the target after merging current content and checking available originals. The accepted role references the request and management heads. Until acceptance the old primary remains responsible. Offline acceptance concurrent with cancellation or replacement produces a role dispute, not an implicit winner; a participant must explicitly recheck and resolve it. Role/management dependencies are validated together for missing references and cycles. A frozen publication cannot continue after its role or management basis changes.
+
+Manifests carrying management entries use format 5 in the existing v3 channel and include an `erasures` array (possibly empty), preserving the v4 erasure machinery. v3/v4 remain readable; management in a downgraded manifest is rejected, and old clients reject format 5. Updated receivers first validate/merge control state, skip knowledge payloads from known suspended publishers, and let a suspended local device receive only management state so restoration remains possible. Already received knowledge, local edits and originals remain intact. Publishing, hydrating, eviction and transport-deletion cleanup are blocked on suspended devices. These are application-level rules for updated cooperative clients sharing a channel key, not cryptographic device revocation, remote erasure, enforcement before offline peers receive policy, or protection against a malicious key holder. All peers must upgrade before using administration.
+
 Retired v2 journals recover their knowledge payload/bindings directly into SQLite; old repositories, backups and directories remain untouched. No active Service method imports Git or `BackupManager`. Legacy modules below remain test/reference compatibility only. See [decision 0006](decisions/0006-current-content-sync.md) for current recovery boundaries.
 
 ## Git versions and v2 handoff (retired)
@@ -272,7 +278,11 @@ Tools are named and schema-validated, with permission-filtered discovery. Write 
 
 系统设置使用 `web/skill-manager.js` 管理唯一内置 `studyself-organize` Skill，文件预览只读，偏好和历史仍使用原 `agentPreferences` 不可变实体，不新增共享类型。用户补充不会写回随应用发布的文件。历史取回只是编辑操作，后续保存校验基础版本并创建新记录；过期保存需对照并明确选择当前编辑，不静默覆盖。页面切换和保存期间的输入由管理器保留。
 
-受信任 `agentSkill` 返回固定文件集合、当前偏好、内置内容哈希、组合导出版本和本机最近生成信息。`agentSkillExport` 拒绝偏好冲突，冻结当前文件/偏好并记录本机生成元数据；外部 Agent 无权调用。ZIP 附带 `manifest.json` 与偏好快照，`skillVersion` 与 bootstrap 对齐，`exportVersion` 同时覆盖内置内容和偏好版本。不会扫描外部 Agent 安装目录或声称其副本已经更新，也不执行文件内脚本。外部 Agent 仍须在每批写入前读取 bootstrap。
+受信任 `agentSkill` 返回固定文件集合、当前偏好、内置内容哈希、组合导出版本和本机最近生成信息。`agentSkillExport` 拒绝偏好冲突，冻结当前文件/偏好并记录本机生成元数据；外部 Agent 无权调用。ZIP 附带 `manifest.json` 与偏好快照，`skillVersion` 与 bootstrap 对齐，`exportVersion` 同时覆盖内置内容和偏好版本。不执行文件内脚本。外部 Agent 仍须在每批写入前读取 bootstrap。
+
+`SkillInstallations` 仅通过受信任界面的 `skillInstall*` 方法操作用户明确关联的已有目录，不扫描宿主安装。固定五个文件与 ZIP 导出内容一致；额外文件不读取或修改。安装位置拒绝软/硬链接及工作区、源码 Skill、同步目录，路径只在本机管理界面出现。`local_config.skillInstallations` 保存摘要、模式、上次副本与恢复日志，不新增共享实体。随机安装标记限制单工作区归属，目录锁防止多个进程同时写入。
+
+预览令牌绑定文件快照、关联设置和内置/偏好版本，五分钟有效，确认重验。每文件原子替换，manifest 最后写；不承诺整个目录对第三方读取原子可见，更新时应暂停使用该 Skill。变更前持久化 before/after，失败/启动时只对仍匹配这两份内容的文件回滚，遇到外部新修改保留现场。上一份受管文件可恢复，恢复后关闭自动更新。应用运行期间每分钟检查，只有明确开启自动更新且文件摘要未被手改时才更新；设置导航显示待处理数。成功仅证明安装文件已写入，不证明宿主已重载，连接/授权配置不改。解除关联不删除安装文件。
 
 ## Verification
 

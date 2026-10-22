@@ -7,6 +7,7 @@ import { docxFixture } from './fixtures/docx.mjs';
 import { presentationFixture } from './fixtures/presentation.mjs';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { skillExportFiles } from '../web/skill-export.js';
 
 const root = path.resolve('artifacts/desktop');
 fs.mkdirSync(root, { recursive: true });
@@ -34,6 +35,26 @@ try {
     await page.locator('[data-nav=settings]').click();
     await page.locator('#upgrade-settings', { hasText: '桌面开发模式' }).waitFor();
     assert.equal(await page.locator('[data-update=check]').isDisabled(), true);
+    await page.locator('[data-action=skill-manage]').click();
+    await page.locator('[data-skill-tab=installs]').click();
+    await page.locator('[data-install-add]').waitFor();
+    const skill = await page.evaluate(() => window.desktop.call('agentSkill'));
+    const installed = path.join(fs.mkdtempSync(path.join(root, 'skill-')), 'studyself-organize');
+    for (const [name, content] of Object.entries(skillExportFiles(skill))) {
+      fs.mkdirSync(path.dirname(path.join(installed, name)), { recursive: true }); fs.writeFileSync(path.join(installed, name), content);
+    }
+    fs.unlinkSync(path.join(installed, 'manifest.json'));
+    const linked = await page.evaluate(async directory => {
+      const preview = await window.desktop.call('skillInstallPreview', { directory });
+      return window.desktop.call('skillInstallConfirm', { token: preview.token, confirmed: true });
+    }, installed);
+    await page.evaluate(async id => {
+      const preview = await window.desktop.call('skillInstallPreview', { id, action: 'update' });
+      return window.desktop.call('skillInstallConfirm', { token: preview.token, confirmed: true });
+    }, linked.id);
+    assert.ok(fs.existsSync(path.join(installed, 'manifest.json')));
+    await page.evaluate(id => window.desktop.call('skillInstallUnlink', { id, confirmed: true }), linked.id);
+    assert.ok(fs.existsSync(path.join(installed, 'SKILL.md')));
     await page.locator('[data-nav=notes]').click();
   }
   const data = await page.evaluate(async () => {

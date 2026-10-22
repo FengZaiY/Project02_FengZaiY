@@ -4,9 +4,11 @@ import path from 'node:path';
 import assert from 'node:assert/strict';
 import JSZip from 'jszip';
 import { createServer } from '../src/server.mjs';
+import { skillExportFiles } from '../web/skill-export.js';
 
 const root = path.resolve('artifacts/ui-skill-manager'); fs.mkdirSync(root, { recursive: true });
-const app = await createServer({ directory: fs.mkdtempSync(path.join(root, 'profile-')), port: 0 });
+let chosenDirectory = null;
+const app = await createServer({ directory: fs.mkdtempSync(path.join(root, 'profile-')), port: 0, chooseDirectory: async () => chosenDirectory });
 const first = app.service.agents.savePreferences({ content: '最早规则：保留出处。', parents: [] });
 app.service.agents.savePreferences({ content: '当前规则：区分观点。', parents: first.heads });
 let browser, page; const errors = [];
@@ -80,9 +82,45 @@ try {
   await page.locator('#modal [data-confirm]').click();
   await page.locator('#skill-edit-status', { hasText: '已保存' }).waitFor();
   assert.equal(app.service.agents.preferences().content, '对照后的规则');
+  const installation = path.join(fs.mkdtempSync(path.join(root, 'installed-')), 'studyself-organize');
+  for (const [name, content] of Object.entries(skillExportFiles(app.service.agents.skillPackage()))) {
+    fs.mkdirSync(path.dirname(path.join(installation, name)), { recursive: true }); fs.writeFileSync(path.join(installation, name), content);
+  }
+  fs.writeFileSync(path.join(installation, 'extra.txt'), 'keep');
+  await page.locator('[data-skill-tab=installs]').click();
+  await page.locator('[data-install-add]').click();
+  assert.equal(app.service.skillInstallations.list().length, 0);
+  chosenDirectory = installation;
+  await page.locator('[data-install-add]').click();
+  await page.locator('#modal [data-cancel]').click();
+  assert.equal(app.service.skillInstallations.list().length, 0);
+  await page.locator('[data-install-add]').click(); await page.locator('#modal [data-confirm]').click();
+  await page.locator('.skill-install-row').waitFor();
+  assert.equal(app.service.skillInstallations.list()[0].mode, 'manual');
+  app.service.agents.savePreferences({ content: '安装更新的新规则', parents: app.service.agents.preferences().heads });
+  await page.locator('[data-install-check]').click(); await page.locator('.skill-install-row .pill', { hasText: '有更新' }).waitFor();
+  await page.locator('[data-install-update]').click(); await page.locator('#modal [data-confirm]').click();
+  await page.locator('.skill-install-row .pill', { hasText: '与当前一致' }).waitFor();
+  assert.match(fs.readFileSync(path.join(installation, 'references/preferences.md'), 'utf8'), /安装更新的新规则/);
+  await page.locator('[data-install-restore]').click(); await page.locator('#modal [data-confirm]').click();
+  await page.locator('.skill-install-row .pill', { hasText: '有更新' }).waitFor();
+  assert.doesNotMatch(fs.readFileSync(path.join(installation, 'references/preferences.md'), 'utf8'), /安装更新的新规则/);
+  await page.locator('[data-install-mode]').selectOption('auto'); await page.locator('#modal [data-cancel]').click();
+  assert.equal(app.service.skillInstallations.list()[0].mode, 'manual');
+  await page.locator('[data-install-mode]').selectOption('auto'); await page.locator('#modal [data-confirm]').click();
+  await page.waitForFunction(async () => {
+    const token = document.querySelector('meta[name=local-token]').content;
+    const result = await (await fetch('/api', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-StudySelf-Token': token }, body: JSON.stringify({ method: 'skillInstallList', input: {} }) })).json();
+    return result.value?.[0]?.status === 'current';
+  });
+  fs.appendFileSync(path.join(installation, 'references/api.md'), '\nmanual addition');
+  await page.locator('[data-install-check]').click(); await page.locator('.skill-install-row .pill', { hasText: '手工修改' }).waitFor();
+  await page.locator('[data-install-update]').click(); await page.locator('#modal .skill-install-warning').waitFor();
+  await page.locator('#modal [data-cancel]').click();
+  assert.match(fs.readFileSync(path.join(installation, 'references/api.md'), 'utf8'), /manual addition/);
   for (const width of [1304, 1001, 600]) {
     await page.setViewportSize({ width, height: 892 });
-    for (const tab of ['preferences', 'files', 'history']) {
+    for (const tab of ['preferences', 'installs', 'files', 'history']) {
       await page.locator(`[data-skill-tab=${tab}]`).click();
       await page.locator('#skill-management').evaluate(el => el.scrollIntoView({ block: 'start' }));
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
@@ -90,9 +128,14 @@ try {
       const footer = await page.locator('.statusbar').boundingBox(); assert.ok(footer.y + footer.height <= 893);
     }
   }
+  await page.locator('[data-skill-tab=installs]').click();
+  await page.locator('[data-install-unlink]').click(); await page.locator('#modal [data-confirm]').click();
+  await page.locator('#skill-panel-installs .muted', { hasText: '尚未关联' }).waitFor();
+  assert.equal(fs.readFileSync(path.join(installation, 'extra.txt'), 'utf8'), 'keep');
+  assert.ok(fs.existsSync(path.join(installation, 'SKILL.md')));
   await page.reload(); await page.locator('[data-nav=settings]').click(); await input.waitFor();
-  assert.equal(await input.inputValue(), '对照后的规则');
+  assert.equal(await input.inputValue(), '安装更新的新规则');
   assert.deepEqual(errors, []);
-  console.log('PASS: built-in Skill preview/export manifest, retained edits, history recovery, in-flight typing, stale-version comparison, restart and responsive screenshots.');
+  console.log('PASS: Skill preview/export, retained edits, history, stale versions; installation picker/cancel, update/restore, automatic timer, modified-file protection, unlink, restart and responsive screenshots.');
 } catch (error) { await page?.screenshot({ path: path.join(root, 'failure.png'), fullPage: true }); throw error; }
 finally { await browser?.close(); await app.close(); }

@@ -42,6 +42,8 @@ export function readHistoryPart(channel, part, visited = new Set()) {
 export function cleanErasedTransport(sync) {
   const store = sync.store, report = { at: now(), state: 'done', deleted: 0, errors: [], cloudVerified: false };
   if (!sync.config().configured) return { ...report, state: 'unconfigured' };
+  const local = sync.devices().devices.find(device => device.local);
+  if (local?.suspended || local?.statusConflict) return { ...report, state: 'blocked', errors: [{ message: '本机已停用，暂停发布同步删除凭据及清理传输文件' }] };
   const channel = sync.channel(); let receipts = mergeErasures(store.erasures());
   if (!receipts.length && !store.retiredAI) return report;
   for (const value of store.erasures()) channel.writeJson(`erase-${value.id}.sserasure`, value, `v4:erase:${value.id}`);

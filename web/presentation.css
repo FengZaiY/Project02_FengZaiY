@@ -1,6 +1,9 @@
 .presentation-mode { display:flex; align-items:center; flex-wrap:wrap; gap:8px; padding:8px 16px; border-bottom:1px solid #e0e5e2; }
 .presentation-mode .page-state { margin-left:auto; font-size:12px; color:#80621a; }
 .presentation-mode button[aria-pressed="true"] { color:#17654f; background:#e5f3ed; }
+.presentation-mode > button { flex-shrink:0; }
+.presentation-mode .page-state { overflow-wrap:anywhere; }
+.presentation-mode .page-design-request { display:inline-flex; align-items:center; gap:6px; }
 .presentation-host { flex:1; min-height:0; display:flex; flex-direction:column; overflow:hidden; }
 .presentation-host[hidden] { display:none; }
 .page-runtime-bar { display:flex; align-items:center; gap:8px; padding:6px 16px; flex-wrap:wrap; font-size:12px; background:#f5f7f6; }

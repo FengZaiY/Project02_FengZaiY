@@ -14,12 +14,14 @@ const required = [
   'docs/decisions/0001-local-first-folder-sync.md',
   'src/core/store.mjs', 'src/core/service.mjs', 'src/core/transport.mjs',
   'src/core/current-sync.mjs', 'src/core/sync-state.mjs', 'src/core/resumable-files.mjs',
+  'src/core/device-management.mjs', 'tests/device-management.test.mjs', 'scripts/test-devices-ui.mjs', 'web/device-manager.css',
   'src/core/hierarchy.mjs', 'src/core/local-hierarchy.mjs', 'web/hierarchy-ui.js', 'tests/hierarchy.test.mjs',
   'src/core/note-hierarchy.mjs', 'tests/note-hierarchy.test.mjs',
   'src/core/note-order.mjs', 'tests/note-order.test.mjs',
   'src/core/draft-workflow.mjs', 'web/draft-workflow.js', 'web/draft-workflow.css', 'tests/draft-workflow.test.mjs', 'scripts/test-draft-workflow.mjs',
   'web/record-navigation.js', 'web/record-navigation.css',
   'web/skill-manager.js', 'web/skill-manager.css', 'scripts/test-skill-manager.mjs',
+  'src/core/skill-installations.mjs', 'web/skill-installations.js', 'tests/skill-installations.test.mjs',
   'src/desktop/updates.mjs', 'src/desktop/update-source.mjs', 'web/update-manager.js', 'web/update-manager.css',
   'tests/updates.test.mjs', 'scripts/test-updates-ui.mjs', 'scripts/release-config.mjs', 'docs/online-updates.md',
   'web/note-tree-drag.js', 'scripts/test-note-tree-drag.mjs',
@@ -67,6 +69,7 @@ const scripts = {
   'test:experience': 'node scripts/test-editor-experience.mjs',
   'test:trash': 'node scripts/test-trash-ui.mjs',
   'test:desktop': 'node scripts/test-desktop.mjs',
+  'test:devices': 'node scripts/test-devices-ui.mjs',
   'test:packaged': 'node scripts/test-desktop.mjs --packaged',
   benchmark: 'node scripts/benchmark.mjs'
 };

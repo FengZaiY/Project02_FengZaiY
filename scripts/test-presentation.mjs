@@ -26,10 +26,43 @@ try {
   const broken = app.service.store.write({ type: 'note', data: { ...data, title: '运行保护', presentation: presentationFixture(data, { script: 'while(true){}' }) } });
   try { browser = await chromium.launch({ headless: true }); } catch { browser = await chromium.launch({ channel: 'msedge', headless: true }); }
   const page = await browser.newPage({ viewport: { width: 1220, height: 892 } });
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: {
+      writeText: async text => { window.copiedDesignRequest = text; }
+    } });
+  });
   page.on('pageerror', error => errors.push(error.message));
   page.on('request', request => { if (/^https?:/.test(request.url()) && !request.url().startsWith(app.url)) requests.push(request.url()); });
   page.on('console', message => { if (message.type() === 'error') console.log(message.text()); });
   await page.goto(app.url);
+  await page.locator(`[data-record="${note.id}"]`).click();
+  const modeBar = page.getByRole('group', { name: '笔记呈现方式' });
+  assert.equal(await modeBar.getByRole('button', { name: '交互阅读', exact: true }).isDisabled(), true);
+  assert.equal(await modeBar.getByRole('button', { name: '正文编辑', exact: true }).getAttribute('aria-pressed'), 'true');
+  assert.equal(await page.locator('iframe.interactive-page').count(), 0);
+  await page.locator('.tiptap').evaluate(el => { window.plainEditor = el.editor; });
+  await modeBar.getByRole('button', { name: '复制设计请求', exact: true }).click();
+  await page.getByText('设计请求已复制，请交给已连接的外部 Agent', { exact: true }).waitFor();
+  const request = await page.evaluate(() => window.copiedDesignRequest);
+  for (const value of [note.id, note.heads[0], data.domain, 'presentation v1', '等待我预览确认']) assert.ok(request.includes(value));
+  assert.ok(!request.includes(data.content));
+  assert.deepEqual(app.service.store.get(note.id).heads, note.heads);
+  await modeBar.getByRole('button', { name: '正文编辑', exact: true }).click();
+  assert.equal(await page.locator('.tiptap').evaluate(el => el.editor === window.plainEditor), true);
+  for (const width of [1220, 931, 600]) {
+    await page.setViewportSize({ width, height: 892 });
+    await page.getByText('交互页面尚未生成', { exact: true }).waitFor();
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+    const boxes = await modeBar.locator('button,.page-state').evaluateAll(elements => elements.map(el => {
+      const rect = el.getBoundingClientRect(); return { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom };
+    }));
+    for (const [index, box] of boxes.entries()) {
+      assert.ok(box.left >= 0 && box.right <= width + 1);
+      for (const other of boxes.slice(index + 1)) assert.ok(box.right <= other.left || other.right <= box.left || box.bottom <= other.top || other.bottom <= box.top);
+    }
+    await page.screenshot({ path: path.join(root, `entry-${width}.png`) });
+  }
+  await page.setViewportSize({ width: 1220, height: 892 });
   await page.locator('[data-nav=proposals]').click(); await page.locator(`[data-record="${proposal.id}"]`).click();
   await page.getByRole('button', { name: '预览交互页面', exact: true }).click();
   await page.frameLocator('#modal iframe.interactive-page').locator('#chart svg').waitFor();
