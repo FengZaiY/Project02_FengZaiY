@@ -16,6 +16,7 @@ import { folderTree, folderEmpty, placedTypes, validatePlacement } from './hiera
 import { noteTree, hasNoteChildren, validateNotePlacement, validateProposalHierarchy, orderedProposalItems, migrateLegacyHierarchy, legacyNoteId } from './note-hierarchy.mjs';
 import { compareNoteOrder, orderBetween, validNoteOrder } from './note-order.mjs';
 import { uuid, now, sha, canonical, check, isId, isHash, atomicWrite, encrypt, decrypt } from './util.mjs';
+import { persistentRevisionData, revisionChecksum } from './revision-integrity.mjs';
 const GLOBAL_SCOPE = '__all_libraries__';
 
 const COMMON = ['title', 'domain', 'tags', 'sensitive'];
@@ -139,7 +140,8 @@ export function validateEvent(event) {
   check(canonical(data) === canonical(event.data), 'Unexpected or private fields in shared record');
   const { hash, ...content } = event;
   check(Object.keys(content).sort().join() === ['schema', 'id', 'entityId', 'type', 'deviceId', 'sequence', 'createdAt', 'parents', 'deleted', 'data', ...(event.purged ? ['purged'] : [])].sort().join(), 'Unexpected revision fields');
-  check(isHash(hash) && sha(canonical(content)) === hash, 'Revision checksum mismatch');
+  check(isHash(hash) && revisionChecksum(event).kind !== 'invalid',
+    `修改记录校验失败（Revision checksum mismatch）。类型：${event.type}；记录：${event.entityId}；版本：${event.id}。未能核实为旧版空字段问题，已停止处理并保留数据。`, 'CHECKSUM_MISMATCH');
   return event;
 }
 
@@ -249,6 +251,9 @@ export class Store {
     return Number.isSafeInteger(limit) && limit > 0 ? records.slice(0, Math.min(limit, 10000)) : records;
   }
   insert(event, exported) {
+    // Validate what SQLite will actually retain, including legacy checksum evidence.
+    event = JSON.parse(JSON.stringify(event));
+    validateEvent(event);
     check(!this.retiredAI || !retiredAI(event.type), '内置 AI 历史已退役，不再入库', 'RETIRED');
     if (!filterErased([event], this.erasures()).length) return false;
     const existing = this.event(event.id);
@@ -286,6 +291,7 @@ export class Store {
     check(!this.retiredAI || !retiredAI(type), '内置 AI 历史已删除，不再创建或恢复', 'RETIRED');
     check(!this.permanentDeleting, '永久删除正在处理，请稍后操作', 'BUSY');
     check(!this.local('v2Journal'), '版本操作尚未恢复，请重启恢复后再编辑', 'RECOVERY_REQUIRED');
+    data = persistentRevisionData(data);
     if (['note', 'draft'].includes(type) && !Object.hasOwn(data, 'presentation')) {
       const bases = parents.map(parent => this.event(parent)?.data);
       const pages = new Set(bases.map(base => canonical(base?.presentation ?? null)));
@@ -321,6 +327,26 @@ export class Store {
     let event;
     this.transaction(() => { event = this.writeRaw(input); });
     return this.get(event.entityId);
+  }
+  revisionIntegrity() {
+    const report = { at: now(), total: 0, exact: 0, compatible: 0, invalid: 0, issues: [] };
+    for (const table of ['events', 'pending']) for (const row of this.db.prepare(`SELECT json FROM ${table}`).iterate()) {
+      report.total++;
+      let event;
+      try {
+        event = JSON.parse(row.json); validateEvent(event);
+        const result = revisionChecksum(event);
+        if (result.kind === 'exact') report.exact++;
+        else {
+          report.compatible++;
+          if (report.issues.length < 100) report.issues.push({ table, kind: result.kind, id: event.id, entityId: event.entityId, type: event.type, fields: result.fields });
+        }
+      } catch (error) {
+        report.invalid++;
+        if (report.issues.length < 100) report.issues.push({ table, kind: 'invalid', id: event?.id, entityId: event?.entityId, type: event?.type, message: error.message });
+      }
+    }
+    return report;
   }
   purgeRaw(id, parents) {
     check(!this.local('v2Journal'), '版本操作尚未恢复，请重启后再操作', 'RECOVERY_REQUIRED');

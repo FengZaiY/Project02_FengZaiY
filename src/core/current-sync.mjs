@@ -267,16 +267,19 @@ export class CurrentSync {
     const erased = new Set(mergeErasures(this.store.erasures(), readErasureReceipts(channel)).map(item => item.entityId));
     for (const name of channel.names('.sscurrent')) {
       try {
-        const manifest = this.loadCurrent(name), missing = [];
+        const manifest = this.loadCurrent(name), missing = [], invalid = [];
         for (const part of manifest.parts) {
-          try { readHistoryPart(channel, part); } catch { missing.push(part.name); }
+          try { readHistoryPart(channel, part); } catch (error) {
+            if (error.code === 'ENOENT') missing.push(part.name);
+            else { invalid.push(part.name); errors.push({ file: part.name, message: error.message }); }
+          }
         }
         for (const object of manifest.assets.filter(asset => asset.ids.some(id => !erased.has(id))).flatMap(asset => asset.chunks)) {
           const file = channel.file(object.name);
           if (!fs.existsSync(file) || fs.statSync(file).size !== object.size + 36) missing.push(object.name);
         }
         entries.push({ id: manifest.id, deviceId: manifest.deviceId, deviceName: manifest.deviceName, at: manifest.at,
-          own: manifest.deviceId === this.store.deviceId, imported: !!seen[manifest.id], missing });
+          own: manifest.deviceId === this.store.deviceId, imported: !!seen[manifest.id], missing, invalid });
       } catch (error) { errors.push({ file: name, message: error.message }); }
     }
     this.readReceipts(errors);

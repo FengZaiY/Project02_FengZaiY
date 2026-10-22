@@ -64,6 +64,14 @@ try {
     return { note: original, state: await window.desktop.call('state'), access: await window.desktop.call('agentStatus'), token: grant.token };
   });
   assert.equal(data.note.data.title, '桌面启动验证');
+  if (!packaged) {
+    const integrity = await page.evaluate(async () => {
+      await window.desktop.call('workspacePublish', { tabs: [], selectedTab: undefined });
+      return window.desktop.call('syncIntegrity');
+    });
+    assert.equal(integrity.invalid, 0);
+    assert.equal(integrity.compatible, 0);
+  }
   assert.equal('idleBackup' in data.state, false);
   assert.equal('backups' in data.state, false);
   assert.equal(await page.locator('[data-nav="backup"]').count(), 0);

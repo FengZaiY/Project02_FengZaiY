@@ -2,7 +2,17 @@ import './device-manager.css';
 
 export function createSyncUI({ api, esc, icon, formatTime, bytes, render, toast, confirmBox, inputBox, persist }) {
   const $ = selector => document.querySelector(selector);
-  let scan = null;
+  let scan = null, integrity = null;
+  function integrityHtml() {
+    if (!integrity) return '';
+    return `<div class="notice ${integrity.invalid ? 'danger' : ''}" id="sync-integrity-result"><div>
+      <strong>${integrity.invalid ? `${integrity.invalid} 条记录需要检查` : '本机修改记录校验通过'}</strong>
+      <p>共 ${integrity.total} 条 · 正常 ${integrity.exact} 条 · 旧版兼容通过 ${integrity.compatible} 条 · 异常 ${integrity.invalid} 条</p>
+      ${integrity.compatible ? '<p>旧版空字段记录已核对原校验值，历史内容和标识保持不变。其他电脑也需要更新到包含此修复的版本。</p>' : ''}
+      <small>检查时间：${formatTime(integrity.at)}</small>
+      ${integrity.issues.filter(item => item.kind === 'invalid').map(item => `<p class="storage-path">${esc(item.message)}${item.id ? `<br>版本：${esc(item.id)}` : ''}</p>`).join('')}
+      ${integrity.invalid && integrity.issues.length >= 100 ? '<p>详细列表最多显示 100 项。</p>' : ''}</div></div>`;
+  }
   function progressHtml(status) {
     const job = status.job, active = job && !['complete', 'cancelled'].includes(job.state);
     const names = { ready: '等待发布', running: '正在生成', paused: '已暂停', blocked: '等待处理', complete: '已生成', cancelled: '已取消' };
@@ -27,11 +37,13 @@ export function createSyncUI({ api, esc, icon, formatTime, bytes, render, toast,
     host.innerHTML = `<h2>全部知识库与资料</h2><div class="version-controls">
       <label>每批生成上限 <select id="sync-batch-size" aria-label="每批生成上限"><option value="256">自动规划 · 上限 256 MB</option><option value="64">64 MB</option><option value="16">16 MB</option></select></label>
       <button class="secondary" data-action="sync-plan">${icon('calculator')}空间预估</button></div>
-      <div id="sync-task">${progressHtml(status)}</div><h2>已下载的最新内容</h2>
+      <div id="sync-task">${progressHtml(status)}</div>
+      <div class="version-controls"><button class="secondary" data-action="sync-integrity">${icon('shield-check')}检查本机修改记录</button></div>${integrityHtml()}
+      <h2>已下载的最新内容</h2>
       <div class="version-controls"><button class="secondary" data-action="sync-scan">${icon('search')}检查已下载更新</button>
       <button class="primary" data-action="sync-import">${icon('download')}拉取最新内容</button>
       <button class="text-button" data-action="sync-import-index">仅笔记与索引</button></div>
-      ${scan ? `<p class="muted">本机检查时间：${formatTime(scan.finishedAt)}</p>${scan.entries.map(item => `<div class="workspace-option"><div><strong>${esc(item.deviceName)}${item.own ? ' · 本机' : ''}</strong><small>${formatTime(item.at)} · ${item.imported ? '已接收' : '待接收'} · ${item.missing.length ? `${item.missing.length} 个对象未下载` : '待校验'}</small></div></div>`).join('') || '<div class="section-empty">尚未发现最新内容清单</div>'}
+      ${scan ? `<p class="muted">本机检查时间：${formatTime(scan.finishedAt)}</p>${scan.entries.map(item => `<div class="workspace-option"><div><strong>${esc(item.deviceName)}${item.own ? ' · 本机' : ''}</strong><small>${formatTime(item.at)} · ${item.imported ? '已接收' : '待接收'} · ${item.invalid?.length ? `${item.invalid.length} 个历史对象校验失败 · ` : ''}${item.missing.length ? `${item.missing.length} 个对象未下载` : item.invalid?.length ? '请查看错误详情' : '待校验'}</small></div></div>`).join('') || '<div class="section-empty">尚未发现最新内容清单</div>'}
       ${scan.errors.map(error => `<div class="notice danger">${esc(error.message)}</div>`).join('')}` : '<div class="section-empty">尚未检查</div>'}`;
     $('#main').insertBefore(host, $('#sync-content-policy'));
   }
@@ -89,6 +101,7 @@ export function createSyncUI({ api, esc, icon, formatTime, bytes, render, toast,
     toast('设备设置已保存，发布后由其他电脑拉取生效');
   }
   const actions = {
+    'sync-integrity': async () => { integrity = await api('syncIntegrity'); await render(); },
     'device-rename': target => manage(target, 'rename'),
     'device-suspend': target => manage(target, 'suspend'),
     'device-resume': target => manage(target, 'resume'),
