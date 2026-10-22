@@ -3,6 +3,7 @@ import path from 'node:path';
 import { atomicWrite, canonical, check, hashFile, inside, noSymlink, now, outside, sha, uuid } from './util.mjs';
 import { placedTypes } from './hierarchy.mjs';
 import { legacyNoteId } from './note-hierarchy.mjs';
+import { pruneReceivedDirectory } from './received-objects.mjs';
 
 const names = { note: '笔记', draft: '草稿', source: '来源', annotation: '备注', relation: '关联', proposal: '整理方案', asset: '资料' };
 const safeName = title => String(title).normalize('NFKC').replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').replace(/[. ]+$/g, '').slice(0, 24) || '未命名';
@@ -71,6 +72,7 @@ export class LocalHierarchy {
       if (!fs.existsSync(file)) continue;
       if (item.assetId && this.store.activeAssetReads?.get(item.assetId) > 0) { keep.push(item); continue; }
       if (this.store.db.prepare('SELECT 1 FROM assets WHERE path=?').get(file)) continue;
+      if (Object.values(this.store.local('localFileLinks') || {}).some(value => path.resolve(value).toLowerCase() === file.toLowerCase())) { keep.push(item); continue; }
       if (!this.managedOriginal(file) || await hashFile(file) !== item.hash) { keep.push(item); continue; }
       fs.unlinkSync(file);
       this.pruneEmpty(path.dirname(file));
@@ -185,6 +187,7 @@ export class LocalHierarchy {
         this.pruneEmpty(path.dirname(file));
       }
       await this.cleanOriginals();
+      report.receivedDirectory = pruneReceivedDirectory(this.store);
       this.store.local('hierarchyFiles', files);
       this.store.local('hierarchyDirty', report.errors.length > 0 || initial !== this.store.db.prepare('SELECT COUNT(*) AS n FROM events').get().n);
     } catch (error) { report.errors.push({ message: error.message }); this.store.local('hierarchyDirty', true); }

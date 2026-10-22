@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { pruneReceivedDirectory } from './received-objects.mjs';
 import path from 'node:path';
 import { LocalHierarchy } from './local-hierarchy.mjs';
 import { check, hashFile, inside, noSymlink, now, outside } from './util.mjs';
@@ -140,6 +141,7 @@ export async function runDeletionFiles(store) {
     } catch (error) { Object.assign(item, { state: 'blocked', reason: error.message, at: now() }); }
     store.local('permanentDeletionFiles', files);
   }
+  store.local('receivedDirectoryCleanup', pruneReceivedDirectory(store));
   try {
     const checkpoint = store.db.prepare('PRAGMA wal_checkpoint(TRUNCATE)').get();
     check(!checkpoint.busy, '数据库仍被读取，稍后重试压缩');

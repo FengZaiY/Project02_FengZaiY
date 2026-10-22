@@ -71,6 +71,7 @@ MCP 适配使用生产依赖 `@modelcontextprotocol/sdk` 和 `zod`，与原 HTTP
 | 笔记树拖动 | 另运行 `npm run test:note-drag`、`node --test tests/note-order.test.mjs`；真实鼠标验证下级/顶层/同级前后、整条子树、排序重开/同步/并发、循环/跨库阻止、取消/长树滚动、当前及后台标签保存竞态、失败重试、源及目标过期、编辑器/预览/撤销保留，以及层级目录跟随和单纯排序不搬原件 |
 | 根目录与知识库文件夹 | `npm test` 含 `library-directories.test.mjs`；另测 `test:storage`、`test:libraries` 和 `test:desktop`，核对真实目录、旧库兼容、创建失败回退及跨库新附件位置 |
 | 本地存储与启动目录 | 另运行 `npm run test:storage`、`npm run test:desktop`；覆盖非空/占用/丢失/损坏目录、复制失败、配置写入失败、WAL 和重启持久化 |
+| 同步接收目录 | `node --test tests/received-objects.test.mjs`、`node scripts/test-received-objects-ui.mjs`；覆盖空目录、绑定/链接保护、未知文件、异常路径、失败重试、重启续传、分页及未保存偏好保留。相关同步和目录维护回归继续执行 |
 | 外部 Agent、权限、偏好和 Skill | 另运行 `npm run test:agents`，核心测试通过真实本机 HTTP 验证隔离、撤销、幂等和偏好更新；检查导出的 ZIP |
 | 主进程、预加载、凭据和 IPC | 核心测试、构建、`npm run test:desktop` |
 | 桌面退出与保存检查 | 另运行 `npm run test:exit`、`node --test tests/exit-check.test.mjs tests/note-autosave.test.mjs`；验证受信任握手、重复关闭/取消/超时、后台操作保护、多标签保存、冲突不分支、未保存偏好与弹窗、结构化错误码及退出后数据库落盘；使用 `--smoke-test --test-exit` 隔离源码实例 |

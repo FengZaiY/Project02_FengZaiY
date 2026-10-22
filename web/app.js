@@ -28,6 +28,7 @@ import './record-navigation.css';
 import { mountPageMode } from './presentation-mode.js';
 import { mountPresentation } from './presentation-view.js';
 import { copyText } from './editor-text.js';
+import { mountReceivedObjects } from './received-objects.js';
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -822,6 +823,7 @@ async function renderSettings() {
       ${state.snapshot.localHierarchy?.errors?.length ? `<div class="notice amber">${state.snapshot.localHierarchy.errors.map(item => esc(item.message)).join('<br>')}${button('refresh-cw', 'storage-retry', '重试本地文件维护')}</div>` : ''}
       ${legacyCleanupNotice()}
       <div class="storage-actions"><button class="secondary" data-action="empty-directories">${icon('folder-search')}检查废弃空目录</button></div>
+      <div class="received-objects" id="received-objects" aria-label="同步接收目录"></div>
       ${state.snapshot.deletion?.files?.length || state.snapshot.deletion?.database ? `<div class="notice"><div><strong>永久删除清理</strong><p>本地文件已释放 ${bytes(state.snapshot.deletion.releasedBytes)} · ${state.snapshot.deletion.pending} 个文件待处理 · 数据库${state.snapshot.deletion.database?.state === 'done' ? '已压缩' : '待压缩'}</p>
         ${state.snapshot.deletion.retiredAI ? `<p>内置 AI 历史：已移除 ${state.snapshot.deletion.retiredAI.records} 条旧记录及 ${state.snapshot.deletion.retiredAI.settings} 项本机配置${state.snapshot.deletion.retiredAI.pending ? '，文件清理或数据库压缩待完成' : ''}。</p>` : ''}
         ${state.snapshot.deletion.files.filter(item => item.state !== 'done').map(item => `<p class="storage-path">${esc(item.relative)}：${esc(item.reason || '等待清理')}</p>`).join('')}
@@ -838,6 +840,8 @@ async function renderSettings() {
     <section class="settings-section" id="skill-management" aria-label="SKILL 管理"></section>`;
   await skillUI.mount($('#skill-management'), skill);
   await updateUI.mount($('#upgrade-settings'), state.snapshot.version);
+  const receivedHost = $('#received-objects');
+  if (receivedHost) await mountReceivedObjects(receivedHost, { api, esc, bytes, icon, refreshIcons: () => createIcons({ icons }) });
 }
 function requireStorageSaved() {
   stash();

@@ -17,6 +17,7 @@ import { cleanPrevious, previewPrevious } from './old-workspace-cleanup.mjs';
 import { cleanEmptyDirectories, previewEmptyDirectories } from './empty-library-directories.mjs';
 import { previewAssetMerge, mergeAssets } from './asset-merge.mjs';
 import { archiveDraft, draftWorkflows } from './draft-workflow.mjs';
+import { receivedObjectsStatus } from './received-objects.mjs';
 
 const sharedTab = tab => Object.fromEntries(['id', 'recordId', 'title', 'domain', 'scroll']
   .filter(key => Object.hasOwn(tab, key)).map(key => [key, tab[key]]));
@@ -82,7 +83,7 @@ export class Service {
     summary.trash -= legacy.filter(item => item.deleted).length;
     return { ...summary, libraries: this.store.directories.describe(this.store.libraries()), sync: this.transport.config(),
       workspace: this.store.local('workspace') || { tabs: [], selectedTab: null },
-      version: '0.1.6', localDataDirectory: this.store.directory, localHierarchy: this.localHierarchy.status(), deletion: deletionStatus(this.store),
+      version: '0.1.7', localDataDirectory: this.store.directory, localHierarchy: this.localHierarchy.status(), deletion: deletionStatus(this.store),
       skillInstallations: this.skillInstallations.summary() };
   }
   async finishDeletion() {
@@ -147,6 +148,9 @@ export class Service {
       }
       case 'recordMove': return this.store.moveRecord(input);
       case 'localHierarchyStatus': return this.localHierarchy.status();
+      case 'receivedObjectsStatus': return { ...receivedObjectsStatus(this.store, input),
+        busy: !!(this.transport.running || this.localTask || this.imports.size),
+        cleanup: this.localHierarchy.status().receivedDirectory || this.store.local('receivedDirectoryCleanup') };
       case 'localHierarchyRefresh': return this.organizeLocal();
       case 'libraryDirectory': {
         const record = this.store.libraries().find(item => item.id === input.id);

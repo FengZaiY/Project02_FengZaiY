@@ -1,0 +1,12 @@
+.received-objects { border-top: 1px solid var(--border, #ddd); margin-top: 16px; padding-top: 16px; min-width: 0; }
+.received-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.received-heading h3 { margin: 0; font-size: 14px; }
+.received-heading .heading-actions { flex-wrap: wrap; }
+.received-objects .storage-path { overflow-wrap: anywhere; }
+.received-list { list-style: none; padding: 0; margin: 12px 0; }
+.received-list li { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; padding: 10px 0; border-bottom: 1px solid var(--border, #ddd); font-size: 13px; }
+.received-file { display: flex; flex-direction: column; gap: 4px; overflow-wrap: anywhere; }
+.received-list p { margin: 4px 0; overflow-wrap: anywhere; }
+.received-list small { color: var(--muted, #666); }
+.received-result:not(:empty) { margin-top: 8px; overflow-wrap: anywhere; }
+@media (max-width: 680px) { .received-list li { grid-template-columns: minmax(0, 1fr); gap: 8px; } }
