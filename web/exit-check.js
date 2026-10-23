@@ -1,7 +1,8 @@
 export function installExitCheck({ bridge, api, snapshot, save, persist, openModal, esc, showSync, toast }) {
   if (!bridge?.onExitRequest) return;
   let current = null;
-  bridge.onExitRequest(async ({ id }) => {
+  bridge.onExitRequest(async ({ id, intent }) => {
+    const restarting = intent === 'storage-restart', action = restarting ? '重启' : '退出';
     if (current?.id === id) return;
     if (document.querySelector('dialog[open]')) {
       await api('exitCancel', { id }).catch(() => {});
@@ -9,7 +10,7 @@ export function installExitCheck({ bridge, api, snapshot, save, persist, openMod
     }
     const request = { id, saving: false, error: '', backend: null };
     current = request;
-    const dialog = openModal('退出 StudySelf', `<div id="exit-check-status" aria-live="polite">正在检查保存状态…</div><p id="exit-check-error" class="notice danger" role="alert" hidden></p>`,
+    const dialog = openModal(restarting ? '重启并应用存储变更' : '退出 StudySelf', `<div id="exit-check-status" aria-live="polite">正在检查保存状态…</div><p id="exit-check-error" class="notice danger" role="alert" hidden></p>`,
       '<button class="secondary" id="exit-continue">继续使用</button><button class="secondary" id="exit-sync">查看同步</button><button class="primary" id="exit-confirm" disabled>正在检查…</button>');
     const find = selector => dialog.querySelector(selector);
     const refresh = () => {
@@ -24,11 +25,11 @@ export function installExitCheck({ bridge, api, snapshot, save, persist, openMod
           ${pending.length ? `<ul>${pending.map(note => `<li class="storage-path">${esc(note.title)}：${({ queued: '待保存', saving: '保存中', error: '保存失败', conflict: '待处理冲突' })[note.state] || '待保存'}</li>`).join('')}</ul>` : ''}
           ${blockers.map(reason => `<p class="notice amber">${esc(reason)}</p>`).join('')}
           <h3>多电脑同步</h3><p>${!request.backend ? '正在检查…' : sync ? `${sync.pendingChanges} 条已保存修改未发布 · ${sync.unconfirmed} 次发布尚未人工确认上传${sync.unfinished ? ' · 发布批次尚未完成，进度已保留' : ''}` : '同步状态暂时无法读取'}</p>
-          <p class="muted">退出只保留本地内容，不会自动发布。百度上传完成状态仍需在百度客户端查看。</p>`;
+          <p class="muted">${restarting ? '重启后应用已确认的目录变更，迁移时保留原目录。' : '退出只保留本地内容。'}不会自动发布，百度上传完成状态仍需在百度客户端查看。</p>`;
         if (request.markup !== markup) { find('#exit-check-status').innerHTML = markup; request.markup = markup; }
         const confirm = find('#exit-confirm');
         confirm.disabled = request.saving || !request.backend || blockers.length > 0;
-        confirm.textContent = request.saving ? '正在保存并检查…' : pending.some(note => note.state === 'error') ? '重试保存后退出' : pending.length ? '保存后退出' : '退出';
+        confirm.textContent = request.saving ? '正在保存并检查…' : pending.some(note => note.state === 'error') ? `重试保存后${action}` : pending.length ? `保存后${action}` : action;
         find('#exit-check-error').textContent = request.error;
         find('#exit-check-error').hidden = !request.error;
       } catch (error) { find('#exit-check-error').textContent = error.message; find('#exit-check-error').hidden = false; find('#exit-confirm').disabled = true; }

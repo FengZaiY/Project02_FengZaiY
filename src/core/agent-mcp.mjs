@@ -28,18 +28,18 @@ export const mcpTools = [
   ['draftCreate', 'collect', '收集资料或中间成果为可搜索草稿。无法读取的来源须说明缺失内容。', { ...write, data }],
   ['draftUpdate', 'collect', '更新已有草稿，校验基础版本；不改变知识库或层级。', { ...write, id, parents, data }],
   ['assetWrite', 'collect', '导入用户提供的原文件，base64 最大 16 MiB，须提供 SHA256。禁止任意本机路径读取。', {
-    ...write, domain: id, filename: z.string().min(1).max(255), mime: z.string().max(200), data: z.string().max(Math.ceil(16 * 1024 * 1024 / 3) * 4),
+    ...write, domain: id, filename: z.string().min(1).max(255), mime: z.string().max(200).optional(), data: z.string().max(Math.ceil(16 * 1024 * 1024 / 3) * 4),
     sha256: z.string().regex(/^[a-f0-9]{64}$/), sensitive: z.boolean().optional()
   }],
   ['propose', 'propose', '提交待用户确认的内容、融合、笔记层级或交互页面方案。正式笔记不会自动入库。用 draftRefs 关联来源版本及覆盖程度。', {
-    ...write, title: z.string(), domain: id, content: z.string().optional(), items: z.array(item).min(1).max(100)
+    ...write, title: z.string().optional(), domain: id, content: z.string().optional(), items: z.array(item).min(1).max(100)
   }],
   ['proposalRevise', 'propose', '局部重做待确认项，保留已确认成果与来源关联。parents 为方案 heads，项 id 为方案项 ID。', {
     ...write, id, parents, items: z.array(z.object({ id, data, reason: z.string().max(4000).optional(), draftRefs }).strict()).min(1).max(100)
   }],
-  ['noteUpdate', 'edit', '仅额外 edit 授权可直接改正式笔记，须完整保留内容和引用、校验 heads。调整层级或交互页面须改用 propose。', { ...write, id, parents, data }],
-  ['relationCreate', 'edit', '仅额外 edit 授权可创建知识关联；data 须包含 from、to、description，引用同样受授权约束。', { ...write, data }],
-  ['trash', 'trash', '仅额外 trash 授权可将记录移入可恢复回收站。不能清空回收站、删除原件或历史。', { ...write, id, parents }]
+  ['noteUpdate', 'edit', '直接改正式笔记，须完整保留内容和引用、校验 heads。调整层级或交互页面须改用 propose。', { ...write, id, parents, data }],
+  ['relationCreate', 'edit', '创建知识关联；data 须包含 from、to、description，引用必须存在于有效知识库。', { ...write, data }],
+  ['trash', 'trash', '将记录移入可恢复回收站。不能清空回收站、删除原件或历史。', { ...write, id, parents }]
 ];
 
 export function mcpToolName(method) { return `studyself_${method.replace(/[A-Z]/g, value => `_${value.toLowerCase()}`)}`; }

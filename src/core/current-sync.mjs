@@ -112,6 +112,21 @@ export class CurrentSync {
   knownAssets() {
     return [this.value('latest'), ...Object.values(this.value('remotes') || {})].flatMap(item => item?.assets || []);
   }
+  reusableObjects() {
+    const proofs = { ...(this.value('confirmedObjects') || {}) };
+    const add = object => { proofs[object.name] = `${object.hash}:${object.size}`; };
+    const latest = this.value('latest'), plan = this.value('plan'), progress = this.progress();
+    if (latest?.userConfirmedAt) {
+      latest.parts.forEach(add); latest.assets.flatMap(asset => asset.chunks).forEach(add);
+    }
+    for (const object of (plan?.objects || []).slice(0, progress?.confirmedThrough || 0)) add(object);
+    // Downloaded remote indexes can be inherited by index-only devices. Importing our
+    // own pointer is not evidence that our unconfirmed objects reached another device.
+    for (const remote of Object.values(this.value('remotes') || {})) {
+      if (remote.deviceId !== this.store.deviceId) remote.assets.flatMap(asset => asset.chunks).forEach(add);
+    }
+    return proofs;
+  }
   async plan({ batchBytes = DEFAULT_BATCH } = {}) {
     return this.exclusive(async () => {
       this.guardParticipation();
@@ -134,19 +149,22 @@ export class CurrentSync {
         group.push(event); size += length;
       }
       flush();
-      const known = new Map(this.knownAssets().map(asset => [asset.hash, asset])), assets = [];
+      const known = new Map(this.knownAssets().map(asset => [asset.hash, asset])), assets = [], proofs = this.reusableObjects();
       for (const asset of assetObjects(events)) {
         check(!this.pauseRequested, '空间预估已取消', 'PAUSED');
         const descriptor = await describeAsset(this.store, asset, known.get(asset.hash));
         const assetIndex = assets.length; assets.push(descriptor);
-        descriptor.chunks.forEach((chunk, index) => objects.push({ kind: 'asset', ...chunk, assetIndex, index, reusable: known.has(asset.hash) }));
+        descriptor.chunks.forEach((chunk, index) => objects.push({ kind: 'asset', ...chunk, assetIndex, index }));
       }
       const erasures = this.store.erasures();
       const format = this.control().management?.length ? 5 : erasures.length ? 4 : 3;
       const manifest = { format, ...(format >= 4 ? { erasures } : {}), id: uuid(), deviceId: this.store.deviceId, deviceName: this.store.getMeta('deviceName'),
         at: now(), parts, assets, control: mergeControl(EMPTY_CONTROL, this.control()) };
       manifest.digest = manifestDigest(manifest);
-      if (this.value('latest')?.digest === manifest.digest) return { ...this.status(), unchanged: true };
+      for (const object of objects) object.reusable = proofs[object.name] === `${object.hash}:${object.size}`;
+      if (this.value('latest')?.digest === manifest.digest
+        && fs.existsSync(channel.file(`current-${this.store.deviceId}.sscurrent`))
+        && objects.every(object => object.reusable || fs.existsSync(channel.file(object.name)))) return { ...this.status(), unchanged: true };
       const latestBytes = Buffer.byteLength(canonical(manifest)) + 36;
       check(latestBytes <= MAX_MANIFEST, '文件索引超过当前单清单容量，请减少本批资料或联系维护者');
       const freeBytes = this.space(channel.root).freeBytes, capacity = Math.min(batchBytes, Math.max(0, freeBytes - this.reserveBytes - latestBytes));
@@ -154,6 +172,7 @@ export class CurrentSync {
       const plan = { manifest, metadata, objects, totalBytes: objects.reduce((sum, object) => sum + object.size + 36, latestBytes),
         additionalBytes, freeBytes, batchBytes, latestBytes, estimatedBatches: capacity >= MIN_BATCH ? Math.max(1, Math.ceil(additionalBytes / capacity)) : null };
       this.store.transaction(() => {
+        this.value('confirmedObjects', proofs);
         this.value('plan', plan);
         this.saveProgress({ state: 'ready', next: 0, generatedBytes: 0, confirmedThrough: 0, completedObjects: 0, reason: '' });
       });
@@ -176,6 +195,7 @@ export class CurrentSync {
     check(confirmed === true && !this.running, '请等待本批生成完成并明确确认上传');
     const progress = this.progress(); check(progress, '尚无发布批次');
     this.saveProgress({ ...progress, confirmedThrough: progress.next, batchConfirmedAt: now() });
+    this.value('confirmedObjects', this.reusableObjects());
     return this.status();
   }
   async publish({ batchBytes } = {}) {
@@ -191,6 +211,12 @@ export class CurrentSync {
         && canonical(plan.manifest.control.roles) === canonical(this.control().roles), '设备管理或主力角色已变化，请取消旧发布任务后重新发布', 'CONFLICT');
       this.saveProgress(progress);
       const save = (state, reason) => { Object.assign(progress, { state, reason }); this.saveProgress(progress); return this.status(); };
+      const proofs = this.reusableObjects();
+      const reusable = object => proofs[object.name] === `${object.hash}:${object.size}`;
+      // Re-evaluate persisted plans from earlier clients and repair vanished, unconfirmed
+      // objects even when they were generated before a pause or process interruption.
+      const missing = plan.objects.findIndex(object => !reusable(object) && !fs.existsSync(channel.file(object.name)));
+      if (missing >= 0) progress.next = Math.min(progress.next, missing);
       let batchBytes = 0;
       try {
         for (let i = progress.next; i < plan.objects.length; i++) {
@@ -201,7 +227,7 @@ export class CurrentSync {
           if (exists) {
             const data = channel.read(object.name, aad);
             check(data.length === object.size && sha(data) === object.hash, '交接对象损坏，请重新下载或移开损坏副本');
-          } else if (!object.reusable) {
+          } else if (!reusable(object)) {
             const required = object.size + 36;
             if (batchBytes + required > plan.batchBytes) return save('paused', '本批已生成，确认客户端上传后可继续下一批');
             if (this.space(channel.root).freeBytes - this.reserveBytes - plan.latestBytes < required) {
@@ -218,7 +244,7 @@ export class CurrentSync {
         // that batch was uploaded. This never claims an API-verified cloud upload.
         for (let i = 0; i < plan.objects.length; i++) {
           const object = plan.objects[i];
-          check(object.reusable || fs.existsSync(channel.file(object.name)) || i < progress.confirmedThrough,
+          check(reusable(object) || fs.existsSync(channel.file(object.name)),
             '已生成分块不在本机，请确认对应批次已上传后再继续');
         }
         check(this.space(channel.root).freeBytes - this.reserveBytes >= plan.latestBytes, '空间不足，无法写入最新内容清单', 'SPACE');
@@ -362,6 +388,7 @@ export class CurrentSync {
     check(!this.running && confirmed === true, '请在百度客户端确认上传完成');
     const latest = this.value('latest'); check(latest && (!id || latest.id === id), '最新发布已变化，请刷新后确认');
     latest.userConfirmedAt = now(); this.value('latest', latest);
+    this.value('confirmedObjects', this.reusableObjects());
     const progress = this.value('progress');
     if (progress?.state === 'complete' && this.value('plan')?.manifest.id === latest.id) {
       progress.reason = '用户已确认本次上传'; this.value('progress', progress);

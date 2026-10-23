@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { call as mcpCall } from '../skills/studyself-organize/scripts/client.mjs';
 import path from 'node:path';
 import { Store, validateEvent } from '../src/core/store.mjs';
 import { Service } from '../src/core/service.mjs';
@@ -117,7 +118,7 @@ test('deleted/conflicting results do not count as complete and draft references 
   assert.ok(previewTrash(f.store).blocked.some(item => item.id === f.draft.id));
 });
 
-test('Agent cannot approve/archive, forge origin, drop pending links or bypass sensitive/history scope', t => {
+test('full-access Agent reads all sources but cannot approve/archive, forge origin or drop pending links', t => {
   const f = fixture(t), p = f.propose(), partial = f.store.approve(p.id, [p.data.items[0].id], p.heads);
   assert.throws(() => f.call('draftArchive', { id: f.draft.id }), /未授权/);
   assert.throws(() => f.call('approve', { id: p.id }), /未授权/);
@@ -126,14 +127,14 @@ test('Agent cannot approve/archive, forge origin, drop pending links or bypass s
   assert.throws(() => f.call('propose', { domain: f.domain, items: [{ data: { title: '伪造', domain: f.domain, draftOrigin: { id: f.draft.id, versionId: f.draft.heads[0] } } }] }), /归档来源/);
   const other = f.store.saveLibrary({ title: '未授权库' });
   const hidden = f.store.write({ type: 'draft', data: { title: '隐私', domain: other.data.domain } });
-  assert.throws(() => f.call('propose', { domain: f.domain, items: [{ draftRefs: [{ id: hidden.id, versionId: hidden.heads[0] }], data: { title: '违规引用', domain: f.domain } }] }), /未授权/);
+  assert.ok(f.call('propose', { domain: f.domain, items: [{ draftRefs: [{ id: hidden.id, versionId: hidden.heads[0] }], data: { title: '跨库引用', domain: f.domain } }] }).id);
   const secret = f.store.write({ type: 'draft', data: { title: '敏感', domain: f.domain, sensitive: true } });
-  assert.throws(() => f.propose(secret), /敏感/);
+  assert.ok(f.propose(secret).data.items.every(item => item.data.sensitive));
   const publicDraft = f.store.write({ id: secret.id, type: 'draft', parents: secret.heads, data: { ...secret.data, sensitive: false } });
   const note = archiveDraft(f.store, { id: publicDraft.id, parents: publicDraft.heads, domain: f.domain });
   assert.ok(f.call('record', { id: note.id }));
   const forgedHistorical = f.store.write({ data: { title: '旧敏感来源', domain: f.domain, draftOrigin: { id: secret.id, versionId: secret.heads[0] } } });
-  assert.throws(() => f.call('record', { id: forgedHistorical.id }), /敏感/);
+  assert.equal(f.call('record', { id: forgedHistorical.id }).id, forgedHistorical.id);
 });
 
 test('v3 sync retains receipts and source histories; duplicate import and concurrent archive preserve evidence', async t => {
@@ -166,17 +167,13 @@ test('draft filtering precedes pagination and search can include processed draft
   assert.equal((await service.call('records', { type: 'draft', query: '筛选', processing: 'all' })).length, 4);
 });
 
-test('HTTP Agent may submit versioned proposals but cannot invoke trusted archive methods', async t => {
+test('MCP Agent may submit versioned proposals but cannot invoke trusted archive methods', async t => {
   const f = fixture(t); await f.access.configure(true);
-  const request = async (method, input) => {
-    const response = await fetch(`${f.access.status().url}/v1/rpc`, { method: 'POST', headers: {
-      'content-type': 'application/json', authorization: `Bearer ${f.issued.token}`
-    }, body: JSON.stringify({ method, requestId: uuid(), input: { preferencesVersion: f.access.preferences().version, ...input } }) });
-    return { status: response.status, body: await response.json() };
-  };
+  const request = (method, input) => mcpCall(method, { preferencesVersion: f.access.preferences().version, ...input }, uuid(),
+    { STUDYSELF_AGENT_URL: f.access.status().mcpUrl, STUDYSELF_AGENT_TOKEN: f.issued.token });
   const created = await request('propose', { domain: f.domain, items: [{ draftRefs: [{ id: f.draft.id, versionId: f.draft.heads[0], complete: true }],
-    data: { title: 'HTTP 草稿整理', domain: f.domain, content: '整理结果' } }] });
-  assert.equal(created.status, 200); assert.equal(created.body.value.data.items[0].draftRefs[0].complete, true);
-  for (const method of ['draftArchive', 'draftWorkflow', 'approve']) assert.equal((await request(method, { id: f.draft.id })).status, 403);
+    data: { title: 'MCP 草稿整理', domain: f.domain, content: '整理结果' } }] });
+  assert.equal(created.data.items[0].draftRefs[0].complete, true);
+  for (const method of ['draftArchive', 'draftWorkflow', 'approve']) await assert.rejects(request(method, { id: f.draft.id }), /FORBIDDEN/);
   assert.equal(f.status(), 'pending');
 });

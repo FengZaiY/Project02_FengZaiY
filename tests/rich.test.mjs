@@ -48,7 +48,7 @@ test('layout metadata is bounded and nested rows retain all attachment reference
   assert.throws(() => richReferences({ content: '<section data-ss-layout="{&quot;width&quot;:999}"></section>', format: 'html' }));
 });
 
-test('embedded references cannot bypass Agent scopes, sensitivity, history or idempotency', async t => {
+test('embedded references allow all libraries and sensitivity while checking existence and idempotency', async t => {
   const service = new Service(temp()); t.after(() => service.close());
   const store = service.store, a = store.saveLibrary({ title: '可访问' }), b = store.saveLibrary({ title: '未授权' });
   const other = store.write({ type: 'note', data: { title: '另一库', domain: b.data.domain, content: 'private' } });
@@ -59,17 +59,17 @@ test('embedded references cannot bypass Agent scopes, sensitivity, history or id
   const write = data => rpc('draftCreate', { data, preferencesVersion: service.agents.preferences().version }, uuid());
   for (const content of [`<a href="studyself://note/${other.id}">链接</a>`, blockHtml({ v: 1, kind: 'image', label: '图', assetId: sensitive.id })]) {
     const data = { title: '嵌入引用', domain: a.data.domain, format: 'html', content };
-    await assert.rejects(write(data), /FORBIDDEN/);
+    assert.equal((await write(data)).data.content, content);
     const old = store.write({ type: 'note', data });
-    await assert.rejects(rpc('record', { id: old.id }), /FORBIDDEN/);
+    assert.equal((await rpc('record', { id: old.id })).id, old.id);
     store.write({ id: old.id, type: 'note', parents: old.heads, data: { ...data, content: '公开正文', assetIds: [] } });
-    await assert.rejects(rpc('history', { id: old.id }), /FORBIDDEN/);
+    assert.equal((await rpc('history', { id: old.id })).length, 2);
   }
-  await assert.rejects(rpc('sourceCreate', { data: { title: '越权网址', domain: a.data.domain, url: `studyself://note/${other.id}` }, preferencesVersion: service.agents.preferences().version }, uuid()), /FORBIDDEN/);
+  await assert.rejects(rpc('sourceCreate', { data: { title: '缺失引用', domain: a.data.domain, url: `studyself://note/${uuid()}` }, preferencesVersion: service.agents.preferences().version }, uuid()), /FORBIDDEN/);
   const data = { title: '公式', domain: a.data.domain, format: 'html', content: blockHtml(fixture) }, requestId = uuid();
   const input = { data, preferencesVersion: service.agents.preferences().version };
   const first = await rpc('draftCreate', input, requestId), replay = await rpc('draftCreate', input, requestId);
-  assert.deepEqual(first, replay); assert.equal(store.list({ type: 'draft' }).length, 1);
+  assert.deepEqual(first, replay); assert.equal(store.list({ type: 'draft' }).length, 3);
   service.agents.revoke(grant.id); await assert.rejects(rpc('draftCreate', input, requestId), /UNAUTHORIZED/);
 });
 

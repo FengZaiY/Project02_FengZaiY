@@ -171,7 +171,7 @@ test('Agent reads authorized folders, proposes placement, rejects cross-scope an
   assert.equal(f.store.remove(folder.id, folder.heads).deleted, true);
   const other = f.store.saveLibrary({ title: '私有' });
   const privateFolder = f.store.saveFolder({ title: '私有目录', domain: other.data.domain });
-  assert.throws(() => dispatch('draftCreate', { preferencesVersion: version, data: { title: '越界', domain: f.domain, folderId: privateFolder.id } }), /未授权/);
+  assert.throws(() => dispatch('draftCreate', { preferencesVersion: version, data: { title: '越界', domain: f.domain, folderId: privateFolder.id } }), /知识库|同库/);
 });
 
 test('local hierarchy is automatic and retired services remain unavailable', async t => {

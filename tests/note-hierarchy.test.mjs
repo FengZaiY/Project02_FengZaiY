@@ -74,7 +74,7 @@ test('agents propose dependent new notes and existing merges; partial confirmati
   assert.ok(f.store.get(unordered.data.items[0].targetId).data.parentNoteId);
 });
 
-test('proposal authorization checks new and existing parents, sensitive ancestors, cycles and stale targets', t => {
+test('full-access proposals retain same-library parents, cycle and stale-target validation', t => {
   const f = fixture(t), parent = f.note('父'), child = f.note('子');
   assert.throws(() => f.call('noteUpdate', { id: child.id, parents: child.heads, data: { ...child.data, parentNoteId: parent.id } }), /知识体系/);
   assert.throws(() => f.call('propose', { domain: f.domain, items: [
@@ -83,13 +83,13 @@ test('proposal authorization checks new and existing parents, sensitive ancestor
   ] }), /循环/);
   const privateLibrary = f.store.saveLibrary({ title: '私有库' });
   const privateNote = f.note('私有', null, { domain: privateLibrary.data.domain });
-  assert.throws(() => f.call('propose', { domain: f.domain, items: [{ data: { title: '越界', domain: f.domain, parentNoteId: privateNote.id } }] }), /未授权/);
+  assert.throws(() => f.call('propose', { domain: f.domain, items: [{ data: { title: '越界', domain: f.domain, parentNoteId: privateNote.id } }] }), /知识库|同库/);
   const secret = f.note('敏感', null, { sensitive: true }), leaf = f.note('非敏感标题', secret.id);
-  assert.throws(() => f.call('record', { id: leaf.id }), /敏感/);
-  assert.throws(() => f.call('propose', { domain: f.domain, items: [
+  assert.equal(f.call('record', { id: leaf.id }).id, leaf.id);
+  assert.equal(f.call('propose', { domain: f.domain, items: [
     { key: 'secret', data: { title: '新敏感', domain: f.domain, sensitive: true } },
     { parentKey: 'secret', data: { title: '子', domain: f.domain } }
-  ] }), /敏感/);
+  ] }).data.items.length, 2);
   const proposal = f.call('propose', { domain: f.domain, items: [{ targetId: child.id, parents: child.heads, data: { ...child.data, parentNoteId: parent.id } }] });
   f.store.write({ id: child.id, type: 'note', parents: child.heads, data: { ...child.data, content: '用户新修改' } });
   assert.throws(() => f.store.approve(proposal.id, [proposal.data.items[0].id], proposal.heads), /changed/);

@@ -1,5 +1,11 @@
 # Architecture
 
+## Verified attachment reads and desktop actions
+
+`asset-reader.mjs` shares the trusted preview and media read boundary. It rejects missing/deleted/conflicting records, checks the local binding and non-symlink path, and holds an active-read reference through completion/cancellation. Allocation is bounded by the registered and actual file size. Reads use one open handle; descriptor/path identity and record heads are rechecked after asynchronous operations. Ordinary preview hashes the exact returned bytes. Media verification uses a per-store, 128-entry in-memory LRU keyed by local path and expected SHA-256, stamped with device/inode, size, nanosecond mtime and ctime. Changed or unavailable identity forces a full hash. Invalid ranges fail before hashing; repeated valid Range/HEAD requests reuse only an unchanged verified file. This cache never proves cloud upload or replaces incoming assembly verification.
+
+Clipboard callers share `copyVisibleText`: Clipboard API, then a temporary selection within the active modal (or document body), then explicit manual selection of the still-current visible value. Credential manual fallback reveals the field only following the user's copy action; closing the dialog clears its value. No desktop clipboard permission expansion or new Agent capability is introduced.
+
 ## Interactive note presentations
 
 Notes, drafts and proposed note data optionally contain `presentation.v = 1`: validated HTML/CSS, QuickJS source, JSON initial data, declared asset/note IDs, and a body hash plus source revision IDs. `content`/`format` remain the complete searchable/editable knowledge. The hash is SHA-256 of UTF-8 `JSON.stringify([format || 'markdown', content || ''])`. Bodies and pages share the existing immutable revision, 1 MiB limit, encrypted current sync and history. JSON projections retain the whole definition; Markdown/PDF deliver static knowledge and disclose that runnable interaction is excluded. No bulk conversion or changed old hashes.
@@ -132,6 +138,8 @@ Workspace-local settings include selected library, tabs, unsaved note drafts and
 
 `current-sync.mjs` replaces runtime Git and independent backup. SQLite retains the immutable per-record edit DAG, stale-save guards, conflicts and restorative edits. There is no commit step or application-wide local version catalogue. All libraries, preferences and public device policies travel together; secrets, local paths, database files and device authorizations never do.
 
+Known attachment descriptors do not by themselves authorize missing-object reuse. Local per-channel `confirmedObjects` retains exact object hash/size evidence from user batch/publication confirmations and inherited references in imported other-device manifests. The latter permits index-only devices to publish note edits; reimporting this device's own pointer is not new evidence. Planning persists evidence before replacing earlier plans. Publish ignores legacy `reusable` flags, rewinds to missing unconfirmed objects and regenerates them from local originals under the same space/batch limits. Even an unchanged snapshot requires those objects or valid reuse evidence. No manifest format changes or API-verified upload claims result.
+
 Each device atomically replaces its own authenticated `current-<deviceId>.sscurrent` pointer in `StudySelfSync/v3/<key-fingerprint>`. Its manifest refers to immutable encrypted history shards (about 2 MiB) and binary attachment chunks (4 MiB). Each pointer is self-contained, including note modification history: new devices need only the latest pointers and referenced objects, not older manifests or Git prerequisites. Downloaded pointers are merged by stable event IDs and ancestry, never by device timestamp.
 
 `sync-state.mjs` validates histories and device policy DAGs before mutation. Pull validates all downloaded manifests and metadata, assembles required originals, then transactionally applies events, asset bindings, device state and import identity receipts. A failed database transaction leaves current knowledge intact; verified file objects can be reused on retry. Index-only imports explicitly leave originals unavailable.
@@ -216,11 +224,11 @@ Portable links use `studyself://note|asset|local/<UUID>`. Local-file UUID bindin
 
 ### Authorization and writes
 
-`agent-access.mjs` owns a separate, default-off HTTP listener on 127.0.0.1. Desktop and preview share this implementation. The listener persists its local port, checks Host, rejects Origin, limits body size and does not enable CORS. It exposes only POST /v1/rpc and never forwards arbitrary Service RPCs.
+`agent-access.mjs` owns a separate, default-off loopback MCP listener. Desktop and preview share this implementation. The listener persists its local port, checks Host, rejects Origin, limits body size and does not enable CORS. Only `/mcp` is available; the retired `/v1/rpc` returns 404 and never executes a business call.
 
-Per-Agent random 256-bit bearer tokens are displayed once; only SHA-256 hashes, granted domains, permissions and expiry are stored locally. Revocation/expiry is checked again after reading the request body. Base permissions read/collect/propose do not allow note overwrite, trash or user approval. Sensitive access, edit and trash are separate grants. System configuration, files by arbitrary path, secrets, shell commands, preference writes and approval are not external methods. This protects the API, not against another process already possessing filesystem or OS permissions.
+Per-Agent random 256-bit bearer tokens are displayed once; only SHA-256 hashes and metadata are stored locally. All valid credentials cover current and future libraries, sensitive material, and existing read/collect/propose/edit/trash capabilities. Startup upgrades surviving legacy credentials without changing their hashes or expiry. Revocation transactionally deletes the grant, its audit entries and idempotency receipts; startup also removes legacy revoked entries. Knowledge revisions and other credentials remain. Revocation/expiry is checked after reading the request body and before executing tools. System configuration, files by arbitrary path, secrets, shell commands, preference writes, permanent deletion and approval remain UI-only.
 
-Every current branch and referenced source/asset/target must pass domain and sensitivity checks. History additionally checks every historical revision. Search filters inaccessible content before pagination. Files are hash-checked, addressed by asset ID and bounded to 16 MiB; no absolute paths are returned.
+Every current branch, historical revision and referenced source/asset/target must exist in an available library. Cross-library and sensitive reads are permitted, while missing/deleted-library references remain invalid. Files are hash-checked, addressed by asset ID and bounded to 16 MiB; no absolute paths are returned. Full access does not bypass stale heads, preference conflicts, hierarchy rules or integrity checks.
 
 Mutations carry requestId, preferencesVersion and, for updates, exact base heads. The durable local agent_requests receipt and writeRaw revisions commit in one SQLite transaction. A repeated request returns the original result only when the digest matches and current authorization still permits access. A changed payload with the same ID fails. No network inference happens in this application. A bounded audit log stores operation names, grant IDs and outcome codes, not request bodies or credentials.
 
@@ -274,11 +282,11 @@ Node tests simulate separate profiles and transfer directories, reversal of dire
 
 ## Local MCP Adapter
 
-`agent-mcp.mjs` uses the official MCP SDK with a stateless Streamable HTTP transport on the existing Agent port at `/mcp`. The original `/v1/rpc` remains compatible. Each HTTP request validates Host, rejects Origin and authenticates the local Bearer credential before bounded body parsing; tool callbacks reauthenticate before calling the same `AgentAccess.dispatch`. No transport-specific write path or new authority is introduced.
+`agent-mcp.mjs` uses the official MCP SDK with a stateless Streamable HTTP transport on the Agent port at `/mcp`. Each request validates Host, rejects Origin and authenticates the local Bearer credential before bounded body parsing; tool callbacks reauthenticate before calling `AgentAccess.dispatch`. The exported dependency-free client performs MCP initialization, tool discovery and calls against the same endpoint. It never falls back to the retired RPC or retries business writes automatically.
 
-Tools are named and schema-validated, with permission-filtered discovery. Write arguments carry the existing preference version and request ID; MCP and HTTP share transaction receipts. Data and nested references still pass existing historical/sensitive authorization. Tool failures preserve known business error codes without exposing filesystem paths. The server emits JSON responses, does not retain sessions, and refuses batches, standalone SSE GET and session deletion; SDK transports are closed with the response. System RPC, approvals, erasures, configuration and credential management remain UI-only.
+Tools are named and schema-validated. Valid credentials discover all existing Agent tools. Write arguments carry the existing preference version and request ID; native MCP clients and the script share transaction receipts. Tool failures preserve known business error codes without exposing filesystem paths. The server emits JSON responses, does not retain sessions, and refuses batches, standalone SSE GET and session deletion; SDK transports are closed with the response. System RPC, approvals, erasures, configuration and credential management remain UI-only.
 
-`web/agent-mcp.js` shows the current MCP endpoint and copyable Codex / generic HTTP configurations without secrets. Skill bootstrap is the live source of protocol and preference instructions. The SDK and Zod are production dependencies for Electron and preview; local source verification does not imply a rebuilt installer or third-party client certification. See [connection guide](agent-mcp.md).
+`web/agent-mcp.js` owns the single MCP connection section, its enable switch, endpoint and copyable Codex / generic MCP configurations without secrets. Grant forms only collect name and expiry; the list shows all-library access and removes revoked entries. Skill bootstrap is the live source of protocol and preference instructions. The SDK and Zod are production dependencies for Electron and preview; local source verification does not imply a rebuilt installer or third-party client certification. See [connection guide](agent-mcp.md).
 
 ## Built-in Skill Management
 
@@ -287,6 +295,8 @@ Tools are named and schema-validated, with permission-filtered discovery. Write 
 受信任 `agentSkill` 返回固定文件集合、当前偏好、内置内容哈希、组合导出版本和本机最近生成信息。`agentSkillExport` 拒绝偏好冲突，冻结当前文件/偏好并记录本机生成元数据；外部 Agent 无权调用。ZIP 附带 `manifest.json` 与偏好快照，`skillVersion` 与 bootstrap 对齐，`exportVersion` 同时覆盖内置内容和偏好版本。不执行文件内脚本。外部 Agent 仍须在每批写入前读取 bootstrap。
 
 `SkillInstallations` 仅通过受信任界面的 `skillInstall*` 方法操作用户明确关联的已有目录，不扫描宿主安装。固定五个文件与 ZIP 导出内容一致；额外文件不读取或修改。安装位置拒绝软/硬链接及工作区、源码 Skill、同步目录，路径只在本机管理界面出现。`local_config.skillInstallations` 保存摘要、模式、上次副本与恢复日志，不新增共享实体。随机安装标记限制单工作区归属，目录锁防止多个进程同时写入。
+
+安装缺少固定文件时状态为 `incomplete`，返回 `missingFiles`，自动更新不执行写入。新目录仍须验证 SKILL.md；已关联且归属匹配的目录即使缺少入口，也可通过 `skillInstallPreview(action=repair)` 预览确认补全并更新完整当前包。现存入口仍必须通过身份校验，不能凭标记覆盖其他 Skill。修复复用更新日志、文件快照、偏好版本和归属重验；额外文件保留。恢复前提示目标副本的缺失项，恢复到不完整状态也不能触发自动补全。
 
 预览令牌绑定文件快照、关联设置和内置/偏好版本，五分钟有效，确认重验。每文件原子替换，manifest 最后写；不承诺整个目录对第三方读取原子可见，更新时应暂停使用该 Skill。变更前持久化 before/after，失败/启动时只对仍匹配这两份内容的文件回滚，遇到外部新修改保留现场。上一份受管文件可恢复，恢复后关闭自动更新。应用运行期间每分钟检查，只有明确开启自动更新且文件摘要未被手改时才更新；设置导航显示待处理数。成功仅证明安装文件已写入，不证明宿主已重载，连接/授权配置不改。解除关联不删除安装文件。
 
@@ -297,6 +307,8 @@ Tools are named and schema-validated, with permission-filtered discovery. Write 
 The close event starts a request-scoped handshake (`exit-check.mjs`). The preload exposes a fixed exit-request listener; trusted renderer RPC supplies `exitStatus`, `exitCancel` and `exitFinish`. Renderer state covers all note/draft tabs, composition, imports and unsaved preferences. An existing editing dialog is never replaced. Acknowledgement timeout leaves the window open. Cancelled, repeated or previous-page requests cannot close the application.
 
 Save-and-exit flushes each note's existing serial saver, allowing an explicit retry without manual branch creation. Failed or conflicting drafts remain editable. Workspace persistence must finish, followed by a fresh renderer check and a main-process check of stored dirty tabs and active writes. Background timers/Agent listening stop only after accepting the final close. Pending publications and manual upload confirmations are independent of local saves; ordinary exit neither publishes nor installs updates. `callResult` carries structured errors across the isolated preload so conflict codes survive Electron's error serialization; the older `call` remains available for compatibility.
+
+Storage restart uses the same request-scoped handshake with `storage-restart` intent. Both initiation and final acceptance check imports, cleanup, active original reads and other IPC; the pending storage change must still exist. Finalization awaits database/lock closure before `app.relaunch`, and the IPC awaits that asynchronous result rather than trying to serialize a Promise. No direct timed `app.exit` bypass remains. The isolated desktop regression also inserts an import after the dialog opens to test the final gate.
 
 ### Cleared Legacy Records and Empty Directories
 

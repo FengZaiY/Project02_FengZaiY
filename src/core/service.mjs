@@ -18,6 +18,7 @@ import { cleanEmptyDirectories, previewEmptyDirectories } from './empty-library-
 import { previewAssetMerge, mergeAssets } from './asset-merge.mjs';
 import { archiveDraft, draftWorkflows } from './draft-workflow.mjs';
 import { receivedObjectsStatus } from './received-objects.mjs';
+import { readAssetContent } from './asset-reader.mjs';
 
 const sharedTab = tab => Object.fromEntries(['id', 'recordId', 'title', 'domain', 'scroll']
   .filter(key => Object.hasOwn(tab, key)).map(key => [key, tab[key]]));
@@ -83,7 +84,7 @@ export class Service {
     summary.trash -= legacy.filter(item => item.deleted).length;
     return { ...summary, libraries: this.store.directories.describe(this.store.libraries()), sync: this.transport.config(),
       workspace: this.store.local('workspace') || { tabs: [], selectedTab: null },
-      version: '0.1.8', localDataDirectory: this.store.directory, localHierarchy: this.localHierarchy.status(), deletion: deletionStatus(this.store),
+      version: '0.1.9', localDataDirectory: this.store.directory, localHierarchy: this.localHierarchy.status(), deletion: deletionStatus(this.store),
       skillInstallations: this.skillInstallations.summary() };
   }
   async finishDeletion() {
@@ -285,12 +286,7 @@ export class Service {
         this.store.bindAsset(input.id, local.path, !!input.pinned);
         return { pinned: !!input.pinned };
       }
-      case 'assetContent': {
-        const asset = this.store.get(input.id), local = this.store.assetLocation(input.id);
-        check(asset?.type === 'asset' && local && fs.existsSync(local.path), 'Attachment is not available on this computer');
-        check(asset.data.size <= 24 * 1024 * 1024, 'This attachment is too large for an inline preview');
-        return { mime: asset.data.mime, data: fs.readFileSync(local.path).toString('base64'), filename: asset.data.filename };
-      }
+      case 'assetContent': return readAssetContent(this.store, input.id);
       case 'workspaceSave': {
         const workspace = cleanWorkspace(this.store, { ...this.store.local('workspace'), ...input });
         this.store.local('workspace', workspace); return workspace;

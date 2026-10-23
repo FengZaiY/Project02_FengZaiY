@@ -70,14 +70,16 @@ export class SkillInstallations {
     check(value && Buffer.from(value, 'base64').toString() === record.marker, '安装归属已变化，请重新核对关联', 'CONFLICT');
   }
   identity(files) {
+    check(files['SKILL.md'] !== null, '安装目录缺少 SKILL.md 入口文件，请先重新安装或补全 Skill');
     const content = Buffer.from(files['SKILL.md'] || '', 'base64').toString();
     const front = content.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/)?.[1];
-    check(front && /^name: studyself-organize\r?$/m.test(front), '所选目录不是 StudySelf Skill 安装');
+    check(front && /^name: studyself-organize\r?$/m.test(front), 'SKILL.md 的名称或头部不匹配，不是 StudySelf Skill 安装');
   }
   public(record) {
     return { id: record.id, directory: record.directory, mode: record.mode, status: record.status,
       version: record.version || null, checkedAt: record.checkedAt, updatedAt: record.updatedAt,
-      error: record.error || null, changedFiles: record.changedFiles || [], canRestore: !!record.backup || !!record.journal };
+      error: record.error || null, changedFiles: record.changedFiles || [], missingFiles: record.missingFiles || [],
+      canRestore: !!record.backup || !!record.journal };
   }
   summary() {
     const records = this.records();
@@ -99,10 +101,14 @@ export class SkillInstallations {
   }
   inspect(record, bundle) {
     this.owned(record);
-    const files = snapshot(record.directory); this.identity(files);
+    const files = snapshot(record.directory);
+    // A matching ownership marker allows an existing installation to be diagnosed without its entry file.
+    if (files['SKILL.md'] !== null) this.identity(files);
     const currentHashes = hashes(files);
+    record.missingFiles = names.filter(name => files[name] === null);
     record.changedFiles = names.filter(name => currentHashes[name] !== record.hashes[name]);
-    if (record.changedFiles.length) record.status = 'modified';
+    if (record.missingFiles.length) record.status = 'incomplete';
+    else if (record.changedFiles.length) record.status = 'modified';
     else if (bundle.preferences.conflict) record.status = 'conflict';
     else record.status = digest(files) === digest(packageFiles(bundle)) ? 'current' : 'outdated';
     record.checkedAt = now(); record.error = null; this.save(record);
@@ -117,7 +123,7 @@ export class SkillInstallations {
         if (record.journal) { this.recover(record); continue; }
         const files = this.inspect(record, bundle);
         if (automatic && record.mode === 'auto' && record.status === 'outdated') this.write(record, files, packageFiles(bundle), bundle.exportVersion);
-      } catch (error) { record.status = 'error'; record.error = error.message; record.checkedAt = now(); this.save(record); }
+      } catch (error) { record.status = 'error'; record.missingFiles = []; record.error = error.message; record.checkedAt = now(); this.save(record); }
       finally { release?.(); }
     }
     return this.list();
@@ -128,7 +134,7 @@ export class SkillInstallations {
     this.check({ automatic: true });
   }
   preview({ directory, id, action = 'link' }) {
-    check(['link', 'update', 'restore'].includes(action), '不支持的安装操作');
+    check(['link', 'update', 'repair', 'restore'].includes(action), '不支持的安装操作');
     const record = id ? this.records().find(item => item.id === id) : null;
     check(action === 'link' ? !id : !!record, '安装关联不存在');
     const target = this.target(record?.directory || directory);
@@ -137,7 +143,10 @@ export class SkillInstallations {
       check(!this.records().some(item => item.directory.toLowerCase() === target.toLowerCase()), '该位置已经关联');
       check(!readFile(path.join(target, marker)), '此安装由另一个工作区管理，请先在原工作区解除关联');
     } else { this.owned(record); check(action === 'restore' || !record.journal, '上次更新尚未恢复，请先检查更新或恢复文件'); }
-    const before = snapshot(target); if (action !== 'restore') this.identity(before);
+    const before = snapshot(target);
+    const missing = names.filter(name => before[name] === null);
+    if (action === 'repair') check(missing.length, '安装文件已补全，请重新检查更新', 'CONFLICT');
+    if (action !== 'restore' && !(action === 'repair' && before['SKILL.md'] === null)) this.identity(before);
     const bundle = this.agents.skillPackage();
     const after = action === 'restore' ? record.journal?.before || record.backup?.files : packageFiles(bundle);
     check(after, '尚无可恢复的副本');
@@ -146,7 +155,8 @@ export class SkillInstallations {
     const token = uuid();
     for (const [old, item] of this.previews) if (Date.now() - item.createdAt > 300000) this.previews.delete(old);
     check(this.previews.size < 100, '待确认操作过多，请稍后再试'); this.previews.set(token, value);
-    return { token, directory: target, action, files: names.filter(name => before[name] !== after[name]),
+    return { token, directory: target, action, missing, targetMissing: names.filter(name => after[name] === null),
+      files: names.filter(name => before[name] !== after[name]),
       modified: record ? names.filter(name => hashes(before)[name] !== record.hashes[name]) : [], version: value.version };
   }
   confirm({ token, confirmed }) {
@@ -189,8 +199,9 @@ export class SkillInstallations {
       const oldVersion = record.version;
       record.hashes = hashes(after); record.version = version; record.updatedAt = now(); record.checkedAt = now();
       record.backup = { files: before, version: oldVersion || null }; record.journal = null; record.error = null; record.changedFiles = [];
+      record.missingFiles = names.filter(name => after[name] === null);
       const bundle = this.agents.skillPackage();
-      record.status = bundle.preferences.conflict ? 'conflict' : digest(after) === digest(packageFiles(bundle)) ? 'current' : 'outdated';
+      record.status = record.missingFiles.length ? 'incomplete' : bundle.preferences.conflict ? 'conflict' : digest(after) === digest(packageFiles(bundle)) ? 'current' : 'outdated';
       this.save(record);
     } catch (error) {
       // The persisted journal remains authoritative even if the final database write failed.

@@ -36,6 +36,7 @@ else {
   const directory = service.store.directory;
   protocol.handle('studyself-media', async request => {
     try {
+      check(!allowClose, '正在退出，请稍候');
       const url = new URL(request.url);
       check(url.hostname === 'asset' && isId(url.pathname.slice(1)), 'Invalid media reference');
       return await mediaResponse(service.store, url.pathname.slice(1), request.headers.get('range'), request.method);
@@ -79,9 +80,13 @@ else {
       catch (error) { syncError = error.message; }
       return { sync, syncError, busy: exitActivity(service, activeCalls), dirty: (service.store.local('workspace')?.tabs || []).some(tab => tab.dirty) };
     },
-    finish: () => {
+    finish: async intent => {
+      if (intent === 'storage-restart') check(storage.status().restartRequired, '存储变更已取消，请返回设置检查');
       allowClose = true;
       clearInterval(service.timer); service.timer = null; service.agents.stop();
+      await service.close();
+      storage.close();
+      if (intent === 'storage-restart') app.relaunch();
       setTimeout(() => window.close(), 0);
     }
   });
@@ -97,7 +102,7 @@ else {
       let value;
       if (method === 'exitStatus') value = exitCheck.status(input.id);
       else if (method === 'exitCancel') value = exitCheck.cancel(input.id);
-      else if (method === 'exitFinish') value = exitCheck.accept(input);
+      else if (method === 'exitFinish') value = await exitCheck.accept(input);
       else if (method === 'updateStatus') value = updates.status();
       else if (method === 'updateConfigure') value = updates.configure(input);
       else if (method === 'updateCheck') value = await updates.check();
@@ -129,9 +134,9 @@ else {
         check(!error, error); value = true;
       } else if (method === 'storageRestart') {
         check(storage.status().restartRequired, '没有待生效的存储变更');
-        check(!service.transport.running && !service.localTask, '同步或目录整理仍在执行，请稍后重启');
-        check(!(service.store.local('workspace')?.tabs || []).some(tab => tab.dirty), '请先保存或关闭未保存的笔记标签');
-        setTimeout(() => { app.relaunch(); app.exit(0); }, 200);
+        const busy = exitActivity(service, activeCalls);
+        check(!busy, busy, 'BUSY');
+        exitCheck.begin('storage-restart');
         value = true;
       } else if (method === 'bindLocalFile') {
         check(!input.id || isId(input.id), 'Invalid local file reference');

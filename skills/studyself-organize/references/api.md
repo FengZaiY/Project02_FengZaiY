@@ -1,6 +1,6 @@
 # 本机 API v1
 
-地址由系统“外部 Agent”页显示。仅本机使用，应用必须运行，端口保存于设备，不固定假设端口号。支持 MCP Streamable HTTP 与原 HTTP RPC，共用相同授权、审计及写入幂等记录。
+地址由系统“外部 Agent”页显示。仅本机使用，应用必须运行，端口保存于设备，不固定假设端口号。仅支持 MCP Streamable HTTP，保留凭证校验及写入幂等记录。
 
 设备管理（包括 `deviceManage`、主力机转移和设备启停）及同步发布属于受信任用户界面，不是本协议的工具或 RPC；Agent 不应绕过接口操作共享目录或本机配置。
 
@@ -8,20 +8,19 @@
 
 连接 `http://127.0.0.1:<端口>/mcp`，在请求头传 `Authorization: Bearer <凭证>`。使用标准 MCP 客户端握手与发现工具；无服务端会话，不提供旧 HTTP+SSE、stdio 或 OAuth 授权流程。只接受本机请求，Host 必须匹配，拒绝 Origin；仅支持云端执行或浏览器跨域的客户端不能直接连接。
 
-工具名是 `studyself_` + 下划线方法名，例如 `studyself_bootstrap`、`studyself_record`、`studyself_draft_create`、`studyself_propose`、`studyself_proposal_revise`。每个工具都有输入 schema，目录按凭证权限过滤。下文各方法的 input 字段直接作为工具 arguments，写入在同一层提供 `requestId` 与 `preferencesVersion`；不要再包装成任意 method/input 转发。
+工具名是 `studyself_` + 下划线方法名，例如 `studyself_bootstrap`、`studyself_record`、`studyself_draft_create`、`studyself_propose`、`studyself_proposal_revise`。每个工具都有输入 schema，有效凭证可发现全部现有 Agent 工具，不包含系统管理工具。下文各方法的 input 字段直接作为工具 arguments，写入在同一层提供 `requestId` 与 `preferencesVersion`；不要再包装成任意 method/input 转发。
 
-成功返回 `structuredContent: {value: ...}` 与同值 JSON 文本。业务失败返回 `isError: true` 与含 `error.code/message` 的文本；过期凭证在 HTTP 层返回 401。写入重试复用相同 requestId 和正文；跨 MCP / HTTP 重放同样幂等。先调用 bootstrap 读取实际规则和授权，每批写入前再次读取。不自动调用确认入库或系统设置。
+成功返回 `structuredContent: {value: ...}` 与同值 JSON 文本。业务失败返回 `isError: true` 与含 `error.code/message` 的文本；过期凭证在 HTTP 层返回 401。写入重试复用相同 requestId 和正文，宿主 MCP 工具与 MCP 脚本共用幂等记录。先调用 bootstrap 读取实际规则和授权，每批写入前再次读取。不自动调用确认入库或系统设置。
 
 MCP 配置示例不包含真实凭证，由受信任界面显示/复制。已连接 MCP 的 Agent 不需要脚本环境变量或 Node；凭证在宿主连接设置中管理。Skill 安装副本仍只是快照，bootstrap 返回的最新规则优先。
 
-## 兼容 HTTP RPC
+## MCP 脚本客户端
 
-`POST /v1/rpc`，请求头 `Authorization: Bearer <凭证>`、`Content-Type: application/json`。
-不得发送 Origin；浏览器脚本不允许跨域接入。接口地址与开发预览页面地址不同。
+`POST /v1/rpc` 已停用，返回 404，不提供任意 method/input 转发。所有外部操作通过 `/mcp` 具名工具执行；接口地址与开发预览页面地址不同。
 
-正文 `{ "method": "...", "input": {...}, "requestId": "..." }`。
-返回 `{ "value": ... }` 或 `{ "error": { "code": "...", "message": "..." } }`。
-客户端不自动重试。写入 requestId 为 8 至 100 位字母、数字、短横线、下划线。
+`scripts/client.mjs` 使用相同 MCP：初始化、声明已初始化、发现工具、调用具名工具。配置 `STUDYSELF_AGENT_URL` 为界面显示的 MCP 地址，凭证使用 `STUDYSELF_AGENT_TOKEN`。客户端不自动重试；写入 requestId 为 8 至 100 位字母、数字、短横线、下划线。
+
+有效凭证统一包含全部当前及以后新建知识库、敏感资料以及 read/collect/propose/edit/trash 能力。bootstrap.access.scope 为 `all`，domains 是当时可用知识库列表，不是固定授权清单。确认入库、永久删除、系统设置和授权管理仍不开放。旧有效凭证启动时升级至此范围，不延长有效期；旧撤销项删除，失效凭证不能重新使用。
 
 ## 读取
 
@@ -29,7 +28,7 @@ MCP 配置示例不包含真实凭证，由受信任界面显示/复制。已连
 - `libraries {}`：授权知识库。创建、改名、删除知识库由用户在系统操作。
 - `search {domain?, type?, query?, trash?, limit?, offset?}`：按范围/类型/关键词查询。返回 total、offset、records 摘要。每页最多 100 项，用 offset 分页；需要完整正文时调用 record。允许类型 note、draft、source、annotation、relation、proposal、asset、library。旧 conversation/model/provider/task/usage 内容已退役清理，不能读取、重建或恢复。笔记原有的旧对话链接可以保持不可用引用，不代表有权限读取被清理的对话。
 - `record {id}`：完整记录，包括 data、heads、versions、conflict、deleted。
-- `history {id}`：历史版本。任一版本或引用超出授权时拒绝整个请求，不泄漏跨库/敏感历史。
+- `history {id}`：修改历史，包括跨库引用及敏感内容；仍逐版本核对记录与引用的可用性，不返回本机路径或已永久删除的内容。
 - `assetRead {id}`：返回 filename、mime、sha256、base64 data，不返回本机路径；校验哈希。最大 16 MiB，缺失原文件返回 ASSET_UNAVAILABLE。
 
 资料 `data.title` 是可修改的显示名称，`data.filename` 是原文件名，身份由 `id` 与内容哈希确定。引用使用 ID，不以名称或哈希猜测可删除的重复记录。`assetCatalog`、`assetDetail`、`assetUpdate`、`assetBatch` 是系统界面专用方法，外部 Agent 不可调用；资料属性、跨库移动、回收和恢复交由用户在“资料与附件”处理。当前正文分支、草稿、整理方案和回收站中的引用均可能阻止回收或跨库移动。
@@ -38,7 +37,7 @@ MCP 配置示例不包含真实凭证，由受信任界面显示/复制。已连
 
 `search` 和 `record` 可返回 `noteOrder`（精确分数字符串或 null）。这是用户设置的同级顺序，随历史与同步保留，外部 Agent 只读并保留；`noteUpdate` 省略时由系统保留原值，改写则拒绝。提案更新同一上级的笔记保留原顺序，确认换上级/知识库后清除旧顺序，在目标层未排序项中按标题显示。`noteMove`、`notePlacement` 和目标层快照仅供受信任界面使用，不能通过 Agent 调用。参与同步的电脑都需更新到支持该字段的源码；不修改旧事件哈希。
 
-知识库是根，正式笔记可包含正文和下级笔记。`search {type:"note", domain}` 返回 `parentNoteId`；`record` 的 note.data 可含 `parentNoteId`（同库正式笔记 UUID，null/未指定为顶层）。最多 16 层，禁止循环；同步并发产生的异常保留双方，系统界面提示处理。上级及祖先同样受知识库和敏感授权限制。
+知识库是根，正式笔记可包含正文和下级笔记。`search {type:"note", domain}` 返回 `parentNoteId`；`record` 的 note.data 可含 `parentNoteId`（同库正式笔记 UUID，null/未指定为顶层）。最多 16 层，禁止循环；同步并发产生的异常保留双方，系统界面提示处理。全部知识库权限不取消上级及祖先的同库、可用性和循环检查。
 
 用 `propose` 提出新增概览、子笔记、内容融合或层级调整，由用户分项确认。已有笔记的 `noteUpdate` 必须保持 parentNoteId；省略已有非空值不代表允许移动。使用提案更新旧笔记时，未指定 parentNoteId 则沿用原值；明确传 null 才建议移到顶层。除层级外，保留旧正文、来源、附件与富内容。相同标题允许出现在不同笔记中，引用一律用稳定标识。
 
@@ -57,9 +56,9 @@ MCP 配置示例不包含真实凭证，由受信任界面显示/复制。已连
   不同请求仍可创建独立附件；相同请求标识遵守幂等规则。界面导入的同库复用及已有重复合并不扩大本接口权限，`assetDuplicates`、`assetMergePreview`、`assetMerge` 仅供受信任界面，外部 Agent 不可调用。
 - `propose {title, domain, content?, items}`：创建完整待确认预览，items 1 至 100 项。每项 `{data, targetId?, parents?, key?, parentKey?, reason?}`；新笔记不指定 targetId/parents，融合旧正式笔记需指定其 ID 和 heads。key 是本次方案唯一的字母/数字/短横线/下划线标识（1 至 80 字符）；parentKey 指向本次方案某项的 key，系统生成稳定 parentNoteId，返回值不保留 key。父子项顺序任意。reason 是单项整理理由，最多 4000 字。融合自动保留原笔记出处、附件及敏感标记，但正文仍须由 Agent 完整合并。data 必须给目标 domain。content 可解释整个知识体系与遗漏。
 - `proposalRevise {id, parents, items}`：局部修改待确认项，每项 `{id, data, reason?}`。这里 id 是方案项 ID；最外层 parents 是方案 heads。调整上级用返回方案中某项的 targetId 填写 data.parentNoteId，不再使用 parentKey。已确认项不能改写，原 targetId/parents 不改变。目标笔记已更新时重新对照并提交新方案。
-- `noteUpdate {id, parents, data}`：仅额外授予 edit 时可直接编辑正式笔记，不移动知识库。
-- `relationCreate {data}`：仅 edit 权限；data 包含 title、domain、from、to、description，目标为授权范围内的记录 ID。
-- `trash {id, parents}`：仅额外授予 trash 时可移到回收站。不删除知识库、原文件或历史。
+- `noteUpdate {id, parents, data}`：直接编辑正式笔记，不移动知识库。
+- `relationCreate {data}`：data 包含 title、domain、from、to、description，目标使用有效知识库内的记录 ID。
+- `trash {id, parents}`：移到可恢复回收站。不删除知识库、原文件或历史。
 
 `trashPreview` / `trashEmpty`、`deletionStatus` / `deletionRetry`、`storagePreviousPreview` / `storagePreviousClean`、`emptyDirectoriesPreview` / `emptyDirectoriesClean` 为受信任界面专用方法，不开放给外部 Agent。用户清空会永久删除正文历史和不再共用的托管原件；搜索、读取、历史及旧请求重放均不能恢复，不要用旧 ID 重新创建。系统保留无正文删除凭据；另一台电脑有凭据未覆盖的新修改时暂停导入，由用户处理，不擅自重跑或绕过保护。百度历史版本和回收站不由接口清理。
 

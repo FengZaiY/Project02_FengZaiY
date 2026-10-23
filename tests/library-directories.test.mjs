@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { call as mcpCall } from '../skills/studyself-organize/scripts/client.mjs';
 import path from 'node:path';
 import { Service } from '../src/core/service.mjs';
 import { Store } from '../src/core/store.mjs';
@@ -77,9 +78,8 @@ test('legacy libraries get local directories without rewriting history or exposi
   assert.deepEqual(store.allEvents(), events);
   const grant = service.agents.createGrant({ name: 'test', domains: ['旧领域'] });
   await service.agents.configure(true);
-  const response = await fetch(`${service.agents.status().url}/v1/rpc`, { method: 'POST',
-    headers: { Authorization: `Bearer ${grant.token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ method: 'libraries' }) });
-  const payload = await response.json();
+  const payload = await mcpCall('libraries', {}, undefined, { STUDYSELF_AGENT_URL: service.agents.status().mcpUrl, STUDYSELF_AGENT_TOKEN: grant.token });
+  assert.ok(payload.some(item => item.id === library.id));
   assert.ok(!JSON.stringify(payload).includes(store.directory));
   assert.ok(!JSON.stringify(payload).includes('localDirectory'));
   assert.equal(store.get(note.id).data.title, '旧笔记');
@@ -118,11 +118,9 @@ test('new local and Agent uploads stay in their library folders; identical conte
   const grant = service.agents.createGrant({ name: 'test', domains: [a.id] });
   await service.agents.configure(true);
   const bytes = Buffer.from('agent-upload');
-  const response = await fetch(`${service.agents.status().url}/v1/rpc`, { method: 'POST', headers: { Authorization: `Bearer ${grant.token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ method: 'assetWrite', requestId: uuid(), input: { domain: a.id, filename: 'agent.txt', data: bytes.toString('base64'), sha256: sha(bytes), preferencesVersion: service.agents.preferences().version } }) });
-  const result = await response.json();
-  assert.equal(response.status, 200, JSON.stringify(result));
-  assert.ok(store.assetLocation(result.value.id).path.startsWith(`${store.directories.ensure(a)}${path.sep}`));
+  const result = await mcpCall('assetWrite', { domain: a.id, filename: 'agent.txt', data: bytes.toString('base64'), sha256: sha(bytes), preferencesVersion: service.agents.preferences().version }, uuid(),
+    { STUDYSELF_AGENT_URL: service.agents.status().mcpUrl, STUDYSELF_AGENT_TOKEN: grant.token });
+  assert.ok(store.assetLocation(result.id).path.startsWith(`${store.directories.ensure(a)}${path.sep}`));
 });
 
 test('library folders and local mappings survive selecting a new root and restarting', async t => {

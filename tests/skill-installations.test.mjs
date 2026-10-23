@@ -145,10 +145,87 @@ test('legacy installation without a manifest can update and restore without dele
   const { manager, install, confirm } = setup(t);
   const directory = install(); fs.unlinkSync(path.join(directory, 'manifest.json'));
   fs.unlinkSync(path.join(directory, 'scripts/client.mjs')); fs.writeFileSync(path.join(directory, 'scripts/custom.txt'), 'keep');
-  const linked = confirm({ directory }); assert.equal(linked.status, 'outdated');
+  const linked = confirm({ directory }); assert.equal(linked.status, 'incomplete');
   confirm({ id: linked.id, action: 'update' }); assert.ok(fs.existsSync(path.join(directory, 'scripts/client.mjs')));
   confirm({ id: linked.id, action: 'restore' }); assert.ok(!fs.existsSync(path.join(directory, 'scripts/client.mjs')));
   assert.equal(fs.readFileSync(path.join(directory, 'scripts/custom.txt'), 'utf8'), 'keep');
+});
+
+test('missing owned package files pause automatic writes and support confirmed repair and restore', t => {
+  const { manager, install, confirm, service } = setup(t);
+  const directory = install(), linked = confirm({ directory });
+  const files = Object.keys(skillExportFiles(service.agents.skillPackage()));
+  fs.writeFileSync(path.join(directory, '_user_meta.json'), '{"keep":true}');
+  manager.configure({ id: linked.id, mode: 'auto', confirmed: true });
+  for (const name of files) fs.unlinkSync(path.join(directory, name));
+  const state = manager.check({ automatic: true })[0];
+  assert.equal(state.status, 'incomplete'); assert.deepEqual(state.missingFiles.sort(), files.sort());
+  for (const name of files) assert.ok(!fs.existsSync(path.join(directory, name)));
+  assert.throws(() => manager.preview({ id: linked.id, action: 'update' }), /缺少 SKILL.md/);
+  const preview = manager.preview({ id: linked.id, action: 'repair' });
+  assert.deepEqual(preview.missing.sort(), files.sort());
+  assert.throws(() => manager.confirm({ token: preview.token }), /确认/);
+  assert.ok(!fs.existsSync(path.join(directory, 'SKILL.md')));
+  const repaired = manager.confirm({ token: preview.token, confirmed: true });
+  assert.equal(repaired.status, 'current'); assert.deepEqual(repaired.missingFiles, []);
+  for (const [name, content] of Object.entries(skillExportFiles(service.agents.skillPackage()))) {
+    assert.equal(fs.readFileSync(path.join(directory, name), 'utf8'), content);
+  }
+  assert.equal(fs.readFileSync(path.join(directory, '_user_meta.json'), 'utf8'), '{"keep":true}');
+  assert.throws(() => manager.preview({ id: linked.id, action: 'repair' }), /已补全/);
+  assert.deepEqual(manager.preview({ id: linked.id, action: 'restore' }).targetMissing.sort(), files.sort());
+  const restored = confirm({ id: linked.id, action: 'restore' });
+  assert.equal(restored.status, 'incomplete'); assert.equal(restored.mode, 'manual');
+  assert.equal(manager.check({ automatic: true })[0].status, 'incomplete');
+  assert.ok(!fs.existsSync(path.join(directory, 'SKILL.md')));
+  assert.equal(confirm({ id: linked.id, action: 'repair' }).status, 'current');
+});
+
+test('repair requires existing ownership and rejects changed previews or a different Skill identity', t => {
+  const { manager, install, confirm } = setup(t);
+  const unknown = install('unknown'); fs.unlinkSync(path.join(unknown, 'SKILL.md'));
+  assert.throws(() => manager.preview({ directory: unknown }), /缺少 SKILL.md/);
+  assert.throws(() => manager.preview({ directory: unknown, action: 'repair' }), /关联不存在/);
+  const directory = install(), linked = confirm({ directory });
+  fs.unlinkSync(path.join(directory, 'SKILL.md'));
+  fs.appendFileSync(path.join(directory, 'references/api.md'), '\nmanual');
+  const preview = manager.preview({ id: linked.id, action: 'repair' });
+  assert.ok(preview.modified.includes('references/api.md'));
+  fs.writeFileSync(path.join(directory, 'SKILL.md'), '---\nname: other-skill\n---\n');
+  assert.throws(() => manager.confirm({ token: preview.token, confirmed: true }), /已变化/);
+  assert.throws(() => manager.preview({ id: linked.id, action: 'repair' }), /已补全/);
+  fs.unlinkSync(path.join(directory, 'manifest.json'));
+  assert.throws(() => manager.preview({ id: linked.id, action: 'repair' }), /不是/);
+  assert.equal(manager.check()[0].status, 'error');
+  fs.unlinkSync(path.join(directory, 'SKILL.md'));
+  const changedMarker = manager.preview({ id: linked.id, action: 'repair' });
+  fs.writeFileSync(path.join(directory, '.studyself-install.json'), '{}');
+  assert.throws(() => manager.confirm({ token: changedMarker.token, confirmed: true }), /归属已变化/);
+  assert.throws(() => manager.preview({ id: linked.id, action: 'repair' }), /归属已变化/);
+  assert.equal(manager.check({ automatic: true })[0].status, 'error');
+  assert.ok(!fs.existsSync(path.join(directory, 'SKILL.md')));
+  assert.match(fs.readFileSync(path.join(directory, 'references/api.md'), 'utf8'), /manual/);
+});
+
+test('repair write failure restores missing files and preserves existing customizations', t => {
+  const { manager, install, confirm } = setup(t);
+  const directory = install(), linked = confirm({ directory });
+  fs.unlinkSync(path.join(directory, 'SKILL.md'));
+  fs.unlinkSync(path.join(directory, 'manifest.json'));
+  fs.appendFileSync(path.join(directory, 'references/api.md'), '\nmanual');
+  const old = fs.readFileSync(path.join(directory, 'references/api.md'), 'utf8');
+  const rename = fs.renameSync; let failed = false;
+  t.mock.method(fs, 'renameSync', (from, to) => {
+    if (to === path.join(directory, 'manifest.json') && !failed) { failed = true; throw new Error('injected disk failure'); }
+    return rename(from, to);
+  });
+  assert.throws(() => confirm({ id: linked.id, action: 'repair' }), /injected disk/);
+  assert.ok(!fs.existsSync(path.join(directory, 'SKILL.md')));
+  assert.ok(!fs.existsSync(path.join(directory, 'manifest.json')));
+  assert.equal(fs.readFileSync(path.join(directory, 'references/api.md'), 'utf8'), old);
+  assert.equal(manager.records()[0].journal, null);
+  assert.equal(manager.list()[0].mode, 'manual');
+  assert.equal(manager.check()[0].status, 'incomplete');
 });
 
 test('unchanged periodic checks do not invalidate confirmation and preference conflicts block writes', t => {

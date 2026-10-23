@@ -1,5 +1,6 @@
 import { downloadSkill } from './skill-export.js';
 import { createSkillInstallations } from './skill-installations.js';
+import { copyVisibleText } from './editor-text.js';
 import './skill-manager.css';
 
 export function createSkillManager({ api, esc, icon, safeHtml, formatTime, toast, confirmBox, redrawIcons, run, pickDirectory }) {
@@ -86,7 +87,10 @@ export function createSkillManager({ api, esc, icon, safeHtml, formatTime, toast
       if (selectedTab === 'history') void history().catch(error => { if (host?.isConnected) $('#skill-history-list').textContent = error.message; });
     }; });
     host.querySelectorAll('[data-skill-file]').forEach(button => { button.onclick = () => showFile(button.dataset.skillFile); });
-    $('#skill-file-copy').onclick = () => run(async () => { await navigator.clipboard.writeText(bundle.files[selectedFile]); toast('已复制文件内容'); });
+    $('#skill-file-copy').onclick = () => run(async () => {
+      const copied = await copyVisibleText(bundle.files[selectedFile], $('#skill-file-body'));
+      toast(copied ? '已复制文件内容' : '自动复制受限，已选中文件内容，请按 Ctrl+C 复制');
+    });
     showFile(selectedFile); selectTab(selectedTab); editStatus(); redrawIcons();
     const mountHost = host;
     void api('skillInstallList').then(items => {

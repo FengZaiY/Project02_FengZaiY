@@ -2,6 +2,7 @@ import { _electron as electron } from 'playwright';
 import electronPath from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
+import { call as mcpCall } from '../skills/studyself-organize/scripts/client.mjs';
 import assert from 'node:assert/strict';
 import { docxFixture } from './fixtures/docx.mjs';
 import { presentationFixture } from './fixtures/presentation.mjs';
@@ -78,8 +79,8 @@ try {
   await assert.rejects(page.evaluate(() => window.desktop.call('backupCreate')), /Unsupported/);
   assert.equal(data.access.enabled, true);
   assert.ok(!JSON.stringify(data.access).includes(data.token));
-  const response = await fetch(`${data.access.url}/v1/rpc`, { method: 'POST', headers: { Authorization: `Bearer ${data.token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ method: 'record', input: { id: data.note.id } }) });
-  assert.equal((await response.json()).value.data.title, '桌面启动验证');
+  const record = await mcpCall('record', { id: data.note.id }, undefined, { STUDYSELF_AGENT_URL: data.access.mcpUrl, STUDYSELF_AGENT_TOKEN: data.token });
+  assert.equal(record.data.title, '桌面启动验证');
   if (!packaged) {
     const mcp = new Client({ name: 'studyself-desktop-test', version: '1.0.0' });
     try {
@@ -88,6 +89,18 @@ try {
       const result = await mcp.callTool({ name: 'studyself_record', arguments: { id: data.note.id } });
       assert.equal(result.structuredContent.value.data.title, '桌面启动验证');
     } finally { await mcp.close(); }
+    await page.locator('[data-nav="agents"]').click();
+    await page.locator('#agent-mcp-copy-url').click();
+    await page.waitForFunction(() => document.querySelector('#toast').textContent === '已复制');
+    assert.equal(await application.evaluate(({ clipboard }) => clipboard.readText()), data.access.mcpUrl);
+    for (const client of ['codex', 'http']) {
+      await page.locator('#agent-mcp-client').selectOption(client);
+      await page.evaluate(() => { document.querySelector('#toast').textContent = ''; });
+      await page.locator('#agent-mcp-copy-config').click();
+      await page.waitForFunction(() => document.querySelector('#toast').textContent === '已复制');
+      assert.equal((await application.evaluate(({ clipboard }) => clipboard.readText())).replaceAll('\r\n', '\n'), await page.locator('#agent-mcp-config').inputValue());
+    }
+    await page.locator('[data-nav="notes"]').click();
   }
   await page.reload();
   await page.locator('[data-record]', { hasText: '桌面启动验证' }).click();

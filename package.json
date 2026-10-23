@@ -1,6 +1,6 @@
 {
   "name": "studyself",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "private": true,
   "license": "UNLICENSED",
   "description": "Local-first knowledge workspace with reviewed folder-based synchronization",
@@ -48,6 +48,7 @@
     "test:storage": "node scripts/test-storage-ui.mjs",
     "test:desktop": "node scripts/test-desktop.mjs",
     "test:exit": "node scripts/test-exit-ui.mjs",
+    "test:audit-fixes": "node scripts/test-audit-fixes-desktop.mjs",
     "test:packaged": "node scripts/test-desktop.mjs --packaged",
     "benchmark": "node scripts/benchmark.mjs",
     "dist": "npm run build && electron-builder --config scripts/release-config.mjs --win nsis --x64 --publish never"

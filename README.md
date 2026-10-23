@@ -9,7 +9,7 @@ Windows 本地知识工作区：资料收集、笔记编辑、修改历史与回
 需要 Node.js 24。`npm ci` 安装依赖；`npm start` 启动开发桌面；`npm run build` 后 `npm run dev` 启动仅本机的浏览器预览。预览默认端口 4317，可通过 `PORT` 修改；`STUDYSELF_DATA` 选择本机资料目录。
 
 - `npm run check:project`：项目结构与文档检查。
-- `npm test`：核心、同步、恢复及外部 Agent HTTP / MCP 测试。
+- `npm test`：核心、同步、恢复及外部 Agent MCP 测试。
 - `npm run test:ui`、`npm run test:libraries`、`npm run test:agents`：界面回归。
 - `npm run test:assets`：资料搜索、属性、引用保护、批量管理、回收恢复及窗口布局。
 - `npm run test:dedup`：重复导入复用、独立导入、合并预览及引用/恢复保护。
@@ -29,7 +29,7 @@ Windows 本地知识工作区：资料收集、笔记编辑、修改历史与回
 
 ## 交互式笔记
 
-外部 Agent 可通过本机 MCP 读取授权资料、收集草稿及提交方案。在“外部 Agent”启用访问、生成独立授权，并复制 MCP 地址及客户端配置；Codex 和支持 Streamable HTTP 的本机客户端使用同一授权规则。详见 [MCP 接入](docs/agent-mcp.md)。
+外部 Agent 仅通过本机 MCP 接入。在“外部 Agent”启用连接、生成独立凭证，并复制 MCP 地址及客户端配置；有效凭证可读写全部知识库和敏感资料，确认入库、永久删除与系统管理仍由界面操作。详见 [MCP 接入](docs/agent-mcp.md)。
 
 授权外部 Agent 后，可以让它结合当前正文、新增资料及整理偏好，提出整篇笔记的内容、编排和交互设计。在“整理方案”按需打开交互预览，按笔记确认；不满意的部分交给 Agent 局部重做后再预览。整理仍由你发起。
 

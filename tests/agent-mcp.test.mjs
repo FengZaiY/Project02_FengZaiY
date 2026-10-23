@@ -40,7 +40,8 @@ test('MCP SDK handshake, scoped discovery, bootstrap and collection-to-reviewed-
   const tools = (await client.listTools()).tools;
   assert.deepEqual(tools.map(item => item.name).sort(), mcpTools.filter(item => grant.permissions.includes(item[1])).map(item => mcpToolName(item[0])).sort());
   assert.ok(tools.every(item => item.inputSchema.type === 'object' && item.annotations.openWorldHint === false));
-  assert.equal(value(await call('libraries'))[0].id, library.id);
+  assert.ok(value(await call('libraries')).some(item => item.id === library.id));
+  assert.equal(tools.length, mcpTools.length);
   assert.equal(value(await call('bootstrap')).capabilities.mcp.transport, 'streamable-http');
   const draft = value(await write('draftCreate', { data: noteData(library) }));
   const proposal = value(await write('propose', { title: '构建知识体系', domain: library.data.domain,
@@ -74,13 +75,13 @@ test('MCP writes preserve idempotency, preference and base-version checks', asyn
   assert.equal(missingId.isError, true);
 });
 
-test('MCP refuses hidden tools, cross-library and sensitive references; revocation is immediate', async t => {
+test('MCP allows all library and sensitive records but refuses system tools; revocation is immediate', async t => {
   const { service, library, other, client, call, write, grant } = await setup(t);
   const outside = service.store.write({ type: 'note', data: noteData(other) });
   const sensitive = service.store.write({ type: 'note', data: { ...noteData(library), sensitive: true } });
-  for (const id of [outside.id, sensitive.id]) assert.equal(error(await call('record', { id })).code, 'FORBIDDEN');
-  assert.equal(error(await write('sourceCreate', { data: noteData(other) })).code, 'FORBIDDEN');
-  for (const method of ['approve', 'trashEmpty', 'agentGrant', 'agentPreferencesSave', 'storageSelect', 'noteUpdate']) {
+  for (const id of [outside.id, sensitive.id]) assert.equal(value(await call('record', { id })).id, id);
+  assert.equal(value(await write('sourceCreate', { data: noteData(other) })).data.domain, other.data.domain);
+  for (const method of ['approve', 'trashEmpty', 'agentGrant', 'agentPreferencesSave', 'storageSelect']) {
     assert.equal((await client.callTool({ name: mcpToolName(method), arguments: {} })).isError, true);
   }
   service.agents.revoke(grant.id);
@@ -114,6 +115,7 @@ function raw(url, token, { method = 'POST', headers = {}, body = JSON.stringify(
 
 test('MCP validates Host, Origin, credentials, HTTP methods, JSON and protocol headers', async t => {
   const { service, url, grant } = await setup(t);
+  assert.equal((await raw(new URL('/v1/rpc', url), grant.token)).status, 404);
   assert.equal((await raw(url, '0'.repeat(64))).status, 401);
   assert.equal((await raw(url, grant.token, { headers: { Origin: 'http://evil.invalid' } })).status, 403);
   assert.equal((await raw(url, grant.token, { headers: { Host: 'evil.invalid' } })).status, 403);
@@ -130,4 +132,28 @@ test('MCP validates Host, Origin, credentials, HTTP methods, JSON and protocol h
   assert.equal((await raw(url, grant.token)).status, 401);
   await service.agents.configure(false);
   assert.equal(service.agents.status().mcpUrl, null);
+});
+
+test('revocation while a request body is arriving rejects it before executing the MCP tool', async t => {
+  const { service, url, grant, library, prefs } = await setup(t);
+  let observed;
+  const arriving = new Promise(resolve => { observed = resolve; });
+  service.agents.server.once('request', observed);
+  const body = JSON.stringify({ jsonrpc: '2.0', id: 'late', method: 'tools/call', params: {
+    name: 'studyself_draft_create', arguments: { requestId: uuid(), preferencesVersion: prefs, data: noteData(library) }
+  } });
+  let request;
+  const response = new Promise((resolve, reject) => {
+    request = http.request(url, { method: 'POST', headers: { Authorization: `Bearer ${grant.token}`, 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' } }, res => {
+      res.resume(); res.on('end', () => resolve(res.statusCode));
+    });
+    request.on('error', reject); request.write(body.slice(0, 30));
+  });
+  await arriving;
+  service.agents.revoke(grant.id);
+  request.end(body.slice(30));
+  assert.equal(await response, 401);
+  assert.equal(service.store.list({ type: 'draft' }).length, 0);
+  assert.equal(service.agents.grants().length, 0);
+  assert.equal(service.agents.status().audit.length, 0);
 });

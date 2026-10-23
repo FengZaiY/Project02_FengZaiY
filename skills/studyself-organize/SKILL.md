@@ -1,6 +1,6 @@
 ---
 name: studyself-organize
-description: 通过 StudySelf 本机授权接口整理学习资料、构建笔记知识体系、融合出处并提交可部分确认的内容与层级方案。用户要求整理 StudySelf 知识库或按个人自学习惯沉淀知识时使用。
+description: 通过 StudySelf 本机 MCP 整理学习资料、构建笔记知识体系、融合出处并提交可部分确认的内容与层级方案。用户要求整理 StudySelf 知识库或按个人自学习惯沉淀知识时使用。
 ---
 
 # StudySelf 外部知识整理
@@ -9,14 +9,14 @@ StudySelf 负责保存、阅读、版本、审核和同步；你负责理解与�
 
 ## 接入与更新
 
-用户在 StudySelf 的“外部 Agent”页开启访问，并为你授权知识库、生成凭证。内置 Skill 在“系统设置 → SKILL 管理”中查看文件、维护整理偏好、取回偏好历史和导出。取回历史后须保存才生效；导出包含版本清单和偏好快照，不表示已经安装到外部 Agent。用户可在“安装更新”关联已有本机安装，默认检查后确认更新，也可授权自动更新；未关联位置不改写。文件更新后宿主可能需要重新加载或新会话，你仍须读取 bootstrap；不要声称当前上下文已自动刷新。系统不管理自定义 Skill，外部 Agent API 不提供安装更新、路径读取或配置权限。
-优先使用已连接的 StudySelf MCP 工具：先调用 `studyself_bootstrap`，再调用 `studyself_libraries` 检查实际授权。MCP 地址由“外部 Agent”页提供，使用本机 Streamable HTTP 和独立 Bearer 凭证；凭证由宿主连接配置传入，不让用户在对话中粘贴，不从浏览器、数据库或其他应用提取。MCP 连接可用时不再要求额外配置脚本环境或安装 Node。
+用户在 StudySelf 的“外部 Agent”页启用 MCP，并为你生成独立凭证。内置 Skill 在“系统设置 → SKILL 管理”中查看文件、维护整理偏好、取回偏好历史和导出。取回历史后须保存才生效；导出包含版本清单和偏好快照，不表示已经安装到外部 Agent。用户可在“安装更新”关联已有本机安装，默认检查后确认更新，也可授权自动更新；未关联位置不改写。文件更新后宿主可能需要重新加载或新会话，你仍须读取 bootstrap；不要声称当前上下文已自动刷新。系统不管理自定义 Skill，外部 Agent API 不提供安装更新、路径读取或配置权限。
+仅使用 StudySelf MCP 连接：先调用 `studyself_bootstrap`，再调用 `studyself_libraries` 检查可用知识库。有效凭证可访问全部当前及后续新建知识库，含敏感资料，并具备全部现有 Agent 读写能力；用户不再逐库或逐项勾选权限。确认入库、永久删除、偏好保存和系统管理仍由用户界面操作。MCP 地址由“外部 Agent”页提供，使用本机 Streamable HTTP 和独立 Bearer 凭证；凭证由宿主连接配置传入，不让用户在对话中粘贴，不从浏览器、数据库或其他应用提取。已连接 MCP 的宿主不需要额外配置脚本环境或安装 Node。
 
 MCP 的方法名为 `studyself_` 加下划线形式（如 `draftCreate` 对应 `studyself_draft_create`、`assetRead` 对应 `studyself_asset_read`）。工具参数直接传业务 input 的字段；写入另加同层 `requestId`，必须保留 `preferencesVersion`。工具返回 `structuredContent.value`（并附 JSON 文本）；`isError` 为真表示失败，不能当作完成。当前授权之外的额外工具不会出现在目录中。
 
-仅在宿主没有 MCP 连接而用户选择原 HTTP 脚本时，从环境读取 `STUDYSELF_AGENT_URL` 和 `STUDYSELF_AGENT_TOKEN`；缺少时请用户配置。不要在 MCP 失败后静默换凭证、换工作区或直接操作文件。
+旧 `/v1/rpc` 已停用。不要在 MCP 失败后静默换凭证、换工作区或直接操作文件。撤销凭证会删除对应授权、访问记录和请求回执，不能重用已撤销凭证。
 
-兼容脚本使用 `scripts/client.mjs`（Node 24 或以上，无额外依赖）：
+用户明确选择脚本时，可使用同样走 MCP 握手与具名工具的 `scripts/client.mjs`（Node 24 或以上，无额外依赖）。从环境读取 `STUDYSELF_AGENT_URL`（MCP 地址）和 `STUDYSELF_AGENT_TOKEN`；缺少时请用户配置，不使用旧 RPC：
 
 ```text
 node scripts/client.mjs bootstrap
@@ -46,7 +46,7 @@ node scripts/client.mjs propose --input proposal.json --request-id <唯一标识
    页面调整也走 propose/proposalRevise，说明内容、编排和交互分别改变什么。每项按整篇笔记确认；局部重做可只改必要页面代码，但提交完整候选。正文或依据版本改变时重读并重新设计，不能只更新摘要/版本号。不得用 noteUpdate 替换或移除正式页面，即使有 edit 权限；正文编辑省略 presentation 会保留原页面并可能显示待更新。没有变化的设计保持稳定，不每次全面重做。
    保留原有来源关联，不能移除待确认项的 `draftRefs`。直接归档由用户在“收集与草稿”选择知识库与上级完成，Agent 不调用 `draftArchive`，也不写 `draftOrigin` 或 `acceptedVersionId`。
 
-跨库关联需明确提出，范围授权不等于用户同意移动资料。直接编辑/回收站权限仅在用户要求该操作时使用。敏感资料需要接口授权及用户对发送到外部模型的明确许可。
+跨库关联需明确提出，全部知识库的访问能力不等于用户要求移动资料。直接编辑和移入回收站仅用于用户请求的任务。敏感标记保留；是否发送到外部模型及相关费用由用户和外部 Agent 环境决定。
 
 用户可在知识体系中拖动笔记到同级前后并保存顺序。整理正文时保留 `noteOrder`，不要重新计算排序或改写受信任界面的移动参数；需要调整顺序时提出建议，由用户操作。
 

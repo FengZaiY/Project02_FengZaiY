@@ -27,7 +27,7 @@ import { recordRows } from './record-navigation.js';
 import './record-navigation.css';
 import { mountPageMode } from './presentation-mode.js';
 import { mountPresentation } from './presentation-view.js';
-import { copyText } from './editor-text.js';
+import { copyText, copyVisibleText } from './editor-text.js';
 import { mountReceivedObjects } from './received-objects.js';
 
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -769,18 +769,12 @@ async function renderSync() {
 async function renderAgents() {
   const access = await api('agentStatus');
   $('#main').className = 'settings-view';
-  $('#main').innerHTML = `<div class="page-heading"><div><div class="eyebrow">本机授权 · MCP / HTTP</div><h1>外部 Agent</h1></div></div>
-    <section class="settings-section"><h2>连接</h2><label class="check-row"><input id="agent-enabled" type="checkbox" ${access.enabled || access.requestedEnabled ? 'checked' : ''}>允许本机外部 Agent 访问</label>
-      <div class="definition-list"><div><span>接口地址</span><code id="agent-url">${esc(access.url || '未开启')}</code></div><div><span>网络范围</span><strong>仅 127.0.0.1</strong></div></div>
-      ${access.error ? `<div class="notice danger">${esc(access.error)}</div>` : ''}
-      <div class="notice amber">${icon('shield-alert')}凭证可访问所选资料，请仅交给可信 Agent。模型调用和费用由外部 Agent 管理。</div></section>
+  $('#main').innerHTML = `<div class="page-heading"><div><div class="eyebrow">本机 MCP</div><h1>外部 Agent</h1></div></div>
     ${mcpConnectionMarkup(access, { esc, icon })}
     <section class="settings-section"><h2>新建授权</h2><form id="agent-grant-form" class="settings-form"><div class="form-grid"><label>Agent 名称<input name="name" maxlength="100" required></label><label>有效天数<input name="days" type="number" value="30" min="1" max="365" required></label></div>
-      <fieldset class="agent-scopes"><legend>可访问的知识库</legend>${activeLibraries().filter(item => !item.deleted && !item.conflict).map(item => `<label class="check-row"><input name="domains" type="checkbox" value="${esc(item.data.domain)}">${esc(item.data.title)}</label>`).join('') || '<span class="muted">尚无可授权知识库</span>'}</fieldset>
-      <div class="muted">基础权限：读取、收集、提交待确认方案。确认入库由你完成。</div>
-      <details><summary>额外权限</summary><label class="check-row"><input type="checkbox" name="edit">直接修改正式笔记与创建关联</label><label class="check-row"><input type="checkbox" name="trash">移入回收站</label><label class="check-row"><input type="checkbox" name="sensitive">读取和处理敏感资料（含引用）</label></details>
+      <div class="muted">全部知识库（含后续新建及敏感资料）：读取、收集、提交方案、直接修改笔记、创建关联和移入回收站。确认入库、永久删除和系统管理仍由你在界面操作。</div>
       <button class="primary" type="submit">${icon('key-round')}生成访问凭证</button></form></section>
-    <section class="settings-section"><h2>已授权 Agent</h2>${access.grants.length ? `<div class="table-scroll"><table class="data-table"><thead><tr><th>名称 / 有效期</th><th>知识库</th><th>权限 / 状态</th><th></th></tr></thead><tbody>${access.grants.map(grant => `<tr><td><strong>${esc(grant.name)}</strong><small>${formatTime(grant.expiresAt)}</small></td><td>${grant.domains.map(domain => esc(libraryName(domain))).join('、')}</td><td>${grant.revoked ? '已撤销' : Date.parse(grant.expiresAt) <= Date.now() ? '已到期' : '有效'}<small>${grant.permissions.includes('edit') ? '直接修改 · ' : ''}${grant.permissions.includes('trash') ? '回收站 · ' : ''}${grant.sensitive ? '含敏感资料' : '不含敏感资料'}</small></td><td>${!grant.revoked ? button('key-round', 'agent-revoke', '撤销授权', `data-grant="${grant.id}"`) : ''}</td></tr>`).join('')}</tbody></table></div>` : '<div class="section-empty">尚无授权</div>'}</section>
+    <section class="settings-section"><h2>已授权 Agent</h2>${access.grants.length ? `<div class="table-scroll"><table class="data-table"><thead><tr><th>名称 / 有效期</th><th>访问范围</th><th>状态</th><th></th></tr></thead><tbody>${access.grants.map(grant => `<tr><td><strong>${esc(grant.name)}</strong><small>${formatTime(grant.expiresAt)}</small></td><td>全部知识库<small>全部 Agent 读写能力 · 含敏感资料</small></td><td>${Date.parse(grant.expiresAt) <= Date.now() ? '已到期' : '有效'}</td><td>${button('key-round', 'agent-revoke', '撤销并删除授权', `data-grant="${grant.id}"`)}</td></tr>`).join('')}</tbody></table></div>` : '<div class="section-empty">尚无授权</div>'}</section>
     <section class="settings-section"><h2>最近访问</h2>${access.audit.length ? `<div class="table-scroll"><table class="data-table"><thead><tr><th>时间</th><th>Agent</th><th>操作</th><th>结果</th></tr></thead><tbody>${access.audit.slice(0, 30).map(item => `<tr><td>${formatTime(item.at)}</td><td>${esc(item.name)}</td><td>${esc(item.method)}</td><td>${esc(item.result)}</td></tr>`).join('')}</tbody></table></div>` : '<div class="section-empty">尚无访问记录</div>'}</section>`;
   bindMcpConnection(access, { root: $('#main'), run, toast });
   $('#agent-enabled').onchange = event => run(async () => {
@@ -796,12 +790,15 @@ async function renderAgents() {
     run(async () => {
       try {
         const values = new FormData(form);
-        const grant = await api('agentGrant', { name: values.get('name'), days: Number(values.get('days')), domains: values.getAll('domains'),
-          edit: values.has('edit'), trash: values.has('trash'), sensitive: values.has('sensitive') });
+        const grant = await api('agentGrant', { name: values.get('name'), days: Number(values.get('days')) });
         await render();
-        openModal('访问凭证（仅显示一次）', `<div class="notice amber">此凭证等同于所选资料的访问权限，请勿放入笔记、同步目录或公开聊天。</div><label class="settings-form">STUDYSELF_AGENT_TOKEN<input id="agent-token" type="password" readonly value="${esc(grant.token)}" autocomplete="off"></label><label class="check-row"><input id="agent-token-visible" type="checkbox">显示凭证</label><button class="secondary" id="agent-token-copy">${icon('copy')}复制凭证</button>`);
+        openModal('访问凭证（仅显示一次）', `<div class="notice amber">此凭证可读写全部知识库及敏感资料，请勿放入笔记、同步目录或公开聊天。</div><label class="settings-form">STUDYSELF_AGENT_TOKEN<input id="agent-token" type="password" readonly value="${esc(grant.token)}" autocomplete="off"></label><label class="check-row"><input id="agent-token-visible" type="checkbox">显示凭证</label><button class="secondary" id="agent-token-copy">${icon('copy')}复制凭证</button>`);
         $('#agent-token-visible').onchange = e => { $('#agent-token').type = e.target.checked ? 'text' : 'password'; };
-        $('#agent-token-copy').onclick = () => run(async () => { await navigator.clipboard.writeText(grant.token); toast('已复制凭证'); });
+        $('#agent-token-copy').onclick = () => run(async () => {
+          const input = $('#agent-token'), copied = await copyVisibleText(grant.token, input);
+          if (!copied && input.isConnected) $('#agent-token-visible').checked = true;
+          toast(copied ? '已复制凭证' : '自动复制受限，已显示并选中凭证，请按 Ctrl+C 复制');
+        });
         modalCleanup = () => { grant.token = ''; $('#modal').replaceChildren(); };
       } finally { submit.disabled = false; }
     });
@@ -1428,7 +1425,10 @@ const actions = {
     await persist(); state.selected = null; state.selectedTab = null; state.view = state.view === 'drafts' ? 'drafts' : 'notes'; await render();
   },
   'library-storage-retry': async target => { await api('libraryDirectory', { id: target.dataset.library }); await render(); },
-  'storage-copy': async () => { await navigator.clipboard.writeText(state.snapshot.localDataDirectory); toast('已复制存储路径'); },
+  'storage-copy': async () => {
+    const input = $('#storage-current'), copied = await copyVisibleText(input.value, input);
+    toast(copied ? '已复制存储路径' : '自动复制受限，已选中存储路径，请按 Ctrl+C 复制');
+  },
   'deletion-retry': async () => { await api('deletionRetry'); await render(); toast('已重试，请查看各项清理状态'); },
   'legacy-clear': () => clearTrash(true),
   'empty-directories': async () => {
@@ -1461,8 +1461,6 @@ const actions = {
   'storage-pick': async () => { if (await pickDirectory($('#storage-target'))) { const error = $('#storage-form-error'); if (error) error.hidden = true; } },
   'storage-cancel': async () => { requireStorageSaved(); await api('storageCancel'); await render(); toast('已取消存储位置变更'); },
   'storage-restart': async () => {
-    requireStorageSaved();
-    if (!await confirmBox('重启并应用存储变更', '<p>重启后应用已确认的目录变更。迁移时原目录保留，不删除已有资料。</p>', '重启')) return;
     clearTimeout(persistTimer); await persist(); await api('storageRestart');
   },
   'note-link': editNoteLink,
@@ -1471,7 +1469,7 @@ const actions = {
   'skill-manage': () => $('#skill-management')?.scrollIntoView({ block: 'start', behavior: 'smooth' }),
   'update-manage': () => $('#upgrade-settings')?.scrollIntoView({ block: 'start', behavior: 'smooth' }),
   'agent-revoke': async target => {
-    if (!await confirmBox('撤销 Agent 授权', '<p>撤销后，该凭证不能再读取或修改资料。</p>', '撤销')) return;
+    if (!await confirmBox('撤销并删除授权', '<p>该凭证将立即失效，并删除对应授权、访问记录和请求回执。已整理的笔记及资料保留。</p>', '撤销并删除')) return;
     await api('agentRevoke', { id: target.dataset.grant }); await render();
   },
   'load-more': async () => { state.listLimit += 150; await refreshRows(); renderRecordList(); },

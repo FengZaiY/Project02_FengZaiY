@@ -81,8 +81,28 @@ export async function copyText(text) {
   const ranges = selection ? Array.from({ length: selection.rangeCount }, (_, i) => selection.getRangeAt(i).cloneRange()) : [];
   const input = document.createElement('textarea');
   input.value = text; input.style.cssText = 'position:fixed;left:-10000px;top:0';
-  document.body.append(input); input.select();
-  const copied = document.execCommand('copy'); input.remove(); active?.focus({ preventScroll: true });
-  selection?.removeAllRanges(); ranges.forEach(range => selection?.addRange(range));
-  if (!copied) throw new Error('无法访问剪贴板，请使用 Ctrl+C 复制');
+  try {
+    // A modal makes the rest of the document inert, including temporary inputs.
+    (active?.closest('dialog[open]') || document.querySelector('dialog[open]') || document.body).append(input);
+    input.focus({ preventScroll: true }); input.select();
+    if (!document.execCommand('copy')) throw new Error('无法访问剪贴板，请使用 Ctrl+C 复制');
+  } finally {
+    input.remove(); active?.focus({ preventScroll: true });
+    selection?.removeAllRanges(); ranges.forEach(range => selection?.addRange(range));
+  }
+}
+
+export async function copyVisibleText(text, target) {
+  try { await copyText(text); return true; }
+  catch {
+    if (!target?.isConnected || ('value' in target ? target.value : target.textContent) !== text) throw new Error('内容已变化，请重新打开后复制');
+    if (target.type === 'password') target.type = 'text';
+    target.focus({ preventScroll: true });
+    if (typeof target.select === 'function') target.select();
+    else {
+      const range = document.createRange(), selection = window.getSelection();
+      range.selectNodeContents(target); selection?.removeAllRanges(); selection?.addRange(range);
+    }
+    return false;
+  }
 }

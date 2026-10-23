@@ -19,6 +19,7 @@ const permissions = { bootstrap: 'read', libraries: 'read', search: 'read', reco
   propose: 'propose', proposalRevise: 'propose', noteUpdate: 'edit', relationCreate: 'edit', trash: 'trash' };
 const mutations = new Set(['draftCreate', 'sourceCreate', 'draftUpdate', 'assetWrite', 'propose', 'proposalRevise', 'noteUpdate', 'relationCreate', 'trash']);
 const maxAsset = 16 * 1024 * 1024;
+const allPermissions = ['read', 'collect', 'propose', 'edit', 'trash'];
 
 export class AgentAccess {
   constructor(store) {
@@ -27,6 +28,10 @@ export class AgentAccess {
     this.closed = false;
     this.error = null;
     store.db.exec('CREATE TABLE IF NOT EXISTS agent_requests(grant_id TEXT NOT NULL, request_id TEXT NOT NULL, digest TEXT NOT NULL, result TEXT NOT NULL, PRIMARY KEY(grant_id,request_id))');
+    this.removeGrants(this.grants().filter(grant => grant.revoked).map(grant => grant.id));
+    const grants = this.grants();
+    const upgraded = grants.map(grant => ({ ...grant, scope: 'all', domains: [], permissions: [...allPermissions], sensitive: true }));
+    if (canonical(grants) !== canonical(upgraded)) store.local('agentGrants', upgraded);
   }
   skillFiles() { return Object.fromEntries(skillNames.map(name => [name, fs.readFileSync(path.join(skillRoot, name), 'utf8')])); }
   skillPackage() {
@@ -63,24 +68,31 @@ export class AgentAccess {
       error: this.error, grants: this.grants().map(({ hash, ...grant }) => grant),
       audit: this.store.local('agentAudit') || [], preferences: this.preferences(), protocolVersion: 1 };
   }
-  createGrant({ name, domains, edit = false, trash = false, sensitive = false, days = 30 }) {
+  createGrant({ name, days = 30 }) {
     check(typeof name === 'string' && name.trim() && name.length <= 100, '请输入 Agent 名称');
-    check(Array.isArray(domains) && domains.length > 0 && domains.length <= 100, '请选择授权知识库');
-    const libraries = this.store.libraries();
-    check(domains.every(domain => libraries.some(record => record.data.domain === domain && !record.deleted && !record.conflict)), '授权范围包含不可用知识库');
     check(Number.isInteger(days) && days >= 1 && days <= 365, '有效期应为 1 至 365 天');
     check(this.grants().filter(grant => !grant.revoked).length < 100, '请先撤销不再使用的授权');
     const token = randomBytes(32).toString('hex');
-    const grant = { id: uuid(), name: name.trim(), domains: [...new Set(domains)], permissions: ['read', 'collect', 'propose', ...(edit ? ['edit'] : []), ...(trash ? ['trash'] : [])],
-      sensitive: sensitive === true, createdAt: now(), expiresAt: new Date(Date.now() + days * 86400000).toISOString(), hash: sha(token) };
+    const grant = { id: uuid(), name: name.trim(), scope: 'all', domains: [], permissions: [...allPermissions],
+      sensitive: true, createdAt: now(), expiresAt: new Date(Date.now() + days * 86400000).toISOString(), hash: sha(token) };
     this.store.local('agentGrants', [...this.grants(), grant]);
     const { hash, ...publicGrant } = grant;
     return { ...publicGrant, token };
   }
   revoke(id) {
-    check(this.grants().some(grant => grant.id === id), '授权不存在');
-    this.store.local('agentGrants', this.grants().map(grant => grant.id === id ? { ...grant, revoked: true } : grant));
+    check(typeof id === 'string' && id.length > 0, '请选择需要撤销的授权');
+    this.removeGrants([id]);
     return this.status();
+  }
+  removeGrants(ids) {
+    if (!ids.length) return;
+    const removed = new Set(ids);
+    this.store.transaction(() => {
+      this.store.local('agentGrants', this.grants().filter(grant => !removed.has(grant.id)));
+      this.store.local('agentAudit', (this.store.local('agentAudit') || []).filter(item => !removed.has(item.grantId)));
+      const erase = this.store.db.prepare('DELETE FROM agent_requests WHERE grant_id=?');
+      for (const id of removed) erase.run(id);
+    });
   }
   authenticate(token) {
     check(!this.closed && this.server?.listening, 'Agent 接口未启用', 'UNAUTHORIZED');
@@ -90,7 +102,6 @@ export class AgentAccess {
     return grant;
   }
   scope(grant, domain) {
-    check(grant.domains.includes(domain), '该知识库未授权', 'FORBIDDEN');
     check(this.store.libraries().some(item => item.data.domain === domain && !item.deleted && !item.conflict), '知识库已删除或存在冲突', 'FORBIDDEN');
   }
   checkData(grant, data, seen = new Set(), virtual = new Map()) {
@@ -169,7 +180,8 @@ export class AgentAccess {
     if (method === 'bootstrap') {
       const files = this.skillFiles();
       return { protocolVersion: 1, capabilities: { mcp: { transport: 'streamable-http', toolPrefix: 'studyself_' }, presentation: { version: 1, runtime: 'quickjs-page-v1', limits: presentationLimits } }, skillVersion: sha(canonical(files)), skill: files['SKILL.md'], apiReference: files['references/api.md'],
-        preferences: this.preferences(), access: { domains: grant.domains, permissions: grant.permissions, sensitive: grant.sensitive, expiresAt: grant.expiresAt } };
+        preferences: this.preferences(), access: { scope: 'all', domains: this.store.libraries().filter(item => !item.deleted && !item.conflict).map(item => item.data.domain),
+          permissions: grant.permissions, sensitive: grant.sensitive, expiresAt: grant.expiresAt } };
     }
     if (method === 'libraries') return this.store.libraries().filter(item => this.canRead(grant, item)).map(({ id, data, heads, conflict }) => ({ id, data, heads, conflict }));
     if (method === 'search') {
@@ -324,11 +336,14 @@ export class AgentAccess {
       res.setHeader('X-Content-Type-Options', 'nosniff');
       try {
         check(req.headers.host === `127.0.0.1:${server.address()?.port}` && !req.headers.origin, '仅接受本机 Agent 请求，不允许浏览器跨域', 'FORBIDDEN');
-        const mcp = req.url === '/mcp';
-        check(mcp || (req.method === 'POST' && req.url === '/v1/rpc'), 'Unsupported endpoint');
+        if (req.url !== '/mcp') {
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: { code: 'NOT_FOUND', message: '仅提供 /mcp 连接，旧 HTTP RPC 接口已停用' } }));
+          return;
+        }
         const token = req.headers.authorization?.replace(/^Bearer /, '');
         this.authenticate(token);
-        if (mcp && req.method !== 'POST') {
+        if (req.method !== 'POST') {
           res.writeHead(405, { Allow: 'POST', 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ jsonrpc: '2.0', id: null, error: { code: -32000, message: '只支持 POST；本机 MCP 不提供独立 SSE 或会话删除接口' } }));
           return;
@@ -340,26 +355,20 @@ export class AgentAccess {
           check(size <= 23 * 1024 * 1024, 'Request too large');
           chunks.push(chunk);
         }
-        const grant = this.authenticate(token);
+        this.authenticate(token);
         let body;
         try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
         catch {
-          if (!mcp) throw Object.assign(new Error('JSON 格式无效'), { code: 'INVALID' });
           res.writeHead(400, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'JSON 格式无效' } }));
           return;
         }
-        if (mcp) {
-          if (Array.isArray(body)) {
-            res.writeHead(400, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ jsonrpc: '2.0', id: null, error: { code: -32600, message: '每次 MCP 请求只允许一条消息' } }));
-            return;
-          }
-          await handleMcp(this, token, req, res, body); return;
+        if (Array.isArray(body)) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ jsonrpc: '2.0', id: null, error: { code: -32600, message: '每次 MCP 请求只允许一条消息' } }));
+          return;
         }
-        const value = this.dispatch(grant, body);
-        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-        res.end(JSON.stringify({ value }));
+        await handleMcp(this, token, req, res, body);
       } catch (error) {
         if (res.headersSent || res.destroyed) { if (!res.destroyed) res.end(); return; }
         res.writeHead(error.code === 'UNAUTHORIZED' ? 401 : error.code === 'FORBIDDEN' ? 403 : ['CONFLICT', 'PREFERENCES_CHANGED'].includes(error.code) ? 409 : 400,

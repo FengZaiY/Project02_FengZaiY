@@ -29,15 +29,20 @@ async function setup(t, permissions = {}) {
 }
 const data = (library, content = '正文') => ({ title: '测试知识', domain: library.data.domain, content, sourceIds: [], assetIds: [] });
 
-test('Agent endpoint defaults off; credentials are separate, scoped, hashed and revocable', async t => {
+test('Agent endpoint defaults off; credentials cover all libraries, remain hashed and can be deleted', async t => {
   const { service, rpc, env, grant, a } = await setup(t);
   const status = service.agents.status();
   assert.ok(!JSON.stringify(status).includes(grant.token));
   assert.equal(service.store.local('agentGrants')[0].hash, sha(grant.token));
-  assert.equal((await rpc('libraries')).length, 1);
-  assert.equal((await rpc('libraries'))[0].id, a.id);
+  assert.equal((await rpc('libraries')).length, 2);
+  assert.ok((await rpc('libraries')).some(item => item.id === a.id));
+  const later = service.store.saveLibrary({ title: '后续新建' });
+  assert.ok((await rpc('libraries')).some(item => item.id === later.id));
+  assert.equal((await rpc('bootstrap')).access.scope, 'all');
   await assert.rejects(client('bootstrap', {}, undefined, { ...env, STUDYSELF_AGENT_TOKEN: '0'.repeat(64) }), /UNAUTHORIZED/);
   service.agents.revoke(grant.id);
+  assert.equal(service.agents.grants().length, 0);
+  assert.equal(service.agents.status().audit.length, 0);
   await assert.rejects(rpc('bootstrap'), /UNAUTHORIZED/);
   await service.agents.configure(false);
   assert.equal(service.agents.status().enabled, false);
@@ -47,7 +52,7 @@ test('Agent endpoint defaults off; credentials are separate, scoped, hashed and 
 
 test('Agent server rejects browser origins, bad hosts, arbitrary RPC and system control', async t => {
   const { env, rpc } = await setup(t);
-  const url = `${env.STUDYSELF_AGENT_URL}/v1/rpc`;
+  const url = `${env.STUDYSELF_AGENT_URL}/mcp`;
   for (const headers of [{ Origin: 'https://example.com' }, { Host: 'evil.example' }]) {
     const status = await new Promise((resolve, reject) => {
       const request = http.request(url, { method: 'POST', headers: { ...headers, 'Content-Type': 'application/json', Authorization: `Bearer ${env.STUDYSELF_AGENT_TOKEN}` } }, response => { response.resume(); response.on('end', () => resolve(response.statusCode)); });
@@ -64,6 +69,51 @@ test('Agent server rejects browser origins, bad hosts, arbitrary RPC and system 
     'deletionStatus', 'deletionRetry', 'storagePreviousPreview', 'storagePreviousClean', 'emptyDirectoriesPreview', 'emptyDirectoriesClean']) {
     await assert.rejects(rpc(method), /FORBIDDEN/);
   }
+});
+
+test('revocation deletes only that grant and its audit/receipts and rolls back failures', async t => {
+  const { service, store, a, grant, write, rpc } = await setup(t);
+  const draft = await write('draftCreate', { data: data(a) });
+  const another = service.agents.createGrant({ name: '保留的授权' });
+  const saved = store.local.bind(store);
+  const mocked = t.mock.method(store, 'local', (...args) => {
+    if (args[0] === 'agentAudit' && args.length === 2) throw new Error('injected write failure');
+    return saved(...args);
+  });
+  assert.throws(() => service.agents.revoke(grant.id), /injected/);
+  assert.ok(service.agents.grants().some(item => item.id === grant.id));
+  assert.equal(store.db.prepare('SELECT COUNT(*) n FROM agent_requests WHERE grant_id=?').get(grant.id).n, 1);
+  mocked.mock.restore();
+  service.agents.revoke(grant.id); service.agents.revoke(grant.id);
+  assert.deepEqual(service.agents.grants().map(item => item.id), [another.id]);
+  assert.ok(service.agents.status().audit.every(item => item.grantId !== grant.id));
+  assert.equal(store.db.prepare('SELECT COUNT(*) n FROM agent_requests WHERE grant_id=?').get(grant.id).n, 0);
+  assert.equal(store.get(draft.id).data.content, draft.data.content);
+  await assert.rejects(rpc('bootstrap'), /UNAUTHORIZED/);
+});
+
+test('startup removes old revoked grants and upgrades surviving credentials without extending expiry', async t => {
+  const { service, store, grant, directory } = await setup(t);
+  const active = { ...service.agents.grants()[0], domains: ['old-library'], scope: undefined, permissions: ['read'], sensitive: false };
+  const revoked = { ...active, id: uuid(), hash: sha('revoked-token'), revoked: true };
+  store.local('agentGrants', [active, revoked]);
+  store.local('agentAudit', [{ grantId: active.id, name: active.name }, { grantId: revoked.id, name: '旧撤销项' }]);
+  store.db.prepare('INSERT INTO agent_requests VALUES(?,?,?,?)').run(revoked.id, 'old-request', 'digest', '{}');
+  await service.close(); service.close = () => {};
+  const reopened = new Service(path.join(directory, 'data')); t.after(() => reopened.close());
+  const remaining = reopened.agents.grants();
+  assert.equal(remaining.length, 1); assert.equal(remaining[0].id, grant.id);
+  assert.equal(remaining[0].hash, active.hash); assert.equal(remaining[0].expiresAt, active.expiresAt);
+  assert.equal(remaining[0].scope, 'all'); assert.equal(remaining[0].sensitive, true);
+  assert.deepEqual(remaining[0].permissions, ['read', 'collect', 'propose', 'edit', 'trash']);
+  assert.equal(reopened.store.db.prepare('SELECT COUNT(*) n FROM agent_requests').get().n, 0);
+  assert.deepEqual(reopened.agents.status().audit.map(item => item.grantId), [active.id]);
+});
+
+test('a fresh workspace can grant MCP access before its first library is created', t => {
+  const service = new Service(fs.mkdtempSync(path.join(root, 'empty-'))); t.after(() => service.close());
+  const grant = service.agents.createGrant({ name: '首次连接' });
+  assert.equal(grant.scope, 'all'); assert.deepEqual(service.store.libraries(), []);
 });
 
 test('cleared records cannot be read through Agent search, direct reads, history or request replay', async t => {
@@ -98,7 +148,7 @@ test('busy port is reported without changing addresses and persisted enable can 
   assert.equal(service.agents.status().error, null);
 });
 
-test('scope checks include every version, sensitive references, proposal targets and histories', async t => {
+test('all-library credentials read sensitive references and every historical branch', async t => {
   const { store, a, b, rpc } = await setup(t);
   const privateNote = store.write({ type: 'source', data: { ...data(a), sensitive: true } });
   const other = store.write({ type: 'note', data: data(b) });
@@ -107,11 +157,12 @@ test('scope checks include every version, sensitive references, proposal targets
   store.write({ id: crossing.id, type: 'note', parents: crossing.heads, data: data(a, '本库新版本') });
   store.write({ id: crossing.id, type: 'note', parents: crossing.heads, allowBranch: true, data: data(b) });
   assert.equal(store.get(crossing.id).conflict, true);
-  for (const record of [privateNote, other, indirect, crossing]) await assert.rejects(rpc('record', { id: record.id }), /FORBIDDEN/);
+  for (const record of [privateNote, other, indirect, crossing]) assert.equal((await rpc('record', { id: record.id })).id, record.id);
   const oldPrivate = store.write({ type: 'note', data: { ...data(a), sensitive: true } });
   store.write({ id: oldPrivate.id, type: 'note', parents: oldPrivate.heads, data: data(a) });
-  await assert.rejects(rpc('history', { id: oldPrivate.id }), /FORBIDDEN/);
-  assert.equal((await rpc('search')).records.filter(record => record.type !== 'library').length, 1);
+  assert.equal((await rpc('history', { id: oldPrivate.id })).length, 2);
+  assert.equal((await rpc('search')).records.filter(record => record.type !== 'library').length, 5);
+  await assert.rejects(rpc('record', { id: uuid() }), /FORBIDDEN/);
 });
 
 test('writes are atomic, idempotent and require current preferences; request ID collisions fail', async t => {
@@ -122,7 +173,7 @@ test('writes are atomic, idempotent and require current preferences; request ID 
   assert.deepEqual(first, second);
   assert.equal(store.list({ type: 'draft' }).length, 1);
   await assert.rejects(write('draftCreate', { data: data(a, '不同') }, request), /CONFLICT/);
-  await assert.rejects(rpc('draftCreate', input, uuid()), /PREFERENCES_CHANGED/);
+  await assert.rejects(rpc('draftCreate', { ...input, preferencesVersion: 'outdated' }, uuid()), /PREFERENCES_CHANGED/);
   const updated = service.agents.savePreferences({ content: '案例必须保留日期', parents: [] });
   assert.notEqual(updated.version, version);
   await assert.rejects(write('draftCreate', input), /PREFERENCES_CHANGED/);
@@ -133,13 +184,10 @@ test('writes are atomic, idempotent and require current preferences; request ID 
   await rpc('draftCreate', { ...input, preferencesVersion: updated.version }, uuid());
 });
 
-test('default grant cannot directly edit/delete; stale edits never overwrite', async t => {
-  const { store, a, service, write, env } = await setup(t);
+test('all credentials can edit and recycle while stale edits never overwrite', async t => {
+  const { store, a, write } = await setup(t);
   const note = store.write({ type: 'note', data: data(a) });
-  await assert.rejects(write('noteUpdate', { id: note.id, parents: note.heads, data: data(a, '覆盖') }), /FORBIDDEN/);
-  await assert.rejects(write('trash', { id: note.id, parents: note.heads }), /FORBIDDEN/);
-  const grant = service.agents.createGrant({ name: '编辑', domains: [a.id], edit: true, trash: true });
-  const exec = (method, input) => client(method, { ...input, preferencesVersion: service.agents.preferences().version }, uuid(), { ...env, STUDYSELF_AGENT_TOKEN: grant.token });
+  const exec = write;
   const edited = await exec('noteUpdate', { id: note.id, parents: note.heads, data: data(a, '已确认的修改') });
   await assert.rejects(exec('noteUpdate', { id: note.id, parents: note.heads, data: data(a, '过期') }), /CONFLICT/);
   await exec('trash', { id: note.id, parents: edited.heads });
@@ -151,7 +199,8 @@ test('proposals support source preservation, partial approval, local revision an
   const { store, a, b, service, write, rpc } = await setup(t);
   const source = await write('sourceCreate', { data: { ...data(a, '原始资料'), url: 'https://example.invalid/lesson' } });
   const body = { ...data(a, '提炼结果'), sourceIds: [source.id] };
-  await assert.rejects(write('propose', { domain: a.id, items: [{ data: data(b) }] }), /FORBIDDEN/);
+  const crossLibrary = await write('propose', { title: '跨库建议', domain: a.id, items: [{ data: data(b) }] });
+  assert.equal(crossLibrary.data.items[0].data.domain, b.id);
   const plan = await write('propose', { title: '课程整理', domain: a.id, items: [{ data: body }, { data: { ...body, title: '待优化部分' } }] });
   assert.equal(store.list({ type: 'note' }).length, 0);
   const accepted = await service.call('approve', { id: plan.id, parents: plan.heads, itemIds: [plan.data.items[0].id] });

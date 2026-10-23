@@ -35,8 +35,10 @@ try {
   assert.equal(await page.locator('#agent-enabled').isChecked(), false);
   assert.equal(await page.locator('#agent-mcp-copy-config').isDisabled(), true);
   await page.locator('#agent-enabled').check();
-  await page.waitForFunction(() => document.querySelector('#agent-url')?.textContent.startsWith('http:'));
-  const url = await page.locator('#agent-url').innerText();
+  await page.waitForFunction(() => document.querySelector('#agent-mcp-url')?.textContent.startsWith('http:'));
+  const url = new URL(await page.locator('#agent-mcp-url').innerText()).origin;
+  assert.equal(await page.locator('#agent-url').count(), 0);
+  assert.equal(await page.getByRole('heading', { name: '连接', exact: true }).count(), 0);
   assert.equal(await page.locator('#agent-mcp-url').innerText(), `${url}/mcp`);
   assert.match(await page.locator('#agent-mcp-config').inputValue(), /bearer_token_env_var = "STUDYSELF_AGENT_TOKEN"/);
   await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
@@ -47,8 +49,63 @@ try {
   const copied = JSON.parse(await page.evaluate(() => navigator.clipboard.readText()));
   assert.equal(copied.mcpServers.studyself.url, `${url}/mcp`);
   assert.match(copied.mcpServers.studyself.headers.Authorization, /填写/);
+  const copyTargets = [
+    { button: '#agent-mcp-copy-url', target: '#agent-mcp-url', label: '地址' },
+    { button: '#agent-mcp-copy-config', target: '#agent-mcp-config', label: '配置', client: 'codex' },
+    { button: '#agent-mcp-copy-config', target: '#agent-mcp-config', label: '配置', client: 'http' }
+  ];
+  await page.evaluate(() => {
+    window.clipboardTest = { writeText: navigator.clipboard.writeText, execCommand: document.execCommand };
+  });
+  try {
+    for (const mode of ['denied', 'unavailable']) {
+      await page.evaluate(mode => {
+        navigator.clipboard.writeText = mode === 'unavailable' ? undefined : async () => { throw new DOMException('Write permission denied.', 'NotAllowedError'); };
+      }, mode);
+      for (const { button, target, client } of copyTargets) {
+        if (client) await page.locator('#agent-mcp-client').selectOption(client);
+        const expected = client ? await page.locator(target).inputValue() : `${url}/mcp`;
+        await page.evaluate(() => { document.querySelector('#toast').textContent = ''; });
+        await page.locator(button).click();
+        await page.waitForFunction(() => document.querySelector('#toast').textContent === '已复制');
+        // Native Windows copy may normalize line endings to CRLF.
+        assert.equal((await page.evaluate(() => navigator.clipboard.readText())).replaceAll('\r\n', '\n'), expected, `${mode}: ${client || 'URL'}`);
+        assert.equal(await page.locator('body > textarea').count(), 0);
+        assert.equal(await page.locator(button).evaluate(element => element === document.activeElement), true);
+      }
+    }
+    for (const mode of ['false', 'throw']) {
+      await page.evaluate(mode => {
+        navigator.clipboard.writeText = async () => { throw new DOMException('Write permission denied.', 'NotAllowedError'); };
+        document.execCommand = () => {
+          if (mode === 'throw') throw new DOMException('Copy blocked', 'NotAllowedError');
+          return false;
+        };
+      }, mode);
+      for (const { button, target, client, label } of copyTargets) {
+        if (client) await page.locator('#agent-mcp-client').selectOption(client);
+        const expected = client ? await page.locator(target).inputValue() : `${url}/mcp`;
+        const previousClipboard = await page.evaluate(() => navigator.clipboard.readText());
+        await page.evaluate(() => { document.querySelector('#toast').textContent = ''; });
+        await page.locator(button).click();
+        await page.waitForFunction(label => document.querySelector('#toast').textContent === `自动复制受限，已选中${label}，请按 Ctrl+C 复制`, label);
+        assert.equal(await page.locator(target).evaluate(element => element instanceof HTMLTextAreaElement
+          ? element.value.slice(element.selectionStart, element.selectionEnd) : window.getSelection().toString()), expected);
+        assert.equal(await page.evaluate(() => navigator.clipboard.readText()), previousClipboard, 'manual fallback does not claim or perform a copy');
+        assert.equal(await page.locator('body > textarea').count(), 0, 'failed legacy copy cleans up temporary input');
+        assert.equal(await page.locator(target).evaluate(element => element === document.activeElement), true);
+      }
+    }
+    await page.screenshot({ path: path.join(root, 'mcp-copy-manual.png'), fullPage: true });
+  } finally {
+    await page.evaluate(() => {
+      navigator.clipboard.writeText = window.clipboardTest.writeText;
+      document.execCommand = window.clipboardTest.execCommand;
+      delete window.clipboardTest;
+    });
+  }
   await page.locator('#agent-grant-form input[name=name]').fill('外部整理助手');
-  await page.locator('#agent-grant-form input[name=domains]').check();
+  assert.equal(await page.locator('#agent-grant-form input[name=domains],#agent-grant-form details').count(), 0);
   await page.locator('#agent-grant-form button[type=submit]').click();
   await page.locator('#agent-token').waitFor();
   const token = await page.locator('#agent-token').inputValue();
@@ -131,13 +188,17 @@ try {
   await page.locator('[data-nav="agents"]').click();
   await page.locator('[data-action="agent-revoke"]').click();
   await page.locator('#modal [data-confirm]').click();
-  await page.waitForFunction(() => document.querySelector('#main')?.textContent.includes('已撤销'));
+  await page.waitForFunction(() => document.querySelector('#main')?.textContent.includes('尚无授权'));
+  assert.equal(app.service.agents.grants().length, 0);
+  assert.equal(app.service.agents.status().audit.length, 0);
+  assert.equal(app.service.store.db.prepare('SELECT COUNT(*) AS n FROM agent_requests').get().n, 0);
+  assert.equal(await page.locator('#main').innerText().then(text => text.includes('已撤销')), false);
   await assert.rejects(call('bootstrap', {}, undefined, env), /UNAUTHORIZED/);
   await assert.rejects(mcpClient.listTools(), /401|授权/);
   await page.locator('#agent-enabled').uncheck();
-  await page.waitForFunction(() => document.querySelector('#agent-url')?.textContent === '未开启');
+  await page.waitForFunction(() => document.querySelector('#agent-mcp-url')?.textContent === '未开启');
   assert.equal(await page.locator('#agent-mcp-url').innerText(), '未开启');
   assert.deepEqual(errors, []);
-  fs.writeFileSync(path.join(root, 'report.json'), JSON.stringify({ passed: true, errors, checks: ['system settings entry', 'preserve existing preferences', 'no settings in Agent page', 'enable', 'grant', 'preferences persistence', 'HTTP source and MCP proposal', 'MCP config and clipboard', 'partial approval', 'settings skill ZIP', 'HTTP and MCP revoke', 'disable', 'scroll and resize'] }, null, 2));
+  fs.writeFileSync(path.join(root, 'report.json'), JSON.stringify({ passed: true, errors, checks: ['system settings entry', 'preserve existing preferences', 'MCP-only connection panel', 'enable', 'all-library grant without permission checkboxes', 'preferences persistence', 'MCP script source and SDK proposal', 'MCP config and clipboard', 'clipboard denied/unavailable fallback for URL and both configurations', 'manual selection and cleanup on legacy false/throw', 'partial approval', 'settings skill ZIP', 'revoke deletes grant/audit/receipts', 'disable', 'scroll and resize'] }, null, 2));
   console.log('PASS: Agent authorization, external API to reviewed proposal, preferences, Skill export and revocation.');
 } finally { await mcpClient?.close(); await browser?.close(); await app.close(); }

@@ -91,7 +91,7 @@ test('clear more than a page, delete managed original and preserve external impo
   assert.equal(fs.readFileSync(file, 'utf8'), '应保留的原件');
   assert.equal(fs.existsSync(location), false);
   assert.equal(f.store.summary().trash, 0);
-  await assert.rejects(f.service.call('assetContent', { id: asset.id }), /not available/);
+  await assert.rejects(f.service.call('assetContent', { id: asset.id }), /附件尚未下载或不可用/);
 });
 
 test('out-of-order and repeated import plus restart cannot resurrect cleared content; concurrent edits survive', t => {

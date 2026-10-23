@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { call as mcpCall } from '../skills/studyself-organize/scripts/client.mjs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { StorageLocation } from '../src/core/storage-location.mjs';
@@ -254,4 +255,6 @@ test('local HTTP exposes storage controls only to authorized UI, not external Ag
     headers: { Authorization: `Bearer ${grant.token}`, 'Content-Type': 'application/json' }, body });
   assert.notEqual(external.status, 200);
   assert.ok(!(await external.text()).includes(anchor));
+  await assert.rejects(mcpCall('storageStatus', {}, undefined,
+    { STUDYSELF_AGENT_URL: app.service.agents.status().mcpUrl, STUDYSELF_AGENT_TOKEN: grant.token }), /FORBIDDEN/);
 });

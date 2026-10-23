@@ -45,7 +45,24 @@ test('background writes block exit while idle saved work does not require publis
   service.transport.running = true; assert.match(exitActivity(service), /同步/); service.transport.running = false;
   service.localTask = {}; assert.match(exitActivity(service), /整理/); service.localTask = null;
   service.imports.add({}); assert.match(exitActivity(service), /导入/); service.imports.clear();
+  service.store.activeAssetReads = new Map([['asset', 1]]); assert.match(exitActivity(service), /读取/); service.store.activeAssetReads.clear();
   assert.match(exitActivity(service, 2), /操作/);
+});
+
+test('storage restart requires the same handshake, final activity check and completed shutdown', async () => {
+  let request, resolveClose, started = 0, busy = '';
+  const check = new ExitCheck({ send: value => { request = value; }, inspect: () => ({ dirty: false, busy }), unavailable() {},
+    finish: intent => { assert.equal(intent, 'storage-restart'); started++; return new Promise(resolve => { resolveClose = resolve; }); } });
+  try {
+    check.begin('storage-restart'); assert.equal(request.intent, 'storage-restart');
+    assert.throws(() => check.accept({ id: request.id, rendererReady: true }), /退出检查/);
+    check.status(request.id); busy = '导入中';
+    assert.throws(() => check.accept({ id: request.id, rendererReady: true }), /导入中/); assert.equal(started, 0);
+    busy = ''; const closing = check.accept({ id: request.id, rendererReady: true });
+    assert.equal(started, 1); assert.equal(check.request.finishing, true);
+    assert.throws(() => check.accept({ id: request.id, rendererReady: true }), /正在完成/);
+    resolveClose(); assert.equal(await closing, true); assert.equal(check.request, null);
+  } finally { check.dispose(); }
 });
 
 test('a destroyed renderer cannot turn a failed status request into an exit', () => {

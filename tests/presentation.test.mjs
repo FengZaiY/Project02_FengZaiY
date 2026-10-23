@@ -91,10 +91,10 @@ test('body-only proposal preserves a stale page; local redo and explicit removal
   assert.equal(store.get(note.id).data.presentation, null);
 });
 
-test('page refs participate in agent scope, historical sensitivity, deletion and missing-asset protection', t => {
+test('page refs allow all library and sensitive history reads while preserving missing-asset protection', t => {
   const { store, rpc, data, other } = setup(t);
   const foreign = store.write({ type: 'note', data: { ...data, domain: other.data.domain } });
-  assert.throws(() => rpc('propose', { title: '越权', domain: data.domain, items: [{ data: { ...data, presentation: presentationFixture(data, { noteIds: [foreign.id] }) } }] }), /未授权/);
+  assert.ok(rpc('propose', { title: '跨库参考', domain: data.domain, items: [{ data: { ...data, presentation: presentationFixture(data, { noteIds: [foreign.id] }) } }] }).id);
   const asset = store.write({ type: 'asset', data: { title: '图片', domain: data.domain, filename: 'a.png', mime: 'image/png', size: 3, sha256: sha('abc'), priority: 'normal' } });
   const page = presentationFixture(data, { assetIds: [asset.id], html: `<img data-asset-id="${asset.id}">` });
   assert.ok(richReferences({ presentation: page }).assets.includes(asset.id));
@@ -106,7 +106,7 @@ test('page refs participate in agent scope, historical sensitivity, deletion and
   const historical = { ...page, assetIds: [], html: '', basis: { contentHash: presentationHash(data), sources: [{ id: secret.id, versionId: secret.heads[0] }] } };
   store.write({ type: 'note', data: { ...data, presentation: historical } });
   const record = store.list({ type: 'note' }).find(item => item.data.presentation);
-  assert.throws(() => rpc('record', { id: record.id }), /敏感/);
+  assert.equal(rpc('record', { id: record.id }).id, record.id);
 });
 
 test('two independent stores retain pages through repeated import and preserve concurrent edits', t => {

@@ -118,6 +118,16 @@ try {
   await page.locator('[data-install-update]').click(); await page.locator('#modal .skill-install-warning').waitFor();
   await page.locator('#modal [data-cancel]').click();
   assert.match(fs.readFileSync(path.join(installation, 'references/api.md'), 'utf8'), /manual addition/);
+  fs.unlinkSync(path.join(installation, 'SKILL.md'));
+  fs.unlinkSync(path.join(installation, 'manifest.json'));
+  await page.locator('[data-install-check]').click();
+  await page.locator('.skill-install-row .pill', { hasText: '安装文件缺失' }).waitFor();
+  await page.getByRole('button', { name: '补全并更新', exact: true }).click();
+  await page.locator('#modal .skill-install-warning', { hasText: '将补齐：SKILL.md、manifest.json' }).waitFor();
+  await page.locator('#modal .skill-install-warning', { hasText: '以下手工修改' }).waitFor();
+  await page.screenshot({ path: path.join(root, 'repair-confirm.png'), fullPage: true });
+  await page.locator('#modal [data-cancel]').click();
+  assert.ok(!fs.existsSync(path.join(installation, 'SKILL.md')));
   for (const width of [1304, 1001, 600]) {
     await page.setViewportSize({ width, height: 892 });
     for (const tab of ['preferences', 'installs', 'files', 'history']) {
@@ -129,6 +139,12 @@ try {
     }
   }
   await page.locator('[data-skill-tab=installs]').click();
+  await page.getByRole('button', { name: '补全并更新', exact: true }).click();
+  await page.getByRole('button', { name: '确认补全并更新', exact: true }).click();
+  await page.locator('.skill-install-row .pill', { hasText: '与当前一致' }).waitFor();
+  for (const [name, content] of Object.entries(skillExportFiles(app.service.agents.skillPackage()))) {
+    assert.equal(fs.readFileSync(path.join(installation, name), 'utf8'), content);
+  }
   await page.locator('[data-install-unlink]').click(); await page.locator('#modal [data-confirm]').click();
   await page.locator('#skill-panel-installs .muted', { hasText: '尚未关联' }).waitFor();
   assert.equal(fs.readFileSync(path.join(installation, 'extra.txt'), 'utf8'), 'keep');
@@ -136,6 +152,6 @@ try {
   await page.reload(); await page.locator('[data-nav=settings]').click(); await input.waitFor();
   assert.equal(await input.inputValue(), '安装更新的新规则');
   assert.deepEqual(errors, []);
-  console.log('PASS: Skill preview/export, retained edits, history, stale versions; installation picker/cancel, update/restore, automatic timer, modified-file protection, unlink, restart and responsive screenshots.');
+  console.log('PASS: Skill preview/export, retained edits, history, stale versions; installation picker/cancel, update/restore, automatic timer, modified-file protection, missing-file repair/cancel, unlink, restart and responsive screenshots.');
 } catch (error) { await page?.screenshot({ path: path.join(root, 'failure.png'), fullPage: true }); throw error; }
 finally { await browser?.close(); await app.close(); }

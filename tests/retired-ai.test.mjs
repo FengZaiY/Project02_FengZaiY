@@ -44,7 +44,8 @@ test('startup physically removes retired histories and credentials while keeping
   assert.deepEqual(app.store.history(f.note.id), noteEvents);
   assert.equal(app.store.get(f.chat.id), null); assert.deepEqual(app.store.history(f.chat.id), []);
   assert.equal(app.store.secret('api:custom'), null); assert.equal(app.store.secret('pairing'), '6'.repeat(64));
-  assert.deepEqual(app.store.local('agentGrants'), grants);
+  assert.deepEqual(app.store.local('agentGrants'), grants.map(grant => ({ ...grant, domains: [], scope: 'all',
+    permissions: ['read', 'collect', 'propose', 'edit', 'trash'], sensitive: true })));
   assert.equal(app.store.local('workspace').tabs.length, 1);
   assert.equal(app.store.local('workspace').tabs[0].draft.content, '未保存的笔记');
   assert.equal(app.store.local('workspace').tabs[0].prompt, undefined);

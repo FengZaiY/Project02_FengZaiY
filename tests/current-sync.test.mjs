@@ -149,7 +149,7 @@ test('insufficient disk pauses before exposure and resumes after free space chan
   assert.equal((await f.a.sync.publish()).job.state, 'complete');
 });
 
-test('publication pause is cooperative and missing local batch needs explicit upload confirmation', async t => {
+test('publication pause is cooperative and regenerates missing unconfirmed objects', async t => {
   const f = fixture(t); await f.file(f.a, CHUNK_BYTES + 100); await f.a.sync.plan();
   const channel = f.a.sync.channel(), write = channel.write.bind(channel);
   f.a.sync.channel = () => channel;
@@ -162,10 +162,58 @@ test('publication pause is cooperative and missing local batch needs explicit up
   assert.equal((await f.a.sync.publish()).job.state, 'paused');
   fs.unlinkSync(channel.file(removed));
   channel.write = write;
-  await assert.rejects(f.a.sync.publish(), /确认对应批次/);
-  f.a.sync.confirmBatch({ confirmed: true });
   assert.equal((await f.a.sync.publish()).job.state, 'complete');
+  assert.equal(fs.existsSync(channel.file(removed)), true);
   assert.equal(f.a.sync.config().cloudUploadVerified, false);
+});
+
+test('missing unconfirmed chunks are repaired on changed and unchanged publication', async t => {
+  for (const edited of [false, true]) {
+    const f = fixture(t), note = f.note(f.a), asset = await f.file(f.a), latest = await f.publish(f.a);
+    const chunk = latest.assets[0].chunks[0], file = f.a.sync.channel().file(chunk.name);
+    fs.unlinkSync(file);
+    if (edited) f.a.store.write({ id: note.id, type: 'note', parents: note.heads, data: { ...note.data, content: 'changed' } });
+    const planned = await f.a.sync.plan();
+    assert.equal(planned.unchanged, undefined); assert.ok(planned.job.estimatedAdditionalBytes > chunk.size);
+    await f.publish(f.a); assert.ok(fs.existsSync(file));
+    f.deliver(f.a, f.b); await f.b.sync.importLatest();
+    assert.equal(await hashFile(f.b.store.assetLocation(asset.id).path), asset.data.sha256);
+  }
+});
+
+test('unconfirmed missing objects with missing originals block rather than publish an incomplete pointer', async t => {
+  const f = fixture(t), asset = await f.file(f.a), first = await f.publish(f.a);
+  fs.unlinkSync(f.a.sync.channel().file(first.assets[0].chunks[0].name));
+  fs.unlinkSync(f.a.store.assetLocation(asset.id).path);
+  await assert.rejects(f.a.sync.publish(), /原件/);
+  assert.equal(f.a.sync.progress().state, 'blocked'); assert.equal(f.a.sync.value('latest').id, first.id);
+});
+
+test('confirmed cloud-only chunks remain reusable across later publications and cancelled batches', async t => {
+  const f = fixture(t), note = f.note(f.a); await f.file(f.a);
+  const first = await f.publish(f.a), file = f.a.sync.channel().file(first.assets[0].chunks[0].name);
+  f.a.sync.confirmUpload({ id: first.id, confirmed: true }); fs.unlinkSync(file);
+  for (const content of ['second', 'third']) {
+    const current = f.a.store.get(note.id);
+    f.a.store.write({ id: note.id, type: 'note', parents: current.heads, data: { ...current.data, content } });
+    assert.equal((await f.a.sync.publish()).job.state, 'complete'); assert.equal(fs.existsSync(file), false);
+  }
+  const g = fixture(t); await g.file(g.a); await g.a.sync.plan(); await g.a.sync.publish();
+  const confirmedFile = g.a.sync.channel().file(g.a.sync.value('latest').assets[0].chunks[0].name);
+  g.a.sync.confirmBatch({ confirmed: true }); g.a.sync.cancel(); fs.unlinkSync(confirmedFile);
+  g.note(g.a, 'after cancelled plan'); await g.publish(g.a);
+  assert.equal(fs.existsSync(confirmedFile), false);
+});
+
+test('a resumed legacy plan cannot trust reusable flags or our own reimported pointer', async t => {
+  const f = fixture(t); await f.file(f.a); const first = await f.publish(f.a);
+  await f.a.sync.importLatest();
+  fs.unlinkSync(f.a.sync.channel().file(first.assets[0].chunks[0].name));
+  const plan = f.a.sync.value('plan'); plan.objects.forEach(object => { object.reusable = true; });
+  f.a.sync.value('plan', plan); f.a.sync.saveProgress({ ...f.a.sync.progress(), state: 'paused' });
+  f.a.sync = new CurrentSync(f.a.store, { reserveBytes: 0 });
+  assert.equal((await f.a.sync.publish()).job.state, 'complete');
+  assert.ok(fs.existsSync(f.a.sync.channel().file(first.assets[0].chunks[0].name)));
 });
 
 test('assembly resumes across reopen without downloading already verified prefix chunks', async t => {

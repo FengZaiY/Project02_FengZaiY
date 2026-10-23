@@ -34,9 +34,11 @@ Windows 预览的目录按钮通过已鉴权的界面接口调用系统文件夹
 
 ## 验证矩阵
 
+系统检查修复专项：`npm run test:audit-fixes` 使用隔离 Electron 工作区验证凭证/Skill/路径复制与手动回退、偏好保护、进行中及确认后新增导入、取消、退出响应和关闭数据库后重启。另运行 `node --test tests/asset-reader.test.mjs tests/current-sync.test.mjs tests/exit-check.test.mjs`，覆盖原件完整性、媒体缓存失效、缺块补齐与重启握手。测试拦截重启以避免启动第二个实例，不操作正式资料或生成安装包。
+
 设备管理变更运行 `node --test tests/device-management.test.mjs tests/current-sync.test.mjs`、`npm test`、`npm run test:devices`、`npm run test:ui` 及 `npm run test:desktop`。用隔离双目录验证主力权限、幂等、改名冲突、停用/恢复、目标原件完整性、转移与取消并发、旧冻结发布和 format 5/删除凭据兼容，不对真实设备试做停用或转移。
 
-MCP 适配使用生产依赖 `@modelcontextprotocol/sdk` 和 `zod`，与原 HTTP 共用授权及业务执行。修改后运行 `node --test tests/agent-mcp.test.mjs tests/agents.test.mjs`、`npm run test:agents`、`npm run test:skills` 和 `npm run test:desktop`。工具目录不是权限校验的替代，禁止将受信任界面 RPC 暴露为通用 MCP 调用器。客户端连接配置见 [接入说明](docs/agent-mcp.md)。
+MCP 适配使用生产依赖 `@modelcontextprotocol/sdk` 和 `zod`，是唯一外部连接；旧 HTTP RPC 已停用。修改后运行 `node --test tests/agent-mcp.test.mjs tests/agents.test.mjs`、`npm run test:agents`、`npm run test:skills` 和 `npm run test:desktop`。有效凭证开放全部知识库及现有 Agent 读写能力；测试撤销删除、迁移、未来知识库、敏感引用以及系统操作仍不可访问。禁止将受信任界面 RPC 暴露为通用 MCP 调用器。客户端连接配置见 [接入说明](docs/agent-mcp.md)。
 
 | 改动类型 | 至少执行 |
 |---|---|
@@ -113,6 +115,6 @@ MCP 适配使用生产依赖 `@modelcontextprotocol/sdk` 和 `zod`，与原 HTTP
 
 复杂任务使用 [计划约定](docs/plans/README.md)，重要架构变化使用 [决策约定](docs/decisions/README.md)。完成后更新相关状态和验证依据，不自动把“计划”改写成“已实现”。
 
-Skill 源码位于 `skills/studyself-organize/`，随应用发布；从“系统设置”页导出含当前偏好快照的 ZIP，解压后将 `studyself-organize` 目录交给目标 Agent 的 Skill 管理入口。“系统设置”维护整理偏好，“外部 Agent”管理连接、授权和访问记录。具备本机 HTTP/Node 能力的 Agent 使用 `STUDYSELF_AGENT_URL` 与 `STUDYSELF_AGENT_TOKEN` 环境变量接入。不得把真实凭证写进 Skill、仓库、示例或测试报告。
+Skill 源码位于 `skills/studyself-organize/`，随应用发布；从“系统设置”页导出含当前偏好快照的 ZIP，解压后将 `studyself-organize` 目录交给目标 Agent 的 Skill 管理入口。“系统设置”维护整理偏好，“外部 Agent”管理 MCP、凭证和访问记录。宿主使用 MCP 配置；明确采用 Node 脚本时使用 `STUDYSELF_AGENT_URL`（MCP 地址）与 `STUDYSELF_AGENT_TOKEN` 环境变量。不得把真实凭证写进 Skill、仓库、示例或测试报告。
 
 接口和偏好变化必须同步更新 Skill。`bootstrap` 在运行时提供最新版指引；用户在“安装更新”关联的本机位置可检查后确认或自动更新，未关联位置不改写。运行 `node --test tests/skill-installations.test.mjs` 与 `npm run test:skills` 验证文件保护、失败/重启恢复、锁、过期预览、模式、目录弹窗及布局；测试只关联隔离目录，禁止使用真实外部 Agent 安装。内置模型/讨论专项脚本已退役，不能把历史测试结果当作当前功能。
