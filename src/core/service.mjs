@@ -16,7 +16,7 @@ import { cleanErasedTransport } from './erasure-sync.mjs';
 import { cleanPrevious, previewPrevious } from './old-workspace-cleanup.mjs';
 import { cleanEmptyDirectories, previewEmptyDirectories } from './empty-library-directories.mjs';
 import { previewAssetMerge, mergeAssets } from './asset-merge.mjs';
-import { archiveDraft, draftWorkflows } from './draft-workflow.mjs';
+import { archiveDraft, draftWorkflows, cleanupProposal } from './draft-workflow.mjs';
 import { receivedObjectsStatus } from './received-objects.mjs';
 import { readAssetContent } from './asset-reader.mjs';
 
@@ -84,7 +84,7 @@ export class Service {
     summary.trash -= legacy.filter(item => item.deleted).length;
     return { ...summary, libraries: this.store.directories.describe(this.store.libraries()), sync: this.transport.config(),
       workspace: this.store.local('workspace') || { tabs: [], selectedTab: null },
-      version: '0.1.9', localDataDirectory: this.store.directory, localHierarchy: this.localHierarchy.status(), deletion: deletionStatus(this.store),
+      version: '0.1.10', localDataDirectory: this.store.directory, localHierarchy: this.localHierarchy.status(), deletion: deletionStatus(this.store),
       skillInstallations: this.skillInstallations.summary() };
   }
   async finishDeletion() {
@@ -172,6 +172,7 @@ export class Service {
       }
       case 'record': return this.store.get(input.id);
       case 'draftArchive': return archiveDraft(this.store, input);
+      case 'proposalCleanup': return cleanupProposal(this.store, input);
       case 'draftWorkflow': return draftWorkflows(this.store).get(input.id) || null;
       case 'save': {
         check(['note', 'draft', 'source', 'annotation', 'relation', 'proposal', 'workspace'].includes(input.type), '该类型不允许直接修改；内置聊天与模型管理已移除');

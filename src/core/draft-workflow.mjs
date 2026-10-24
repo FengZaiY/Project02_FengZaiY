@@ -28,6 +28,41 @@ export function validateDraftRefs(store, refs = []) {
   }
 }
 
+export function cleanupProposal(store, { id, parents }) {
+  return store.transaction(() => {
+    const record = store.get(id);
+    check(record?.type === 'proposal' && !record.conflict, '请选择无冲突的整理方案', 'CONFLICT');
+    check(record.data.items.length > 0 && record.data.items.every(item => item.status === 'accepted'),
+      '方案尚有待确认内容，不能作为已确认方案清理');
+    requireSaved(store, [id]);
+    check(Array.isArray(parents), '请提供方案基础版本');
+    const basis = canonical([...parents].sort());
+    // A retry of the same deletion must not create another modification record.
+    if (record.deleted && canonical([...record.versions[0].parents].sort()) === basis) return record;
+    check(!record.deleted && canonical(record.heads) === basis, '方案已变化，请重新查看后清理', 'CONFLICT');
+    store.writeRaw({ id, type: 'proposal', data: record.data, parents, deleted: true });
+    return store.get(id);
+  });
+}
+
+// Reviewed outcomes are derived from proposal receipts, including recycled proposals.
+export function proposalEvidenceReferences(events) {
+  const byId = new Map(events.map(event => [event.id, event])), refs = new Map();
+  for (const event of events) {
+    if (event.type !== 'proposal') continue;
+    for (const item of event.data.items) {
+      const receipt = byId.get(item.acceptedVersionId);
+      if (item.status !== 'accepted' || receipt?.type !== 'note' || receipt.entityId !== item.targetId) continue;
+      for (const ref of item.draftRefs || []) {
+        const source = byId.get(ref.versionId);
+        if (source?.type !== 'draft' || source.entityId !== ref.id) continue;
+        refs.set(`${event.entityId}:${ref.id}`, { proposalId: event.entityId, draftId: ref.id, title: source.data.title });
+      }
+    }
+  }
+  return [...refs.values()];
+}
+
 // Completion is derived from reviewed evidence, never from a model-written status.
 export function draftWorkflows(store) {
   const stamp = store.db.prepare('SELECT id FROM events ORDER BY rowid DESC LIMIT 1').get()?.id;

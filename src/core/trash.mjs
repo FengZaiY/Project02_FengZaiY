@@ -3,6 +3,7 @@ import { canonical, check, isId, sha } from './util.mjs';
 import { createErasure, filterErased } from './erasures.mjs';
 import { deletionFiles, scheduleDeletion } from './permanent-files.mjs';
 import { retiredAI } from './retired-ai.mjs';
+import { proposalEvidenceReferences } from './draft-workflow.mjs';
 
 export const TRASH_TYPES = ['note', 'draft', 'source', 'annotation', 'relation', 'proposal', 'asset', 'library', 'workspace', 'conversation'];
 
@@ -50,6 +51,7 @@ export function previewTrash(store, { domain = '', legacyOnly = false } = {}) {
     refs.get(id).push({ owner, title });
   };
   const scopes = new Map(records.filter(record => record.type === 'library').map(record => [record.data.domain, record.id]));
+  for (const ref of proposalEvidenceReferences(events)) add(ref.proposalId, ref.draftId, `${ref.title}的整理确认记录`);
   for (const record of records) {
     for (const version of events.filter(event => event.entityId === record.id)) {
       try {
@@ -111,6 +113,11 @@ export function prepareRemoteErasure(store, receipts, incoming = []) {
   const retained = filterErased([...store.allEvents(), ...incoming], receipts);
   const ids = [...new Set(receipts.map(item => item.entityId))];
   const removed = new Set(receipts.filter(item => !retiredAI(item.type)).map(item => item.entityId));
+  const retainedIds = new Set(retained.map(event => event.entityId));
+  for (const ref of proposalEvidenceReferences([...store.allEvents(), ...incoming])) {
+    check(!removed.has(ref.proposalId) || !retainedIds.has(ref.draftId),
+      '永久删除方案仍被草稿处理记录依赖，请先保留方案并处理引用', 'ERASURE_CONFLICT');
+  }
   for (const event of retained) {
     check(![...references(event.data)].some(id => removed.has(id)), '永久删除内容仍被另一台电脑的笔记或历史引用，请先处理引用', 'ERASURE_CONFLICT');
   }

@@ -5,12 +5,13 @@ import { describeAsset, assetChunk, diskSpace, receiveResumable } from './resuma
 import { EMPTY_CONTROL, eventHeads, mergeControl, primaryRole, orderedEvents } from './sync-state.mjs';
 import { managementRevision, managementState } from './device-management.mjs';
 import { LocalHierarchy } from './local-hierarchy.mjs';
+import { writeSyncPointer } from './sync-publication.mjs';
 import { filterErased, mergeErasures } from './erasures.mjs';
 import { readErasureReceipts, readHistoryPart, cleanErasedTransport } from './erasure-sync.mjs';
 import { prepareRemoteErasure } from './trash.mjs';
 import { scheduleDeletion, runDeletionFiles } from './permanent-files.mjs';
 import { retirementReceipts, replacementWorkspaces } from './retired-ai.mjs';
-import { atomicWrite, canonical, check, hashFile, isHash, isId, noSymlink, now, outside, sha, uuid } from './util.mjs';
+import { canonical, check, hashFile, isHash, isId, noSymlink, now, outside, sha, uuid } from './util.mjs';
 
 const PART_BYTES = 2 * 1024 * 1024;
 const DEFAULT_BATCH = 256 * 1024 * 1024;
@@ -206,7 +207,7 @@ export class CurrentSync {
     return this.exclusive(async () => {
       this.guardEditing();
       this.guardParticipation();
-      const plan = this.value('plan'), channel = this.channel(), progress = { ...this.progress(), state: 'running', reason: '' };
+      const plan = this.value('plan'), channel = this.channel(), progress = { ...this.progress(), state: 'running', phase: 'objects', reason: '' };
       check(canonical(plan.manifest.control.management || []) === canonical(this.control().management || [])
         && canonical(plan.manifest.control.roles) === canonical(this.control().roles), '设备管理或主力角色已变化，请取消旧发布任务后重新发布', 'CONFLICT');
       this.saveProgress(progress);
@@ -249,7 +250,11 @@ export class CurrentSync {
         }
         check(this.space(channel.root).freeBytes - this.reserveBytes >= plan.latestBytes, '空间不足，无法写入最新内容清单', 'SPACE');
         const name = `current-${this.store.deviceId}.sscurrent`;
-        atomicWrite(channel.file(name), sealBinary(Buffer.from(canonical(plan.manifest)), channel.key, `v3:current:${this.store.deviceId}`));
+        progress.phase = 'manifest'; save('running', '交接对象已就绪，正在更新最新内容清单');
+        await writeSyncPointer(channel.file(name), sealBinary(Buffer.from(canonical(plan.manifest)), channel.key, `v3:current:${this.store.deviceId}`), {
+          shouldPause: () => this.pauseRequested,
+          onRetry: ({ attempt, total }) => save('running', `最新内容清单暂时被占用或访问受限，正在等待重试（${attempt}/${total}），可点击暂停`)
+        });
         this.store.transaction(() => {
           this.value('latest', plan.manifest);
           for (const events of Object.values(plan.metadata)) for (const event of events) this.store.db.prepare('UPDATE events SET exported=1 WHERE id=?').run(event.id);
@@ -258,6 +263,7 @@ export class CurrentSync {
         const cleanup = cleanErasedTransport(this);
         return { ...this.status(), cleanup };
       } catch (error) {
+        if (error.code === 'PAUSED') return save('paused', error.message);
         save('blocked', error.message); throw error;
       }
     });

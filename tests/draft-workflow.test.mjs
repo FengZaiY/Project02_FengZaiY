@@ -6,11 +6,12 @@ import path from 'node:path';
 import { Store, validateEvent } from '../src/core/store.mjs';
 import { Service } from '../src/core/service.mjs';
 import { AgentAccess } from '../src/core/agent-access.mjs';
-import { archiveDraft, draftWorkflows } from '../src/core/draft-workflow.mjs';
+import { archiveDraft, draftWorkflows, cleanupProposal } from '../src/core/draft-workflow.mjs';
 import { CurrentSync } from '../src/core/current-sync.mjs';
 import { LocalHierarchy } from '../src/core/local-hierarchy.mjs';
 import { importAttachment, makePairingKey } from '../src/core/transport.mjs';
-import { previewTrash } from '../src/core/trash.mjs';
+import { previewTrash, emptyTrash, prepareRemoteErasure } from '../src/core/trash.mjs';
+import { createErasure } from '../src/core/erasures.mjs';
 import { hashFile, uuid } from '../src/core/util.mjs';
 
 const root = path.resolve('artifacts/draft-workflow-tests'); fs.mkdirSync(root, { recursive: true });
@@ -87,6 +88,81 @@ test('review transitions pending / partial / processed, preserves source and reo
   assert.ok(draftWorkflows(f.store).get(f.draft.id).results.every(item => !item.current));
 });
 
+test('confirmed proposal cleanup retains notes, sources, attachments and draft evidence through restore', async t => {
+  const f = fixture(t);
+  const file = path.join(f.directory, 'evidence.txt'); fs.writeFileSync(file, '原件保留');
+  const asset = await importAttachment(f.store, file, { domain: f.domain });
+  const proposal = f.call('propose', { domain: f.domain, items: [{
+    draftRefs: [{ id: f.draft.id, versionId: f.draft.heads[0], complete: true }],
+    data: { title: '整理结果', domain: f.domain, content: '结果正文', assetIds: [asset.id] }
+  }] });
+  const done = f.store.approve(proposal.id, proposal.data.items.map(item => item.id), proposal.heads);
+  const target = f.store.get(done.data.items[0].targetId), before = f.store.allEvents().length;
+  const cleaned = cleanupProposal(f.store, { id: done.id, parents: done.heads });
+  assert.equal(cleaned.deleted, true); assert.equal(f.store.list({ type: 'proposal' }).length, 0);
+  assert.equal(f.store.allEvents().length, before + 1); assert.equal(f.status(), 'processed');
+  assert.deepEqual(f.store.get(target.id).heads, target.heads);
+  assert.ok(target.data.sourceIds.includes(f.draft.id)); assert.deepEqual(target.data.assetIds, [asset.id]);
+  assert.equal(await hashFile(f.store.assetLocation(asset.id).path), asset.data.sha256);
+  assert.deepEqual(cleanupProposal(f.store, { id: done.id, parents: done.heads }).heads, cleaned.heads);
+  assert.equal(f.store.allEvents().length, before + 1);
+  const preview = previewTrash(f.store);
+  assert.match(preview.blocked.find(item => item.id === done.id).reason, /整理确认记录/);
+  emptyTrash(f.store, { token: preview.token, confirmed: true });
+  assert.equal(f.status(), 'processed'); assert.ok(f.store.get(asset.id));
+  const restored = f.store.restoreVersion(done.id, cleaned.heads[0], cleaned.heads);
+  assert.equal(restored.deleted, false); assert.equal(f.status(), 'processed');
+  assert.throws(() => cleanupProposal(f.store, { id: done.id, parents: done.heads }), /已变化/);
+  cleanupProposal(f.store, { id: done.id, parents: restored.heads });
+  assert.equal(f.status(), 'processed');
+});
+
+test('cleanup rejects incomplete, empty, dirty, stale and concurrent proposals without writes', t => {
+  const f = fixture(t), p = f.propose();
+  assert.throws(() => cleanupProposal(f.store, { id: f.draft.id, parents: f.draft.heads }), /整理方案/);
+  assert.throws(() => cleanupProposal(f.store, { id: p.id, parents: p.heads }), /待确认/);
+  const partial = f.store.approve(p.id, [p.data.items[0].id], p.heads);
+  assert.throws(() => cleanupProposal(f.store, { id: p.id, parents: partial.heads }), /待确认/);
+  const done = f.store.approve(p.id, p.data.items.map(item => item.id), partial.heads);
+  let count = f.store.allEvents().length;
+  assert.throws(() => cleanupProposal(f.store, { id: p.id, parents: partial.heads }), /已变化/);
+  f.store.local('workspace', { tabs: [{ recordId: p.id, dirty: true }] });
+  assert.throws(() => cleanupProposal(f.store, { id: p.id, parents: done.heads }), /未保存/);
+  f.store.local('workspace', { tabs: [] }); assert.equal(f.store.allEvents().length, count);
+  f.store.write({ id: p.id, type: 'proposal', parents: p.heads, data: p.data, allowBranch: true });
+  count = f.store.allEvents().length;
+  assert.throws(() => cleanupProposal(f.store, { id: p.id, parents: f.store.headIds(p.id) }), /无冲突/);
+  assert.equal(f.store.allEvents().length, count);
+  const empty = f.store.write({ type: 'proposal', data: { title: '空方案', domain: f.domain, items: [] } });
+  assert.throws(() => cleanupProposal(f.store, { id: empty.id, parents: empty.heads }), /待确认/);
+});
+
+test('proposal evidence protects remote erasure but permits clearing the entire referenced group', t => {
+  const f = fixture(t), p = f.propose();
+  const done = f.store.approve(p.id, p.data.items.map(item => item.id), p.heads);
+  cleanupProposal(f.store, { id: done.id, parents: done.heads });
+  const receipt = createErasure(f.store, p.id);
+  assert.throws(() => prepareRemoteErasure(f.store, [receipt]), /草稿处理记录/);
+  for (const item of done.data.items) { const note = f.store.get(item.targetId); f.store.remove(note.id, note.heads); }
+  f.store.remove(f.draft.id, f.draft.heads);
+  const preview = previewTrash(f.store);
+  assert.equal(preview.blocked.length, 0);
+  const receipts = preview.eligible.map(item => createErasure(f.store, item.id));
+  assert.doesNotThrow(() => prepareRemoteErasure(f.store, receipts));
+  emptyTrash(f.store, { token: preview.token, confirmed: true });
+  assert.equal(f.store.get(p.id), null); assert.equal(f.store.get(f.draft.id), null);
+});
+
+test('confirmed proposals without draft dependencies can be permanently cleared without deleting notes', t => {
+  const f = fixture(t);
+  const p = f.call('propose', { domain: f.domain, items: [{ data: { title: '独立整理', domain: f.domain } }] });
+  const done = f.store.approve(p.id, p.data.items.map(item => item.id), p.heads);
+  cleanupProposal(f.store, { id: done.id, parents: done.heads });
+  const preview = previewTrash(f.store); assert.ok(preview.eligible.some(item => item.id === p.id));
+  emptyTrash(f.store, { token: preview.token, confirmed: true });
+  assert.equal(f.store.get(p.id), null); assert.ok(f.store.get(done.data.items[0].targetId));
+});
+
 test('approval rejects changed source, dirty target, partial failure and concurrent proposal', t => {
   const f = fixture(t), proposal = f.propose();
   f.store.local('workspace', { tabs: [{ recordId: proposal.data.items[1].targetId, dirty: true }] });
@@ -122,6 +198,7 @@ test('full-access Agent reads all sources but cannot approve/archive, forge orig
   const f = fixture(t), p = f.propose(), partial = f.store.approve(p.id, [p.data.items[0].id], p.heads);
   assert.throws(() => f.call('draftArchive', { id: f.draft.id }), /未授权/);
   assert.throws(() => f.call('approve', { id: p.id }), /未授权/);
+  assert.throws(() => f.call('proposalCleanup', { id: p.id }), /未授权/);
   assert.throws(() => f.call('proposalRevise', { id: p.id, parents: partial.heads,
     items: [{ id: p.data.items[1].id, data: p.data.items[1].data, draftRefs: [] }] }), /不能移除/);
   assert.throws(() => f.call('propose', { domain: f.domain, items: [{ data: { title: '伪造', domain: f.domain, draftOrigin: { id: f.draft.id, versionId: f.draft.heads[0] } } }] }), /归档来源/);
@@ -152,6 +229,13 @@ test('v3 sync retains receipts and source histories; duplicate import and concur
   await a.publish(); await b.importLatest();
   assert.equal(draftWorkflows(other).get(f.draft.id).status, 'processed');
   assert.equal(other.history(f.draft.id).length, 1);
+  const done = f.store.get(p.id);
+  cleanupProposal(f.store, { id: p.id, parents: done.heads });
+  await a.publish(); await b.importLatest();
+  assert.equal(other.get(p.id).deleted, true);
+  assert.equal(draftWorkflows(other).get(f.draft.id).status, 'processed');
+  const cleanedCount = other.allEvents().length;
+  await b.importLatest(); assert.equal(other.allEvents().length, cleanedCount);
 });
 
 test('draft filtering precedes pagination and search can include processed drafts', async t => {
@@ -174,6 +258,6 @@ test('MCP Agent may submit versioned proposals but cannot invoke trusted archive
   const created = await request('propose', { domain: f.domain, items: [{ draftRefs: [{ id: f.draft.id, versionId: f.draft.heads[0], complete: true }],
     data: { title: 'MCP 草稿整理', domain: f.domain, content: '整理结果' } }] });
   assert.equal(created.data.items[0].draftRefs[0].complete, true);
-  for (const method of ['draftArchive', 'draftWorkflow', 'approve']) await assert.rejects(request(method, { id: f.draft.id }), /FORBIDDEN/);
+  for (const method of ['draftArchive', 'draftWorkflow', 'approve', 'proposalCleanup']) await assert.rejects(request(method, { id: f.draft.id }), /FORBIDDEN/);
   assert.equal(f.status(), 'pending');
 });

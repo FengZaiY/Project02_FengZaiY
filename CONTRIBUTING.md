@@ -45,7 +45,7 @@ MCP 适配使用生产依赖 `@modelcontextprotocol/sdk` 和 `zod`，是唯一�
 | 文档和目录约定 | `npm run check:project` |
 | `src/core/` | `npm test` |
 | 清空回收站、永久删除凭据 | 另运行 `node --test tests/permanent-deletion.test.mjs tests/trash.test.mjs tests/current-sync.test.mjs tests/storage.test.mjs`、`npm run test:trash`、`npm run test:libraries`、`npm run test:assets`、`npm run test:agents`、`npm run test:storage`；覆盖正文历史实际删除、原件/共用保护、可重试文件任务、数据库压缩失败、替换索引失败、旧副本确认、重复/乱序同步及未知并发版本阻断；不得用正式回收内容测试 |
-| 当前内容同步、批次与接收断点 | `node --test tests/current-sync.test.mjs`、全量核心及界面/桌面测试；覆盖缺块、重启、损坏前缀、空间不足、重复与并发 |
+| 当前内容同步、批次与接收断点 | `node --test tests/current-sync.test.mjs tests/sync-publication.test.mjs`、全量核心、`npm run test:sync-publication` 及界面/桌面测试；覆盖缺块、重启、损坏前缀、空间不足、重复、并发及清单替换占用。Windows 专项用临时文件真实句柄验证锁释放后成功，不访问真实同步目录 |
 | 退役 AI 数据迁移 | `node --test tests/retired-ai.test.mjs`、全量核心、`test:ui`、`test:agents`、`test:skills`、`test:storage`；检查旧密钥和正文删除、正常笔记与草稿保护、旧同步重复/新分支拦截、工作区替换身份一致及失败回滚 |
 | 退役 Git/独立备份兼容模块 | 现有 `git-sync.test.mjs` 等仅维护旧格式读取证据，不恢复当前产品入口 |
 | `web/` 或跨端业务调用 | `npm run build`、`npm run test:ui`，必要时核心测试 |

@@ -17,7 +17,7 @@ export function createSyncUI({ api, esc, icon, formatTime, bytes, render, toast,
     const job = status.job, active = job && !['complete', 'cancelled'].includes(job.state);
     const names = { ready: '等待发布', running: '正在生成', paused: '已暂停', blocked: '等待处理', complete: '已生成', cancelled: '已取消' };
     return `<div class="definition-list"><div><span>未发布修改</span><strong>${status.pendingChanges} 条${status.pendingControl ? ' · 设备设置有更新' : ''}</strong></div>
-      <div><span>当前任务</span><strong>${status.busy ? '正在处理' : job ? names[job.state] : '尚无任务'}</strong></div>
+      <div><span>当前任务</span><strong>${status.busy ? job?.phase === 'manifest' ? '正在更新最新清单' : '正在处理' : job ? names[job.state] : '尚无任务'}</strong></div>
       ${job ? `<div><span>预计新增占用</span><strong>${bytes(job.estimatedAdditionalBytes)}</strong></div>
       <div><span>预估时可用空间</span><strong>${bytes(job.freeBytesAtPlan)} · 保留 ${bytes(job.reserveBytes)}</strong></div>
       <div><span>批次上限 / 预计批数</span><strong>${bytes(job.batchBytes)} / ${job.estimatedBatches ?? '空间不足'}</strong></div>

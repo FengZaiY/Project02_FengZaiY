@@ -67,6 +67,37 @@ test('new computer needs only latest self-contained content; note history and re
   assert.equal(confirmed.config.cloudUploadVerified, false);
 });
 
+test('pointer contention preserves the previous publication, frozen edits and retry progress across restart', async t => {
+  const f = fixture(t), note = f.note(f.a); await f.publish(f.a);
+  const latest = f.a.sync.value('latest'), pointer = f.a.sync.channel().file(`current-${f.a.store.deviceId}.sscurrent`);
+  const before = fs.readFileSync(pointer);
+  const saved = f.a.store.write({ id: note.id, type: 'note', parents: note.heads, data: { ...note.data, content: 'frozen publication' } });
+  const rename = fs.renameSync; t.after(() => { fs.renameSync = rename; });
+  fs.renameSync = (from, to) => { if (to === pointer) throw Object.assign(new Error('test contention'), { code: 'EPERM' }); return rename(from, to); };
+  const pending = f.a.sync.publish();
+  while (f.a.sync.progress()?.phase !== 'manifest') await new Promise(resolve => setTimeout(resolve, 10));
+  assert.match(f.a.sync.status().job.reason, /等待重试/);
+  assert.equal(f.a.sync.status().busy, true);
+  await assert.rejects(f.a.sync.publish(), { code: 'BUSY' });
+  f.a.store.write({ id: note.id, type: 'note', parents: saved.heads, data: { ...saved.data, content: 'edited during retry' } });
+  f.a.sync.pause(); assert.equal((await pending).job.state, 'paused');
+  assert.deepEqual(fs.readFileSync(pointer), before); assert.equal(f.a.sync.value('latest').id, latest.id);
+  assert.ok(f.a.store.unexported().some(event => event.id === saved.heads[0]));
+  f.a.store.close();
+  const reopened = new Store(path.join(f.directory, 'A')); t.after(() => reopened.close());
+  const resumed = new CurrentSync(reopened, { reserveBytes: 0 });
+  await assert.rejects(resumed.publish(), { code: 'SYNC_FILE_BUSY' });
+  assert.equal(resumed.status().job.state, 'blocked'); assert.match(resumed.status().job.reason, /继续发布/);
+  assert.deepEqual(fs.readFileSync(pointer), before); assert.equal(resumed.value('latest').id, latest.id);
+  fs.renameSync = rename;
+  assert.equal((await resumed.publish()).job.state, 'complete');
+  f.deliver({ sync: resumed }, f.b); await f.b.sync.importLatest();
+  assert.equal(f.b.store.get(note.id).data.content, 'frozen publication');
+  assert.equal(reopened.get(note.id).data.content, 'edited during retry');
+  assert.equal(resumed.status().pendingChanges, 1); assert.equal(resumed.status().config.cloudUploadVerified, false);
+  assert.equal((await f.b.sync.importLatest()).imported, 0);
+});
+
 test('saved local edits merge with downloaded edits; unsaved tabs block; repeated pull is idempotent', async t => {
   const f = fixture(t), note = f.note(f.a);
   await f.publish(f.a); f.deliver(f.a, f.b); await f.b.sync.importLatest();

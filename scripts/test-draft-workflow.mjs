@@ -108,6 +108,7 @@ try {
   await page.locator('[data-proposal-item]').first().check();
   await page.locator('[data-action="approve"]').click();
   await page.waitForFunction(() => document.querySelectorAll('[data-proposal-item]:disabled').length === 1);
+  assert.equal(await page.locator('[data-action="proposal-cleanup"]').count(), 0);
   await page.locator('[data-nav="drafts"]').click();
   await page.locator(`.record-row[data-record="${todo.id}"] .processing-status`, { hasText: '部分处理' }).waitFor();
   await page.locator(`.record-row[data-record="${todo.id}"]`).click();
@@ -128,6 +129,35 @@ try {
   await page.locator('[data-proposal-item]:not(:disabled)').check();
   await page.locator('[data-action="approve"]').click();
   await page.waitForFunction(() => document.querySelectorAll('[data-proposal-item]:disabled').length === 2);
+  assert.equal(await page.locator('[data-action="approve"]').count(), 0);
+  assert.equal(await page.locator('[data-action="proposal-edit"]').count(), 0);
+  assert.equal(await page.getByRole('button', { name: '查看入库笔记', exact: true }).count(), 2);
+  await page.locator('#toast.show').waitFor({ state: 'detached' });
+  for (const width of [1304, 600]) {
+    await page.setViewportSize({ width, height: 892 });
+    await page.locator('[data-action="proposal-cleanup"]').scrollIntoViewIfNeeded();
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+    await page.screenshot({ path: path.join(root, `proposal-complete-${width}.png`), fullPage: true });
+  }
+  await page.locator('[data-action="proposal-cleanup"]').click();
+  await page.getByRole('button', { name: '取消', exact: true }).click();
+  assert.equal(store.get(proposal.id).deleted, false);
+  await page.locator('[data-action="proposal-cleanup"]').click();
+  await page.screenshot({ path: path.join(root, 'proposal-cleanup-confirm.png'), fullPage: true });
+  await page.getByRole('button', { name: '清理方案', exact: true }).click();
+  await page.locator('[data-action="restore"]').waitFor();
+  assert.equal(store.get(proposal.id).deleted, true);
+  assert.equal(await page.locator('[data-action="proposal-cleanup"]').count(), 0);
+  assert.equal(await page.locator('.record-row[data-record="' + proposal.id + '"]').count(), 0);
+  const noteHeads = proposal.data.items.map(item => store.get(item.targetId).heads);
+  await page.locator('[data-action="restore"]').click();
+  await page.locator('[data-action="proposal-cleanup"]').waitFor();
+  assert.equal(store.get(proposal.id).deleted, false);
+  assert.deepEqual(proposal.data.items.map(item => store.get(item.targetId).heads), noteHeads);
+  await page.locator('[data-action="proposal-cleanup"]').click();
+  await page.getByRole('button', { name: '清理方案', exact: true }).click();
+  await page.locator('[data-action="restore"]').waitFor();
+  await page.setViewportSize({ width: 1304, height: 892 });
   await page.locator('[data-nav="drafts"]').click();
   await page.locator('#draft-filter').selectOption('processed');
   await page.locator(`.record-row[data-record="${todo.id}"]`).click();
@@ -161,7 +191,7 @@ try {
   await page.locator('[data-nav="drafts"]').click();
   assert.equal(await page.locator('[data-action="list-summary"]').getAttribute('aria-pressed'), 'true');
   assert.deepEqual(errors, []);
-  console.log('Draft archive UI passed: cancel, saved rich body, destination, filters, search, partial/full approval, source changes, restart and responsive screenshots.');
+  console.log('Draft archive UI passed: archive, filters, partial/full approval, proposal cleanup/cancel/restore, preserved results/status, source changes, restart and responsive screenshots.');
 } catch (error) {
   if (page) await page.screenshot({ path: path.join(root, 'failure.png'), fullPage: true });
   throw error;

@@ -104,7 +104,7 @@ MCP 配置示例不包含真实凭证，由受信任界面显示/复制。已连
 
 `proposalRevise` 省略 draftRefs 时保留原关联；显式提供时不得移除旧草稿 ID。来源有新修改时先重读正文，再调整相关待确认项及 versionId；已确认项保留其原来源版本。确认产生只读 acceptedVersionId，并将来源草稿加入正式笔记 sourceIds；这不删除原件或草稿历史。
 
-正式笔记可能包含系统维护的 `draftOrigin:{id,versionId}`，代表用户直接归档。Agent 修改或提案融合该笔记时系统保留此字段，Agent 不能新增或改写它。`draftArchive`、`draftWorkflow` 和确认接口均属受信任界面，不通过 Agent RPC 开放。处理状态不作为可写字段；保存偏好与确认权仍归用户。
+正式笔记可能包含系统维护的 `draftOrigin:{id,versionId}`，代表用户直接归档。Agent 修改或提案融合该笔记时系统保留此字段，Agent 不能新增或改写它。`draftArchive`、`draftWorkflow`、`proposalCleanup` 和确认接口均属受信任界面，不通过 MCP 开放。全部确认的方案可由用户清理至回收站，确认回执仍支持草稿处理状态，入库结果保持原身份；不能将方案回收理解为结果被撤销。处理状态不作为可写字段；保存偏好与确认权仍归用户。
 
 关联元数据随 v3 清单传输，使用这些字段前所有同步电脑须更新；不改写旧事件哈希。运行时 bootstrap 读取最新协议和 Skill。Skill 安装更新由用户在设置关联本机目录并选择确认或自动模式，未关联的旧导出包不变；这些管理方法、目录和恢复副本不向外部 Agent 开放，也不参与同步。
 

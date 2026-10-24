@@ -8,3 +8,4 @@
 .draft-result { display:flex; flex-direction:column; align-items:flex-start; gap:5px; width:100%; text-align:left; padding:10px 4px; border:0; border-bottom:1px solid var(--line); background:transparent; overflow-wrap:anywhere; }
 .draft-result small { color:var(--muted); }
 .draft-archive-error { color:var(--red); margin:0; }
+.proposal-complete-actions { align-items:center; }

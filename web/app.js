@@ -460,7 +460,12 @@ async function renderDocument(record) {
   } else if (record.type === 'conversation') {
     $('#editor-content').innerHTML = '<p class="muted">内置 AI 对话已取消，旧对话已清理。</p>';
   } else if (record.type === 'proposal') {
-    $('#editor-content').innerHTML = `${data.content ? `<section class="proposal-summary prose">${safeHtml(data.content)}</section>` : ''}<div class="proposal-items">${data.items.map(item => `<section class="proposal-item"><label class="check-row"><input type="checkbox" data-proposal-item="${item.id}" ${item.status === 'accepted' ? 'disabled checked' : ''}><strong>${esc(item.data.title)}</strong><span class="pill ${item.status === 'accepted' ? 'green' : ''}">${item.status === 'accepted' ? '已确认' : '待确认'}</span></label><div class="proposal-destination">${icon('folder')}目标：${esc(libraryName(item.data.domain))}<span>出处 ${item.data.sourceIds?.length || 0} · 附件 ${item.data.assetIds?.length || 0}</span></div><div class="prose">${safeHtml(item.data.content, item.data.format)}</div></section>`).join('')}</div><div class="sticky-actions"><button class="primary" data-action="approve">确认选中部分</button><button class="secondary" data-action="proposal-edit">修改待确认部分</button></div>`;
+    const complete = data.items.length > 0 && data.items.every(item => item.status === 'accepted');
+    const actionable = !record.deleted && !record.conflict;
+    const proposalActions = !actionable ? '' : complete
+      ? `<div class="sticky-actions proposal-complete-actions"><span class="pill green">全部已确认</span><button class="secondary" data-action="proposal-cleanup">${icon('archive')}清理已确认方案</button></div>`
+      : '<div class="sticky-actions"><button class="primary" data-action="approve">确认选中部分</button><button class="secondary" data-action="proposal-edit">修改待确认部分</button></div>';
+    $('#editor-content').innerHTML = `${data.content ? `<section class="proposal-summary prose">${safeHtml(data.content)}</section>` : ''}<div class="proposal-items">${data.items.map(item => `<section class="proposal-item"><label class="check-row"><input type="checkbox" data-proposal-item="${item.id}" ${item.status === 'accepted' ? 'disabled checked' : actionable ? '' : 'disabled'}><strong>${esc(item.data.title)}</strong><span class="pill ${item.status === 'accepted' ? 'green' : ''}">${item.status === 'accepted' ? '已确认' : '待确认'}</span></label><div class="proposal-destination">${icon('folder')}目标：${esc(libraryName(item.data.domain))}<span>出处 ${item.data.sourceIds?.length || 0} · 附件 ${item.data.assetIds?.length || 0}</span></div><div class="prose">${safeHtml(item.data.content, item.data.format)}</div></section>`).join('')}</div>${proposalActions}`;
     $$('.proposal-item').forEach((element, index) => {
       const item = data.items[index];
       if (item.data.presentation) {
@@ -468,7 +473,8 @@ async function renderDocument(record) {
         preview.onclick = () => previewPresentation(item.data); element.append(preview);
       }
       $('.proposal-destination', element).insertAdjacentHTML('afterend', `<div class="proposal-operation">上级笔记：${esc(hierarchyUI.proposalPath(data.items, item))}</div>${item.reason ? `<div class="proposal-reason">${esc(item.reason)}</div>` : ''}`);
-      $('.proposal-destination', element).insertAdjacentHTML('afterend', item.parents?.length
+      $('.proposal-destination', element).insertAdjacentHTML('afterend', item.status === 'accepted'
+        ? `<div class="proposal-operation"><button class="text-button" data-record="${esc(item.targetId)}">${icon('file-check')}查看入库笔记</button></div>` : item.parents?.length
         ? `<div class="proposal-operation">合并更新已有笔记（保留历史）<button class="text-button" data-record="${esc(item.targetId)}">${icon('file-search')}查看原笔记</button></div>`
         : '<div class="proposal-operation muted">新建笔记</div>');
     });
@@ -1610,6 +1616,16 @@ const actions = {
     const saved = await api('approve', { id: record.id, parents: record.heads, itemIds });
     if (state.selected?.id === record.id) { state.selected = saved; await render(); }
     toast('选定部分已入库，关联草稿处理状态已更新');
+  },
+  'proposal-cleanup': async () => {
+    const record = state.selected;
+    if (!record || record.type !== 'proposal' || record.deleted || record.conflict) return;
+    if (!await confirmBox('清理已确认方案', `<p>将“${esc(record.data.title)}”移入回收站，从整理方案列表移除。</p><p>已入库笔记、附件、出处及草稿处理记录保留。方案可从回收站恢复；仍被草稿处理记录依赖时不能永久清空。</p>`, '清理方案')) return;
+    await persist();
+    const saved = await api('proposalCleanup', { id: record.id, parents: record.heads });
+    if (state.selected?.id === record.id) state.selected = saved;
+    await render();
+    toast('方案已移入回收站，已入库内容保留');
   },
   'proposal-edit': async () => {
     const record = state.selected, selectedId = $('[data-proposal-item]:checked:not(:disabled)')?.dataset.proposalItem;
