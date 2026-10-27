@@ -137,7 +137,7 @@ try {
   await page.locator('[data-action="sync-publish"]').click();
   await page.waitForFunction(() => document.querySelector('#sync-task')?.textContent.includes('最新内容已生成'));
   assert.equal(app.service.transport.value('latest').id, plannedId);
-  assert.equal(app.service.transport.value('latest').format, 4);
+  assert.equal(app.service.transport.value('latest').format, 7);
   assert.ok(app.service.transport.value('latest').erasures.some(item => item.entityId === legacy.id));
   assert.doesNotMatch(await page.locator('#main').innerText(), /Git|保存版本|版本历史|独立备份/);
   await page.locator('[data-action="sync-upload-confirm"]').click();
@@ -145,6 +145,7 @@ try {
   await page.waitForFunction(() => document.querySelector('#sync-task')?.textContent.includes('用户已确认上传'));
   assert.equal(app.service.transport.config().cloudUploadVerified, false);
   await page.screenshot({ path: path.join(root, 'current-published.png'), fullPage: true });
+  await page.locator('[data-nav="notes"]').click();
   await page.locator('[data-nav="proposals"]').click();
   await page.locator('.record-row', { hasText: '课程片段整理' }).click();
   await page.locator('[data-proposal-item]').first().check();

@@ -24,8 +24,9 @@ try {
   await page.goto(app.url);
   await page.locator('[data-nav=trash]').click();
   await page.getByLabel('选择知识库').selectOption(a.id);
+  await page.locator('.list-heading strong', { hasText: `${a.data.title} · 回收站` }).waitFor();
   await page.locator(`[data-record="${removable.id}"]`).waitFor();
-  await page.getByLabel('搜索笔记').fill('没有匹配的标题');
+  await page.getByLabel('搜索当前板块').fill('没有匹配的标题');
   await page.locator('.list-empty', { hasText: '没有匹配' }).waitFor();
   await page.getByRole('button', { name: '清空回收站', exact: true }).click();
   await page.getByRole('button', { name: '确认清空 1 项', exact: true }).waitFor();
@@ -35,7 +36,7 @@ try {
   assert.match(await page.locator('.trash-confirm').innerText(), /百度云端历史/);
   await page.getByRole('button', { name: '取消', exact: true }).click();
   assert.ok(store.get(removable.id)?.deleted);
-  await page.getByLabel('搜索笔记').fill('');
+  await page.getByLabel('搜索当前板块').fill('');
   await page.locator(`[data-record="${removable.id}"]`).click();
   await page.locator('.document-heading h1', { hasText: removable.data.title }).waitFor();
   await page.getByRole('button', { name: '清空回收站', exact: true }).click();

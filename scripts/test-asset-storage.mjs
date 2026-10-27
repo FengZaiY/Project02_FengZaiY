@@ -37,17 +37,17 @@ try {
   await page.locator('#domain-filter').selectOption(library.id);
   await page.locator('[data-nav=assets]').click();
   await page.locator('#material-root-path').waitFor();
+  await page.locator('#domain-filter').selectOption(library.id);
+  await page.locator('.page-heading small', { hasText: library.data.title }).waitFor();
   assert.equal(await page.locator('#material-root-path').innerText(), store.directory);
   assert.equal(await page.locator('[data-material-row]').count(), 6);
   const tree = page.locator('.material-directory-tree');
-  assert.match(await tree.innerText(), /课程概览/);
-  assert.match(await tree.innerText(), /第一章/);
-  assert.match(await tree.innerText(), /共享资料/);
+  assert.match(await tree.innerText(), /materials/);
   assert.match(await tree.innerText(), /工作区外/);
   assert.match(await tree.innerText(), /尚未下载到本机/);
   assert.ok(!(await tree.innerText()).includes('另一知识库'));
   const row = asset => page.locator(`[data-material-row="${asset.id}"]`);
-  assert.match(await row(own).innerText(), /课程概览.*第一章/s);
+  assert.match(await row(own).innerText(), /materials/s);
   assert.match(await row(missing).innerText(), /文件缺失/);
   assert.match(await row(unbound).innerText(), /尚未下载到本机/);
   await page.getByRole('button', { name: '复制工作区根目录', exact: true }).click();
@@ -55,7 +55,7 @@ try {
   assert.equal(await page.evaluate(() => navigator.clipboard.readText()), store.directory);
   await row(own).getByRole('button', { name: '资料详情与引用', exact: true }).click();
   await page.locator('#modal').waitFor({ state: 'visible' });
-  assert.match(await page.locator('.material-file-path').first().innerText(), /课程讲义-/);
+  assert.equal(await page.locator('.material-file-path').first().innerText(), store.assetLocation(own.id).path);
   await page.getByRole('button', { name: '复制附件完整路径', exact: true }).click();
   await page.waitForFunction(async expected => await navigator.clipboard.readText() === expected, store.assetLocation(own.id).path);
   assert.equal(await page.evaluate(() => navigator.clipboard.readText()), store.assetLocation(own.id).path);
@@ -68,13 +68,17 @@ try {
     await tree.locator('.material-directory').filter({ hasText: name }).first().click();
     await page.locator('.material-directory-selection').waitFor();
   };
-  await filter('共享资料');
-  await page.waitForFunction(() => document.querySelectorAll('[data-material-row]').length === 1);
+  await row(shared).locator('.material-location').click();
+  await page.locator('.material-directory-selection').waitFor();
   assert.equal(await row(shared).count(), 1);
+  for (const selected of await page.locator('[data-material-row]').all()) {
+    const id = await selected.getAttribute('data-material-row');
+    assert.equal(path.dirname(store.assetLocation(id).path), path.dirname(store.assetLocation(shared.id).path));
+  }
   await page.locator('[data-action=material-directory-clear]').click();
   await row(own).waitFor();
   await row(own).locator('.material-location').click();
-  await page.waitForFunction(() => document.querySelectorAll('[data-material-row]').length === 1);
+  await page.locator('.material-directory-selection').waitFor();
   assert.equal(await row(own).count(), 1);
   await page.locator('#domain-filter').selectOption(other.id);
   await row(otherAsset).waitFor();
@@ -89,7 +93,7 @@ try {
   await row(own).waitFor();
   await page.locator('[data-action=material-trash-view]').click();
   await row(trash).waitFor();
-  assert.match(await tree.innerText(), /回收站/);
+  assert.match(await tree.innerText(), /materials/);
   await page.locator('[data-action=material-active]').click();
   await row(own).waitFor();
   for (const width of [1220, 931, 600]) {
@@ -116,7 +120,7 @@ try {
   assert.equal(JSON.stringify(store.db.prepare('SELECT id,json FROM events ORDER BY id').all()), before);
   assert.deepEqual(errors, []);
   fs.writeFileSync(path.join(root, 'report.json'), JSON.stringify({ passed: true, errors, checks: [
-    'actual paths', 'note ancestry', 'shared and recycled directories', 'missing and unbound', 'external binding',
+    'content-addressed paths', 'shared and recycled originals', 'missing and unbound', 'external binding',
     'copy file and folder paths', 'directory filtering', 'library isolation', 'collapse', 'responsive layout', 'no knowledge writes'
   ] }, null, 2));
   console.log('PASS: real local hierarchy, current bindings, missing/unbound/external files, path copy, scoped filtering, unchanged records and responsive screenshots.');

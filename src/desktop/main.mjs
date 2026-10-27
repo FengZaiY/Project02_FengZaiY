@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, safeStorage, shell, Menu, powerMonitor, protocol } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, safeStorage, shell, Menu, powerMonitor, protocol, clipboard } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -9,18 +9,24 @@ import { UpdateManager, assertUpdateIdle } from './updates.mjs';
 import { mediaResponse } from '../core/media.mjs';
 import { importClipboardImage } from './clipboard-import.mjs';
 import { ExitCheck, exitActivity } from './exit-check.mjs';
+import { SecretClipboard } from './secret-clipboard.mjs';
+import { userExportPath } from '../core/material-center.mjs';
 
 protocol.registerSchemesAsPrivileged([{ scheme: 'studyself-media', privileges: { standard: true, secure: true, stream: true } }]);
 
 const base = path.resolve(fileURLToPath(new URL('../../', import.meta.url)));
 const profileArg = process.argv.find(arg => arg.startsWith('--data-dir='));
 const smokeTest = process.argv.includes('--smoke-test');
+// The installed product name changes, but existing workspace/profile identity stays stable.
+app.setPath('userData', path.join(app.getPath('appData'), 'studyself'));
+app.setName('FengZai·Y');
 if (smokeTest) {
   app.disableHardwareAcceleration();
   // Keep smoke-test Chromium state and its single-instance lock away from the user's app.
   if (profileArg) app.setPath('userData', path.join(path.resolve(profileArg.slice('--data-dir='.length)), 'electron-profile'));
 }
 let service, storage, window, updates;
+const secretClipboard = new SecretClipboard(clipboard);
 let activeCalls = 0, installingUpdate = false, allowClose = false;
 if (!app.requestSingleInstanceLock()) app.quit();
 else {
@@ -44,16 +50,28 @@ else {
   });
   await service.agents.resume();
   const entry = path.join(base, 'dist', 'index.html');
-  window = new BrowserWindow({ width: 1480, height: 940, minWidth: 1000, minHeight: 660, backgroundColor: '#f7f8fa', show: !smokeTest,
-    title: 'StudySelf · 个人知识库', autoHideMenuBar: true,
+  // The display name contains a middle dot; Chromium custom-protocol requests require an ASCII User-Agent.
+  app.userAgentFallback = app.userAgentFallback.replaceAll('FengZai·Y', 'FengZaiY');
+  window = new BrowserWindow({ width: 1480, height: 940, minWidth: 800, minHeight: 660, backgroundColor: '#f7f8fa', show: !smokeTest,
+    title: 'FengZai·Y · 个人管理系统', autoHideMenuBar: true,
     webPreferences: { preload: path.join(base, 'src', 'desktop', 'preload.cjs'), contextIsolation: true, nodeIntegration: false,
       sandbox: true, offscreen: smokeTest, backgroundThrottling: !smokeTest } });
   Menu.setApplicationMenu(null);
+  service.passwordVault.onLock = () => { secretClipboard.clear(); if (!window.isDestroyed()) window.webContents.send('studyself:vault-locked'); };
+  for (const event of ['lock-screen', 'suspend']) powerMonitor.on(event, () => service.passwordVault.lock());
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   window.webContents.on('will-navigate', (event, url) => {
     if (url !== new URL(`file:///${entry.replace(/\\/g, '/')}`).href) event.preventDefault();
   });
   window.webContents.session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
+  window.webContents.session.on('will-download', (event, item, contents) => {
+    if (contents !== window.webContents || !item.getURL().startsWith('blob:')) { event.preventDefault(); return; }
+    try { item.setSaveDialogOptions({ defaultPath: userExportPath(service.store, item.getFilename()), title: '导出文件' }); }
+    catch (error) {
+      event.preventDefault();
+      void dialog.showMessageBox(window, { type: 'error', title: '无法导出文件', message: prettyError(error) });
+    }
+  });
   const updateSettingsFile = path.join(app.getPath('userData'), 'update-settings.json');
   let updateSettings = {};
   try { updateSettings = JSON.parse(fs.readFileSync(updateSettingsFile, 'utf8')); } catch {}
@@ -78,7 +96,8 @@ else {
       try { const status = service.transport.status(); sync = { pendingChanges: status.pendingChanges, unconfirmed: status.unconfirmed,
         unfinished: !!status.job && !['complete', 'cancelled'].includes(status.job.state) }; }
       catch (error) { syncError = error.message; }
-      return { sync, syncError, busy: exitActivity(service, activeCalls), dirty: (service.store.local('workspace')?.tabs || []).some(tab => tab.dirty) };
+      return { sync, syncError, busy: exitActivity(service, activeCalls), dirty: (service.store.local('workspace')?.tabs || []).some(tab => tab.dirty)
+        || Object.values(service.store.local('personalDrafts') || {}).some(Boolean) };
     },
     finish: async intent => {
       if (intent === 'storage-restart') check(storage.status().restartRequired, '存储变更已取消，请返回设置检查');
@@ -100,7 +119,11 @@ else {
       check(!allowClose || installingUpdate, '正在退出，请稍候');
       activeCalls++; counted = true;
       let value;
-      if (method === 'exitStatus') value = exitCheck.status(input.id);
+      if (method === 'vaultCopy') {
+        service.passwordVault.requireUnlocked(); check(typeof input.value === 'string' && input.value.length <= 12000, '密码内容无效');
+        secretClipboard.copy(input.value); value = { copied: true, clearAfterSeconds: 30 };
+      }
+      else if (method === 'exitStatus') value = exitCheck.status(input.id);
       else if (method === 'exitCancel') value = exitCheck.cancel(input.id);
       else if (method === 'exitFinish') value = await exitCheck.accept(input);
       else if (method === 'updateStatus') value = updates.status();
@@ -112,7 +135,7 @@ else {
         check(input.rendererReady === true, '请在系统设置中确认并关闭未保存内容后更新');
         assertUpdateIdle(service, storage, activeCalls, !!profileArg);
         const answer = dialog.showMessageBoxSync(window, { type: 'question', title: '重启并更新',
-          message: `安装 StudySelf ${updates.status().latestVersion}？`,
+          message: `安装 FengZai·Y ${updates.status().latestVersion}？`,
           detail: '应用将退出并打开安装程序。未发布的修改保留在本机，不会自动同步。',
           buttons: ['稍后更新', '重启并更新'], defaultId: 0, cancelId: 0 });
         if (answer !== 1) value = updates.status();
@@ -181,7 +204,7 @@ else {
         check(['https:', 'http:'].includes(url.protocol) && !url.username && !url.password, 'Unsupported external link');
         await shell.openExternal(url.href); value = true;
       } else if (method === 'printPdf') {
-        const result = await dialog.showSaveDialog(window, { defaultPath: 'StudySelf.pdf', filters: [{ name: 'PDF', extensions: ['pdf'] }] });
+        const result = await dialog.showSaveDialog(window, { defaultPath: userExportPath(service.store, 'FengZaiY.pdf'), filters: [{ name: 'PDF', extensions: ['pdf'] }] });
         if (!result.canceled) {
           const buffer = await window.webContents.printToPDF({ printBackground: true, pageSize: 'A4' });
           const { writeFile } = await import('node:fs/promises');
@@ -209,7 +232,7 @@ else {
   app.on('window-all-closed', () => app.quit());
   app.on('will-quit', () => { service?.close(); storage?.close(); });
   }).catch(error => {
-    console.error('StudySelf startup failed:', error);
+    console.error('FengZai·Y startup failed:', error);
     app.exit(1);
   });
 }

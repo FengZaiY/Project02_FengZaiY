@@ -4,13 +4,15 @@ import { createErasure, filterErased } from './erasures.mjs';
 import { deletionFiles, scheduleDeletion } from './permanent-files.mjs';
 import { retiredAI } from './retired-ai.mjs';
 import { proposalEvidenceReferences } from './draft-workflow.mjs';
+import { PERSONAL_TYPES, personalReferences } from './personal-schema.mjs';
 
-export const TRASH_TYPES = ['note', 'draft', 'source', 'annotation', 'relation', 'proposal', 'asset', 'library', 'workspace', 'conversation'];
+export const TRASH_TYPES = ['note', 'draft', 'source', 'annotation', 'relation', 'proposal', 'asset', 'library', 'workspace', 'conversation', ...PERSONAL_TYPES.filter(t => !['vaultConfig', 'changeBatch'].includes(t))];
 
 export function references(data) {
   const ids = new Set([...(data.sourceIds || []), ...(data.assetIds || []),
     data.noteId, data.from, data.to, data.parentNoteId, data.folderId, data.parentId].filter(isId));
   for (const id of richReferences(data).refs) ids.add(id);
+  for (const id of personalReferences(data)) ids.add(id);
   if (data.draftOrigin) ids.add(data.draftOrigin.id);
   for (const item of data.items || []) {
     for (const ref of item.draftRefs || []) ids.add(ref.id);
@@ -70,7 +72,13 @@ export function previewTrash(store, { domain = '', legacyOnly = false } = {}) {
       if (library) add(library, null, '未保存编辑');
     } catch { uncertain = true; }
   }
+  for (const draft of Object.values(store.local('personalDrafts') || {}).filter(Boolean)) {
+    if (candidates.has(draft.id)) reasons.set(draft.id, '存在未提交业务表单');
+    for (const id of personalReferences(draft.data || {})) add(id, null, '未提交业务表单');
+  }
   for (const record of targets) {
+    const accountId = record.type === 'loginAccount' ? record.id : record.type === 'vaultSecret' ? record.data.accountId : null;
+    if (accountId && store.local(`vaultDraft:${accountId}`)) reasons.set(record.id, '存在未提交密码草稿，请解锁后处理');
     if (record.conflict) reasons.set(record.id, '存在并发版本，请先处理冲突');
     else if (store.activeAssetReads?.get(record.id)) reasons.set(record.id, '原文件正在读取，请关闭预览后再试');
     else if (uncertain) reasons.set(record.id, '部分内容引用无法核验，请先处理内容格式');
@@ -123,6 +131,11 @@ export function prepareRemoteErasure(store, receipts, incoming = []) {
   }
   for (const tab of store.local('workspace')?.tabs || []) if (tab.dirty) {
     check(!removed.has(tab.recordId) && ![...references(tab.draft || {})].some(id => removed.has(id)), '永久删除涉及未保存编辑，请先处理工作标签', 'UNSAVED');
+  }
+  for (const draft of Object.values(store.local('personalDrafts') || {}).filter(Boolean)) check(!removed.has(draft.id) && !personalReferences(draft.data || {}).some(id => removed.has(id)), '永久删除涉及未提交业务表单', 'UNSAVED');
+  for (const id of removed) {
+    const record = store.get(id), accountId = record?.type === 'loginAccount' ? id : record?.type === 'vaultSecret' ? record.data.accountId : null;
+    if (accountId) check(!store.local(`vaultDraft:${accountId}`), '永久删除涉及未提交密码草稿，请解锁后处理', 'UNSAVED');
   }
   check(!ids.some(id => store.activeAssetReads?.get(id)), '永久删除原件正在读取，请先关闭预览', 'BUSY');
   return { ids, files: deletionFiles(store, ids) };

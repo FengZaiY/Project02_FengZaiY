@@ -166,8 +166,8 @@ try {
   assert.match(store.get(note.id).data.content, /校验期间的新输入/);
   assert.match(await body.innerText(), /校验期间的新输入第一段文字保持不变[\s\S]*课程讲义.txt[\s\S]*第二段用于插入附件/);
 
-  // An unavailable, conflicted or reassigned record must not be inserted.
-  for (const invalid of [{ deleted: true }, { conflict: true }, { data: { ...text.data, domain: 'another-library' } }]) {
+  // Shared materials may be cross-library; unavailable/conflicted records must not be inserted.
+  for (const invalid of [{ deleted: true }, { conflict: true }]) {
     const before = await html();
     await page.locator('#toast').evaluate(el => { el.textContent = ''; });
     await page.route('**/api', async route => {

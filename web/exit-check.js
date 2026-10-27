@@ -10,7 +10,7 @@ export function installExitCheck({ bridge, api, snapshot, save, persist, openMod
     }
     const request = { id, saving: false, error: '', backend: null };
     current = request;
-    const dialog = openModal(restarting ? '重启并应用存储变更' : '退出 StudySelf', `<div id="exit-check-status" aria-live="polite">正在检查保存状态…</div><p id="exit-check-error" class="notice danger" role="alert" hidden></p>`,
+    const dialog = openModal(restarting ? '重启并应用存储变更' : '退出 FengZai·Y', `<div id="exit-check-status" aria-live="polite">正在检查保存状态…</div><p id="exit-check-error" class="notice danger" role="alert" hidden></p>`,
       '<button class="secondary" id="exit-continue">继续使用</button><button class="secondary" id="exit-sync">查看同步</button><button class="primary" id="exit-confirm" disabled>正在检查…</button>');
     const find = selector => dialog.querySelector(selector);
     const refresh = () => {
@@ -21,7 +21,7 @@ export function installExitCheck({ bridge, api, snapshot, save, persist, openMod
           status.importing && '资料仍在导入，请稍后重试', status.composing && '输入法仍在编辑，请完成输入后重试',
           pending.some(note => note.state === 'conflict') && '存在版本冲突，请返回对应笔记处理', request.backend?.busy].filter(Boolean);
         const sync = request.backend?.sync;
-        const markup = `<h3>本地保存</h3><p>${pending.length ? `${pending.length} 篇笔记或草稿尚未完成保存` : status.notes.length ? `${status.notes.length} 个工作标签均已保存` : '没有待保存的笔记或草稿'}</p>
+        const markup = `<h3>本地保存</h3><p>${pending.length ? `${pending.length} 项内容尚未完成保存` : status.notes.length ? `${status.notes.length} 项内容均已保存` : '没有待保存的内容'}</p>
           ${pending.length ? `<ul>${pending.map(note => `<li class="storage-path">${esc(note.title)}：${({ queued: '待保存', saving: '保存中', error: '保存失败', conflict: '待处理冲突' })[note.state] || '待保存'}</li>`).join('')}</ul>` : ''}
           ${blockers.map(reason => `<p class="notice amber">${esc(reason)}</p>`).join('')}
           <h3>多电脑同步</h3><p>${!request.backend ? '正在检查…' : sync ? `${sync.pendingChanges} 条已保存修改未发布 · ${sync.unconfirmed} 次发布尚未人工确认上传${sync.unfinished ? ' · 发布批次尚未完成，进度已保留' : ''}` : '同步状态暂时无法读取'}</p>

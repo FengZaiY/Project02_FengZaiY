@@ -31,7 +31,7 @@ try {
     return record;
   };
   const first = await create('我的研究笔记'), second = await create('工作资料');
-  await page.locator('.sidebar [data-action="new"]').click();
+  await page.locator('.topbar [data-action="new"]').click();
   await page.locator('#note-title').fill('第一篇笔记');
   await page.locator('.tiptap').fill('自行搭建的知识结构');
   await page.locator('[data-action="save"]').click();

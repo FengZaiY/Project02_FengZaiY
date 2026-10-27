@@ -1,6 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { check, inside, isId, isHash, noSymlink, sha } from './util.mjs';
+import { centralAssetPath } from './material-center.mjs';
+import { MATERIAL_SCOPE } from './personal-schema.mjs';
 
 const markerName = '.studyself-library.json';
 const reserved = new Set(['objects', 'assets', 'incoming', 'opened-files', 'electron-profile', 'knowledge.sqlite', 'device-vault.key', 'version-repositories', 'version-staging', 'received-objects']);
@@ -74,6 +76,7 @@ export class LibraryDirectories {
     });
   }
   assetPath(domain, hash) {
+    if (this.store.personalSystem || domain === MATERIAL_SCOPE) return centralAssetPath(this.store, hash);
     check(typeof domain === 'string' && domain && domain !== '__all_libraries__' && isHash(hash), '附件知识库或内容标识无效');
     const library = this.store.libraries().find(item => item.data.domain === domain) || {
       id: legacyLibraryId(domain), type: 'library', data: { title: domain, domain }

@@ -2,14 +2,16 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { richReferences } from './rich-content.mjs';
 import { canonical, check, isId, outside } from './util.mjs';
+import { personalReferences, MATERIAL_SCOPE } from './personal-schema.mjs';
 
 const referenceCache = new WeakMap();
 const nonReferencingTypes = ['asset', 'library', 'folder', 'workspace', 'model', 'provider', 'usage', 'agentPreferences'];
 export function assetReferenceIndex(store) {
   const drafts = (store.local('workspace')?.tabs || []).filter(tab => tab.dirty && tab.draft);
+  const businessDrafts = Object.values(store.local('personalDrafts') || {}).filter(Boolean);
   // Asset metadata batches do not change references; do not reparse all notes for each item.
   const latest = store.db.prepare(`SELECT id FROM events WHERE type NOT IN (${nonReferencingTypes.map(() => '?').join(',')}) ORDER BY rowid DESC LIMIT 1`).get(...nonReferencingTypes);
-  const stamp = canonical([latest?.id || null, drafts]);
+  const stamp = canonical([latest?.id || null, drafts, businessDrafts]);
   const cached = referenceCache.get(store);
   if (cached?.stamp === stamp) return cached;
   const refs = new Map();
@@ -17,6 +19,7 @@ export function assetReferenceIndex(store) {
   const add = (record, bodies, pending = false) => {
     const ids = new Set();
     for (const data of bodies) {
+      for (const id of personalReferences(data)) ids.add(id);
       for (const id of [...(data.assetIds || []), ...(data.sourceIds || []), data.from, data.to, data.noteId]) {
         if (isId(id)) ids.add(id);
       }
@@ -35,6 +38,7 @@ export function assetReferenceIndex(store) {
     add(record, bodies);
   }
   for (const tab of drafts) add({ id: tab.recordId, data: tab.draft, type: tab.recordType || 'note' }, [tab.draft], true);
+  for (const draft of businessDrafts) add({ id: draft.id, data: draft.data, type: draft.type }, [draft.data], true);
   const result = { stamp, refs, uncertain };
   referenceCache.set(store, result);
   return result;
@@ -43,10 +47,10 @@ export function assetReferenceIndex(store) {
 // Local writes protect known references; incoming immutable events still merge normally.
 export function validateAssetChange(store, id, data, deleted) {
   const current = store.get(id);
-  if (!current || (!deleted && current.versions.every(version => version.data.domain === data.domain))) return;
+  if (!current || ((!deleted || current.deleted) && current.versions.every(version => version.data.domain === data.domain))) return;
   const index = assetReferenceIndex(store);
   check(!index.uncertain, '部分正文引用暂时无法核验，请先处理内容格式，不能移动或回收资料', 'ASSET_REFERENCE_UNKNOWN');
-  const references = index.refs.get(id) || [];
+  const references = (index.refs.get(id) || []).filter(ref => !store.revertingIds?.has(ref.id));
   check(!references.length, `此资料仍有 ${references.length} 处引用（含草稿、方案或回收站），请先处理引用`, 'ASSET_REFERENCED');
 }
 
@@ -76,7 +80,8 @@ export class AssetManagement {
       else if (parts[1] === '共享资料') { kind = 'shared'; label = '共享资料'; }
       else if (parts.length > 3) { kind = 'note'; label = '笔记资料'; }
       else { kind = 'library'; label = '知识库资料'; }
-    } else if (parts.length === 3 && parts[1] === 'attachments') { kind = 'import'; label = '导入存放位置'; }
+    } else if (parts[0] === '.fengzai-y' && parts[1] === 'materials') { kind = 'central'; label = '集中原件'; }
+    else if (parts.length === 3 && parts[1] === 'attachments') { kind = 'import'; label = '导入存放位置'; }
     else if (parts[0] === 'received-objects') { kind = 'received'; label = '接收存放位置'; }
     try {
       const stat = fs.statSync(file);
@@ -100,11 +105,11 @@ export class AssetManagement {
         duplicateCount: groups.get(groupKey(record)) || 1 };
     });
   }
-  catalog({ domain, query = '', kind = '', availability = '', usage = '', tag = '', sort = 'updated', trash = false, offset = 0, limit = 100, directory = '' } = {}) {
+  catalog({ domain, collectionId, query = '', kind = '', availability = '', usage = '', tag = '', sort = 'updated', trash = false, offset = 0, limit = 100, directory = '' } = {}) {
     check(typeof query === 'string' && query.length <= 1000 && typeof tag === 'string', '筛选条件无效');
     check(typeof directory === 'string' && directory.length <= 32768, '目录筛选无效');
     check(Number.isSafeInteger(offset) && offset >= 0 && Number.isSafeInteger(limit) && limit > 0 && limit <= 200, '分页范围无效');
-    const scoped = this.rows(trash === true).filter(row => !domain || row.versions.some(version => version.data.domain === domain));
+    const scoped = this.rows(trash === true).filter(row => (!domain || row.versions.some(version => version.data.domain === domain || version.data.libraryDomains?.includes(domain))) && (!collectionId || row.versions.some(v => v.data.collectionIds?.includes(collectionId))));
     const tags = [...new Set(scoped.flatMap(row => row.data.tags))].sort((a, b) => a.localeCompare(b, 'zh-CN'));
     const term = query.trim().toLocaleLowerCase();
     const filtered = scoped.filter(row => (!term || row.versions.some(v => [v.data.title, v.data.filename, ...v.data.tags].join('\n').toLocaleLowerCase().includes(term)))
@@ -150,7 +155,8 @@ export class AssetManagement {
   }
   updateRaw({ id, parents, changes }) {
     const record = this.current(id, parents);
-    check(changes && Object.keys(changes).every(key => ['title', 'tags', 'domain', 'sensitive'].includes(key)), '不允许修改原文件身份或其他字段');
+    check(changes && Object.keys(changes).every(key => ['title', 'tags', 'domain', 'sensitive', 'collectionIds'].includes(key)), '不允许修改原文件身份或其他字段');
+    for (const id of changes.collectionIds || []) { const collection = this.store.get(id); check(collection?.type === 'materialCollection' && !collection.deleted && !collection.conflict, '资料集合不可用'); }
     const data = { ...record.data, ...changes };
     check(typeof data.title === 'string' && data.title.trim().length > 0 && data.title.length <= 500, '资料名称须为 1 至 500 个字符');
     data.title = data.title.trim();
@@ -158,7 +164,7 @@ export class AssetManagement {
     data.tags = [...new Set(data.tags.map(tag => tag.trim()))];
     check(typeof data.sensitive === 'boolean', '敏感标记无效');
     const library = this.store.libraries().find(item => item.data.domain === data.domain);
-    check(library && !library.deleted && !library.conflict, '请选择可用知识库');
+    check(data.domain === MATERIAL_SCOPE || library && !library.deleted && !library.conflict, '请选择可用知识库');
     if (data.domain !== record.data.domain) data.folderId = null;
     if (canonical(data) === canonical(record.data)) return record;
     this.store.writeRaw({ id, type: 'asset', data, parents });

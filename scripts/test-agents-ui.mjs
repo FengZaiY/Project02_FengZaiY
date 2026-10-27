@@ -132,6 +132,7 @@ try {
     items: ['概念', '案例'].map(title => ({ data: { title, domain: library.id, content: `${title}的待确认正文`, sourceIds: [source.id] } })) } });
   assert.ok(!proposed.isError, proposed.content[0].text);
   const proposal = proposed.structuredContent.value;
+  await page.locator('[data-nav="notes"]').click();
   await page.locator('[data-nav="proposals"]').click();
   await page.locator(`[data-record="${proposal.id}"]`).click();
   await page.locator('.proposal-summary', { hasText: '第二节课程截图' }).waitFor();

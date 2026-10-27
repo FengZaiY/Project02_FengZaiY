@@ -9,6 +9,10 @@
 
 ## 设计与验收
 
+- [本机全功能与 MCP / Skill 检查](verification-local-audit-2026-10-27.md)：排除多电脑同步的覆盖、缺陷修复、200 项核心与 33 个界面/桌面脚本结果。
+
+- [FengZai·Y 升级验证](verification-fengzai-2026-10-27.md)：五板块、密码库、财务、迁移、format 7 和桌面验证边界。
+
 - [架构说明](architecture.md)：修改历史、当前内容同步、原件断点与权限；退役格式单独标注。
 - [在线发布说明](online-updates.md)：独立发布仓库、更新来源与安装验收。
 - [验证记录](verification.md)：带日期的实际测试结果。

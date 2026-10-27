@@ -1,9 +1,9 @@
 {
   "name": "studyself",
-  "version": "0.1.11",
+  "version": "0.1.12",
   "private": true,
   "license": "UNLICENSED",
-  "description": "Local-first knowledge workspace with reviewed folder-based synchronization",
+  "description": "FengZai·Y personal management system with local encrypted synchronization",
   "type": "module",
   "main": "src/desktop/main.mjs",
   "studyselfUpdateSource": {
@@ -19,7 +19,10 @@
     "dev": "node src/server.mjs",
     "check:project": "node scripts/check-project.mjs",
     "test": "node --test tests/*.test.mjs",
+    "test:personal": "node scripts/test-personal-ui.mjs",
+    "test:personal-desktop": "node scripts/test-personal-desktop.mjs",
     "test:ui": "node scripts/test-ui.mjs",
+    "test:startup": "node scripts/test-startup-ui.mjs",
     "test:devices": "node scripts/test-devices-ui.mjs",
     "test:libraries": "node scripts/test-libraries-ui.mjs",
     "test:assets": "node scripts/test-assets-ui.mjs",
@@ -84,7 +87,7 @@
   },
   "build": {
     "appId": "cn.studyself.desktop",
-    "productName": "StudySelf",
+    "productName": "FengZai·Y",
     "directories": {
       "output": "release"
     },
@@ -105,7 +108,7 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "deleteAppDataOnUninstall": false,
-      "artifactName": "StudySelf-${version}-Setup.${ext}"
+      "artifactName": "FengZaiY-${version}-Setup.${ext}"
     }
   },
   "dependencies": {

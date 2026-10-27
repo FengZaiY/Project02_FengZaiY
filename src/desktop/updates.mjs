@@ -96,4 +96,5 @@ export function assertUpdateIdle(service, storage, activeCalls = 1, customStartu
     '同步、导入或其他操作仍在进行，请稍后更新');
   requireState(![...(service.store.activeAssetReads?.values() || [])].some(count => count > 0), '原文件仍在读取，请关闭预览后更新');
   requireState(!(service.store.local('workspace')?.tabs || []).some(tab => tab.dirty), '请先保存或关闭未保存的笔记标签');
+  requireState(!Object.values(service.store.local('personalDrafts') || {}).some(Boolean), '请先保存或放弃未提交的业务表单');
 }

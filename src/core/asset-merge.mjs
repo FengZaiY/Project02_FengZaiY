@@ -6,8 +6,9 @@ import { parseNoteLink, validateBlock, encodeBlock } from './rich-schema.mjs';
 import { assetReferenceIndex } from './asset-management.mjs';
 import { canonical, check, isId, sha, hashFile, noSymlink } from './util.mjs';
 import { hasNoteChildren } from './note-hierarchy.mjs';
+import { PUBLIC_PERSONAL_TYPES } from './personal-schema.mjs';
 
-const supported = new Set(['note', 'draft', 'source', 'annotation', 'relation', 'proposal']);
+const supported = new Set(['note', 'draft', 'source', 'annotation', 'relation', 'proposal', ...PUBLIC_PERSONAL_TYPES]);
 const escapeAttribute = value => value.replaceAll('&', '&amp;').replaceAll('"', '&quot;').replaceAll('<', '&lt;');
 const linkValue = (value, replacements) => {
   const link = parseNoteLink(value);
@@ -78,7 +79,7 @@ export function replaceAssetReferences(data, replacements) {
   return result;
 }
 const item = record => ({ id: record.id, title: record.data.title, filename: record.data.filename,
-  tags: record.data.tags, sensitive: record.data.sensitive, parents: record.heads });
+  tags: record.data.tags, sensitive: record.data.sensitive, collectionIds: record.data.collectionIds || [], libraryDomains: record.data.libraryDomains || [], parents: record.heads });
 
 export function previewAssetMerge(store, { ids, targetId } = {}) {
   check(Array.isArray(ids) && ids.length >= 2 && ids.length <= 100 && ids.every(isId)
@@ -90,6 +91,8 @@ export function previewAssetMerge(store, { ids, targetId } = {}) {
   const replacements = new Map(ids.filter(id => id !== targetId).map(id => [id, targetId]));
   const index = assetReferenceIndex(store), blocked = [], changes = [];
   const tags = [...new Set(records.flatMap(record => record.data.tags))];
+  const collectionIds = [...new Set(records.flatMap(record => record.data.collectionIds || []))];
+  const libraryDomains = [...new Set(records.flatMap(record => record.data.libraryDomains || []))];
   const sensitive = records.some(record => record.data.sensitive);
   const local = store.assetLocation(targetId);
   try { check(local && fs.statSync(local.path).size === target.data.size, 'missing'); }
@@ -111,7 +114,7 @@ export function previewAssetMerge(store, { ids, targetId } = {}) {
     if (scanned.has(ref.id)) continue;
     scanned.add(ref.id);
     const record = store.get(ref.id);
-    if (record.conflict || record.data.domain !== target.data.domain || !supported.has(record.type)) {
+    if (record.conflict || !PUBLIC_PERSONAL_TYPES.includes(record.type) && record.data.domain !== target.data.domain || !supported.has(record.type)) {
       blocked.push(`“${ref.title}”存在冲突、跨库引用或不支持自动调整的内容`); continue;
     }
     if (record.type === 'proposal' && record.data.items.some(i => i.data.domain !== target.data.domain)) {
@@ -126,7 +129,7 @@ export function previewAssetMerge(store, { ids, targetId } = {}) {
       changes.push({ id: record.id, type: record.type, title: record.data.title, deleted: record.deleted, parents: record.heads, data });
     } catch (error) { blocked.push(`“${ref.title}”：${error.message}`); }
   }
-  const snapshot = { assets: records.map(item), targetId, changes, references: [...references.values()], tags, sensitive,
+  const snapshot = { assets: records.map(item), targetId, changes, references: [...references.values()], tags, collectionIds, libraryDomains, sensitive,
     pinned: records.some(record => store.assetLocation(record.id)?.pinned === 1), blocked: [...new Set(blocked)] };
   return { ...snapshot, domain: target.data.domain, token: sha(canonical(snapshot)) };
 }
@@ -139,12 +142,12 @@ export async function mergeAssets(store, { ids, targetId, token, confirmed } = {
   const local = store.assetLocation(targetId), targetBefore = store.get(targetId);
   noSymlink(local.path);
   check(await hashFile(local.path) === targetBefore.data.sha256, '保留项原件校验失败，请重新取得原件');
-  return store.transaction(() => {
+  return store.change('合并重复资料', '用户', () => {
     const preview = previewAssetMerge(store, { ids, targetId });
     check(preview.token === token, '资料或引用已变化，请重新预览后确认', 'CONFLICT');
     check(!preview.blocked.length, preview.blocked.join('；'));
     check(store.assetLocation(targetId)?.path === local.path, '原件位置已变化，请重新预览', 'CONFLICT');
-    const target = store.get(targetId), data = { ...target.data, tags: preview.tags, sensitive: preview.sensitive };
+    const target = store.get(targetId), data = { ...target.data, tags: preview.tags, collectionIds: preview.collectionIds, libraryDomains: preview.libraryDomains, sensitive: preview.sensitive };
     if (canonical(data) !== canonical(target.data)) store.writeRaw({ id: targetId, type: 'asset', data, parents: target.heads });
     for (const change of preview.changes) store.writeRaw(change);
     for (const id of ids.filter(id => id !== targetId)) {

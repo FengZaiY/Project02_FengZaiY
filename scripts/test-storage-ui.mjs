@@ -93,6 +93,7 @@ try {
   await page.locator('[data-mode="migrate"]').click();
   await page.locator('#toast', { hasText: '未保存的笔记' }).waitFor();
   assert.equal(app.service.storage.status().pending, null);
+  await page.locator('[data-nav=notes]').click();
   await page.locator('.work-tab').click();
   await page.locator('[data-action="save"]').click();
   await page.locator('#save-state', { hasText: '已本地保存' }).waitFor();

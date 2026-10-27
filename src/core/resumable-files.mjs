@@ -3,6 +3,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { CHUNK_BYTES, assetAAD, chunkName, localAsset, validateAssets } from './sync-objects.mjs';
 import { check, hashFile, noSymlink, sha, now } from './util.mjs';
+import { centralAssetPath } from './material-center.mjs';
 
 export function diskSpace(directory) {
   let target = path.resolve(directory);
@@ -60,7 +61,8 @@ export async function receiveResumable(channel, store, asset, options = {}) {
   if (existing) { store.local(key, null); return existing; }
   const directory = path.join(store.directory, 'received-objects'); noSymlink(directory);
   fs.mkdirSync(directory, { recursive: true });
-  const target = path.join(directory, asset.hash), temp = `${target}.v3.partial`;
+  const staging = path.join(directory, asset.hash), target = store.personalSystem ? centralAssetPath(store, asset.hash) : staging;
+  const temp = `${staging}.v3.partial`;
   noSymlink(target); noSymlink(temp);
   if (fs.existsSync(target)) {
     check(fs.statSync(target).size === asset.size && await hashFile(target) === asset.hash, '本地同名原件损坏，请先移开损坏副本');
@@ -103,7 +105,13 @@ export async function receiveResumable(channel, store, asset, options = {}) {
     }
     await handle.close();
     check(fs.statSync(temp).size === asset.size && await hashFile(temp) === asset.hash, '原文件整体校验失败');
-    await fs.promises.rename(temp, target); store.local(key, null);
+    if (store.personalSystem) {
+      noSymlink(target);
+      try { await fs.promises.link(temp, target); } catch (error) { if (error.code !== 'EEXIST') throw error; }
+      check(fs.statSync(target).size === asset.size && await hashFile(target) === asset.hash, '集中目录原件已变化，未覆盖');
+      await fs.promises.unlink(temp);
+    } else await fs.promises.rename(temp, target);
+    store.local(key, null);
     return target;
   } finally { await handle.close().catch(() => {}); }
 }

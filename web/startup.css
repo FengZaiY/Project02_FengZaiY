@@ -1,0 +1,5 @@
+#app.starting{display:flex;align-items:center;justify-content:center;overflow:auto;padding:24px;box-sizing:border-box;min-height:100vh}
+.startup-panel{width:min(100%,560px);margin:auto;padding:32px;background:#fff;border:1px solid var(--line,#dce5e0);border-radius:12px;box-sizing:border-box;overflow-wrap:anywhere}
+.startup-panel>small{color:#547464}.startup-panel h1{margin:14px 0;font-size:24px}.startup-panel p{line-height:1.8;margin:12px 0;color:#51635b}
+.startup-panel details{margin:20px 0}.startup-panel pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f5f7f6;padding:12px;font:12px/1.7 monospace}.startup-panel button{margin-top:8px}
+@media(max-width:600px){#app.starting{padding:16px}.startup-panel{padding:22px}.startup-panel h1{font-size:21px}}

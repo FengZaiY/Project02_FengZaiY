@@ -33,7 +33,7 @@ function inspectDatabase(directory, environment) {
   directoryPath(directory);
   check(!fs.existsSync(path.join(directory, incompleteName)), '该目录包含未完成迁移，不能作为工作区打开');
   const file = path.join(directory, databaseName);
-  check(fs.existsSync(file), '该目录没有 StudySelf 工作区，请选择包含 knowledge.sqlite 的文件夹');
+  check(fs.existsSync(file), '该目录没有 FengZai·Y 工作区，请选择包含 knowledge.sqlite 的文件夹');
   noSymlink(file);
   noSymlink(path.join(directory, 'device-vault.key'));
   check((fs.existsSync(path.join(directory, 'device-vault.key')) ? 'preview' : 'desktop') === environment,
@@ -42,7 +42,7 @@ function inspectDatabase(directory, environment) {
   try {
     check(Object.values(db.prepare('PRAGMA quick_check').get())[0] === 'ok', '工作区数据库校验失败');
     for (const table of ['meta', 'events', 'heads', 'pending', 'rejected', 'packets', 'receipts', 'assets', 'local_config']) {
-      check(db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(table), '不是完整的 StudySelf 工作区');
+      check(db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(table), '不是完整的 FengZai·Y 工作区');
     }
     const deviceId = db.prepare("SELECT value FROM meta WHERE key='deviceId'").get()?.value;
     check(deviceId, '工作区缺少设备标识');
@@ -102,6 +102,9 @@ async function migrate(source, target) {
       const links = localValue(copied, 'localFileLinks');
       if (links) copied.prepare('UPDATE local_config SET value=? WHERE key=?').run(JSON.stringify(Object.fromEntries(
         Object.entries(links).map(([id, file]) => [id, remap(file)]))), 'localFileLinks');
+      const materialMigration = localValue(copied, 'materialMigration');
+      if (materialMigration) copied.prepare('UPDATE local_config SET value=? WHERE key=?').run(JSON.stringify({ ...materialMigration,
+        rows: materialMigration.rows.map(row => ({ ...row, source: row.source ? remap(row.source) : null, target: remap(row.target) })) }), 'materialMigration');
       check(Object.values(copied.prepare('PRAGMA integrity_check').get())[0] === 'ok', '迁移后数据库校验失败');
       copied.exec('COMMIT; PRAGMA wal_checkpoint(TRUNCATE)');
     } finally { copied.close(); }
@@ -142,7 +145,7 @@ export class StorageLocation {
       return { mode, directory: target, counts: { ...snapshot.counts,
         library: snapshot.libraries.filter(item => !item.deleted || item.contentCount > 0).length } };
     }
-    check(fs.existsSync(path.join(target, databaseName)), '该目录没有 StudySelf 工作区，请选择包含 knowledge.sqlite 的文件夹');
+    check(fs.existsSync(path.join(target, databaseName)), '该目录没有 FengZai·Y 工作区，请选择包含 knowledge.sqlite 的文件夹');
     const release = workspaceLock(target);
     try { return { mode, ...inspectDatabase(target, this.environment) }; }
     finally { release(); }

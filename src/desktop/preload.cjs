@@ -1,5 +1,9 @@
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
 contextBridge.exposeInMainWorld('desktop', {
+  onVaultLocked: callback => {
+    const listener = () => callback(); ipcRenderer.on('studyself:vault-locked', listener);
+    return () => ipcRenderer.removeListener('studyself:vault-locked', listener);
+  },
   callResult: (method, input = {}) => ipcRenderer.invoke('studyself:call', { method, input }),
   onExitRequest: callback => {
     const listener = (_event, request) => callback(request);

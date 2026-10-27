@@ -13,18 +13,22 @@ const root = path.resolve('artifacts/desktop');
 fs.mkdirSync(root, { recursive: true });
 const profile = fs.mkdtempSync(path.join(root, 'profile-'));
 const packaged = process.argv.includes('--packaged');
+const productName = JSON.parse(fs.readFileSync(path.resolve('package.json'), 'utf8')).build.productName;
 const migratedProfile = fs.mkdtempSync(path.join(root, 'migrated-'));
 let migrationNoteId, migrationPairingKey;
 const application = await electron.launch({
-  executablePath: packaged ? path.resolve('release/win-unpacked/StudySelf.exe') : electronPath,
+  executablePath: packaged ? path.resolve('release/win-unpacked', `${productName}.exe`) : electronPath,
   args: [...(packaged ? [] : [path.resolve('.')]), '--smoke-test', `--data-dir=${profile}`],
   timeout: 40000
 });
 try {
   const page = await application.firstWindow();
   const errors = [];
+  page.on('requestfailed', request => { if (request.url().startsWith('studyself-media:')) console.error('Native media request failed:', request.failure()); });
   page.on('pageerror', error => errors.push(error.message));
   await page.waitForFunction(() => !!window.desktop && !!document.querySelector('[data-nav="notes"]'));
+  assert.match(await page.evaluate(() => navigator.userAgent), /FengZaiY\//);
+  assert.doesNotMatch(await page.evaluate(() => navigator.userAgent), /[^\x20-\x7e]/);
   if (!packaged) {
     const update = await page.evaluate(() => window.desktop.call('updateStatus'));
     assert.equal(update.phase, 'development');
@@ -124,7 +128,17 @@ try {
     await window.desktop.call('save', { id: note.id, type: 'note', parents: note.heads, data: { ...note.data, format: 'html', content: html } });
   }, { asset, note: data.note });
   await page.reload(); await page.locator('.tiptap .katex').waitFor();
-  await page.waitForFunction(() => document.querySelector('.tiptap img')?.naturalWidth === 240);
+  await page.waitForFunction(() => document.querySelector('.tiptap img')?.naturalWidth === 240).catch(async error => {
+    console.error('Native image diagnostic:', await page.evaluate(async id => {
+      const img = document.querySelector('.tiptap img');
+      const detail = await window.desktop.call('assetDetail', { id });
+      let preview;
+      try { const data = await window.desktop.call('assetContent', { id }); preview = { mime: data.mime, bytes: data.data?.length }; } catch (e) { preview = e.message; }
+      return { src: img?.src, width: img?.naturalWidth, detail, preview };
+    }, asset.id));
+    console.error('Native media response:', await application.evaluate(async ({ net }, id) => { const response = await net.fetch(`studyself-media://asset/${id}`); return { status: response.status, bytes: (await response.arrayBuffer()).byteLength }; }, asset.id));
+    throw error;
+  });
   await page.locator('#file-input').setInputFiles(imagePath);
   await page.locator('.tiptap').evaluate(element => {
     const transfer = new DataTransfer();
@@ -242,7 +256,7 @@ try {
   console.log(`PASS: ${packaged ? 'packaged' : 'development'} Electron launch, SQLite, secure IPC, Windows encryption, rich editor, native media and confirmed local-file binding.`);
 } finally { await application.close(); }
 
-const restarted = await electron.launch({ executablePath: packaged ? path.resolve('release/win-unpacked/StudySelf.exe') : electronPath,
+const restarted = await electron.launch({ executablePath: packaged ? path.resolve('release/win-unpacked', `${productName}.exe`) : electronPath,
   args: [...(packaged ? [] : [path.resolve('.')]), '--smoke-test', `--data-dir=${profile}`], timeout: 40000 });
 try {
   const page = await restarted.firstWindow();

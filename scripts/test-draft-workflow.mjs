@@ -56,7 +56,7 @@ try {
     if (width === 600) {
       await page.locator('[data-action="knowledge-browse"]').click();
       assert.equal(await page.locator('.record-list').isVisible(), true);
-      assert.equal(await page.locator('[data-nav=drafts]').getAttribute('class'), 'nav-item active');
+      assert.equal(await page.locator('[data-nav=drafts]').evaluate(button => button.classList.contains('active')), true);
       await page.locator('[data-action="knowledge-browse"]').click();
       await sameEditor();
     }
@@ -178,7 +178,7 @@ try {
   assert.equal(store.list({ type: 'note' }).length, noteCount, 'stale dialog cannot archive');
   await page.locator('#modal [data-modal-close]').click();
   await page.locator('#domain-filter').selectOption('');
-  await page.locator('.new-note').click();
+  await page.locator('.top-actions [data-action=new]').click();
   await page.locator('#new-record-form select').selectOption(library.data.domain);
   await page.locator('#new-record-form button[type=submit]').click();
   await page.waitForFunction(() => document.querySelector('#note-title')?.value === '未命名草稿');

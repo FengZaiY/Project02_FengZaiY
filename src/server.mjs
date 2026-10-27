@@ -96,7 +96,7 @@ export async function createServer({ directory = path.join(project, '.local', 'p
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const app = await createServer({ port: Number(process.env.PORT || 4317), directory: process.env.STUDYSELF_DATA || undefined });
-  console.log(`StudySelf preview: ${app.url}`);
+  console.log(`FengZai·Y preview: ${app.url}`);
   console.log(`Local data: ${app.service.store.directory}`);
   const stop = async () => { await app.close(); process.exit(0); };
   process.on('SIGTERM', stop); process.on('SIGINT', stop);

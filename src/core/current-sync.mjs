@@ -12,12 +12,14 @@ import { prepareRemoteErasure } from './trash.mjs';
 import { scheduleDeletion, runDeletionFiles } from './permanent-files.mjs';
 import { retirementReceipts, replacementWorkspaces } from './retired-ai.mjs';
 import { sameRevision } from './retired-presentation.mjs';
+import { PERSONAL_TYPES, MATERIAL_SCOPE } from './personal-schema.mjs';
 import { canonical, check, hashFile, isHash, isId, noSymlink, now, outside, sha, uuid } from './util.mjs';
 
 const PART_BYTES = 2 * 1024 * 1024;
 const DEFAULT_BATCH = 256 * 1024 * 1024;
 const MIN_BATCH = 4 * 1024 * 1024 + 36;
 const MAX_MANIFEST = 32 * 1024 * 1024;
+const requiresPersonalFormat = event => PERSONAL_TYPES.includes(event.type) || event.type === 'asset' && (event.data?.centralized || event.data?.domain === MATERIAL_SCOPE || event.data?.collectionIds);
 const tick = () => new Promise(resolve => setImmediate(resolve));
 const manifestDigest = manifest => sha(canonical({ parts: manifest.parts, control: manifest.control, assets: manifest.assets,
   ...(manifest.format >= 4 ? { erasures: manifest.erasures } : {}) }));
@@ -114,6 +116,7 @@ export class CurrentSync {
   }
   guardEditing() {
     check(!(this.store.local('workspace')?.tabs || []).some(tab => tab.dirty), '请先保存未保存的笔记标签', 'UNSAVED');
+    check(!Object.values(this.store.local('personalDrafts') || {}).some(Boolean), '请先保存或放弃未提交的业务表单', 'UNSAVED');
   }
   guardParticipation() {
     const status = this.devices(), local = status.devices.find(device => device.local);
@@ -188,7 +191,7 @@ export class CurrentSync {
         descriptor.chunks.forEach((chunk, index) => objects.push({ kind: 'asset', ...chunk, assetIndex, index }));
       }
       const erasures = this.store.erasures();
-      const format = events.some(event => event.retiredPresentation) ? 6 : this.control().management?.length ? 5 : erasures.length ? 4 : 3;
+      const format = events.some(requiresPersonalFormat) || erasures.some(requiresPersonalFormat) ? 7 : events.some(event => event.retiredPresentation) ? 6 : this.control().management?.length ? 5 : erasures.length ? 4 : 3;
       const manifest = { format, ...(format >= 4 ? { erasures } : {}), id: uuid(), deviceId: this.store.deviceId, deviceName: this.store.getMeta('deviceName'),
         at: now(), parts, assets, control: mergeControl(EMPTY_CONTROL, this.control()) };
       manifest.digest = manifestDigest(manifest);
@@ -299,7 +302,7 @@ export class CurrentSync {
     });
   }
   validateManifest(manifest, deviceId) {
-    check([3, 4, 5, 6].includes(manifest?.format) && isId(manifest.id) && manifest.deviceId === deviceId && isId(deviceId)
+    check([3, 4, 5, 6, 7].includes(manifest?.format) && isId(manifest.id) && manifest.deviceId === deviceId && isId(deviceId)
       && typeof manifest.deviceName === 'string' && manifest.deviceName.length <= 100 && Number.isFinite(Date.parse(manifest.at)), '无效的最新内容清单');
     check(Object.keys(manifest).sort().join() === (manifest.format >= 4
       ? 'assets,at,control,deviceId,deviceName,digest,erasures,format,id,parts' : 'assets,at,control,deviceId,deviceName,digest,format,id,parts'), '清单含未知字段');
@@ -370,6 +373,7 @@ export class CurrentSync {
       const erasedIds = new Set(erasures.map(item => item.entityId));
       for (const manifest of incoming) {
         const original = histories.get(manifest.id);
+        check(manifest.format >= 7 || ![...original, ...(manifest.erasures || [])].some(requiresPersonalFormat), '个人管理记录需要 format 7，请升级所有同步客户端');
         const events = [...filterErased(original, erasures), ...replacementWorkspaces(original, erasures)];
         orderedEvents(events, this.store);
         const assets = manifest.assets.map(asset => ({ ...asset, ids: asset.ids.filter(id => !erasedIds.has(id)) })).filter(asset => asset.ids.length);

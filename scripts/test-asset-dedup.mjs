@@ -26,6 +26,9 @@ try {
   await page.goto(app.url);
   await page.locator('#domain-filter').selectOption(library.id);
   await page.locator('[data-nav=assets]').click();
+  await page.locator('.material-manager').waitFor();
+  await page.locator('#domain-filter').selectOption(library.id);
+  await page.locator('.page-heading small', { hasText: library.data.title }).waitFor();
   const row = id => page.locator(`[data-material-row="${id}"]`);
   const open = async () => {
     await row(a.id).getByRole('button', { name: '合并相同内容', exact: true }).click();

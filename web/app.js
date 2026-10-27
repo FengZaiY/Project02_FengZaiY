@@ -27,6 +27,9 @@ import { recordRows } from './record-navigation.js';
 import './record-navigation.css';
 import { copyText, copyVisibleText } from './editor-text.js';
 import { mountReceivedObjects } from './received-objects.js';
+import { createPersonalUI, businessLabels } from './personal-pages.js';
+import { assertUiProtocol } from '../src/core/ui-protocol.mjs';
+import { startApplication } from './startup.js';
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -53,12 +56,15 @@ const bytes = size => size > 1024 ** 3 ? `${(size / 1024 ** 3).toFixed(1)} GB` :
 const label = { local: '已本地保存', waiting: '已生成交接文件', received: '已接收版本' };
 const typeLabel = { note: '正式笔记', draft: '草稿', conversation: '对话', source: '来源', annotation: '备注', proposal: '整理方案', workspace: '工作区', asset: '附件', model: '模型', task: '任务', usage: '用量', library: '知识库' };
 const navs = [
-  ['notes', 'library', '知识库'], ['drafts', 'inbox', '收集与草稿'], ['proposals', 'list-checks', '整理方案'],
-  ['assets', 'paperclip', '资料与附件'],
+  ['notes', 'library', '知识与笔记'], ['assets', 'files', '资料管理'], ['accounts', 'key-round', '账号与订阅'], ['finance', 'wallet', '财务管理'], ['tasks', 'list-checks', '任务管理'],
+  ['sync', 'refresh-cw', '多电脑同步'], ['changes', 'history', '修改记录'],
   ['conflicts', 'git-merge', '版本冲突'], ['trash', 'trash-2', '回收站'],
-  ['libraries', 'folders', '知识库管理'], ['agents', 'plug', '外部 Agent'], ['sync', 'refresh-cw', '多电脑同步'], ['devices', 'monitor-cog', '设备管理'],
-  ['settings', 'settings', '系统设置']
+  ['agents', 'plug', '外部 Agent'], ['settings', 'settings', '系统设置'],
+  ['drafts', 'inbox', '收集与草稿'], ['proposals', 'list-checks', '整理方案'], ['libraries', 'folders', '知识库管理'], ['devices', 'monitor-cog', '设备管理'], ['materials', 'folders', '资料集合']
 ];
+const knowledgeViews = ['notes', 'drafts', 'proposals', 'libraries'];
+const personalViews = ['tasks', 'accounts', 'finance', 'materials'];
+Object.assign(typeLabel, businessLabels);
 const libraryViews = ['notes', 'drafts', 'conflicts', 'trash', 'proposals'];
 const GLOBAL_SCOPE = '__all_libraries__';
 const state = { view: 'notes', domain: '', query: '', snapshot: null, rows: [], tabs: [], selectedTab: null,
@@ -130,6 +136,7 @@ const syncUI = createSyncUI({ api, esc, icon, formatTime, bytes, render, toast, 
 const hierarchyUI = createHierarchyUI({ state, api, esc, icon, button, render: renderRecordList, persist, saveNote, openModal, confirmBox, toast, run, openRecord, libraryName });
 const draftUI = createDraftUI({ state, api, esc, icon, openModal, saveNote, persist, openRecord, hierarchyUI, libraries, run, toast, redrawIcons });
 const skillUI = createSkillManager({ api, esc, icon, safeHtml, formatTime, toast, confirmBox, redrawIcons, run, pickDirectory });
+const personalUI = createPersonalUI({ api, esc, icon, toast, confirmBox, openModal, redrawIcons, openRecord, native, navigate: navigateView });
 installExitCheck({ bridge: window.desktop, api, esc, openModal, toast, persist,
   snapshot: () => {
     stash();
@@ -137,7 +144,7 @@ installExitCheck({ bridge: window.desktop, api, esc, openModal, toast, persist,
     return { notes: state.tabs.map(tab => {
       const saving = noteSaver.state(tab.id);
       return { title: tab.title || '未命名笔记', state: !tab.dirty && saving !== 'saving' ? 'saved' : saving === 'saved' ? 'queued' : saving };
-    }),
+    }).concat(personalUI.snapshot()),
     preferenceDirty: skillUI.dirty(), importing: importingFiles > 0, composing: !!state.editor?.view.composing };
   },
   save: async () => {
@@ -150,6 +157,7 @@ installExitCheck({ bridge: window.desktop, api, esc, openModal, toast, persist,
         if (tab.dirty || noteSaver.state(tab.id) === 'saving') await noteSaver.flush(tab.id, false, true);
       } catch (error) { errors.push(`${tab.title}：${error.code === 'CONFLICT' ? '存在新版本，当前编辑已保留，请返回笔记对照处理' : error.message}`); }
     }
+    try { await personalUI.saveAll(); } catch (error) { errors.push(error.message); }
     clearTimeout(persistTimer); await persist();
     if (errors.length) throw new Error(errors.join('；'));
   },
@@ -157,7 +165,7 @@ installExitCheck({ bridge: window.desktop, api, esc, openModal, toast, persist,
 });
 const updateUI = createUpdateUI({ api, native, esc, icon, bytes, formatTime, redrawIcons, toast, prepareInstall: async () => {
   stash();
-  if (importingFiles || state.tabs.some(tab => tab.dirty || noteSaver.state(tab.id) === 'saving') || skillUI.dirty() || $('dialog[open]')) {
+  if (importingFiles || state.tabs.some(tab => tab.dirty || noteSaver.state(tab.id) === 'saving') || skillUI.dirty() || personalUI.dirty() || $('dialog[open]')) {
     throw new Error('请先保存笔记和整理偏好、关闭编辑窗口，并等待文件导入完成后更新');
   }
   const app = $('#app');
@@ -184,7 +192,7 @@ function redrawIcons() { createIcons({ icons, attrs: { 'stroke-width': 1.7 } });
 function currentTab() { return state.tabs.find(t => t.id === state.selectedTab); }
 function libraries() { return state.snapshot?.libraries || []; }
 function activeLibraries() { return libraries().filter(item => !item.deleted || item.contentCount > 0); }
-function libraryName(domain) { return domain === GLOBAL_SCOPE ? '不限定知识库' : libraries().find(item => item.data.domain === domain)?.data.title || domain || '全部知识库'; }
+function libraryName(domain) { return domain === '__materials__' ? '独立资料' : domain === '__personal__' ? '个人管理' : domain === GLOBAL_SCOPE ? '不限定知识库' : libraries().find(item => item.data.domain === domain)?.data.title || domain || '全部知识库'; }
 function legacyCleanupNotice() {
   const legacy = state.snapshot.deletion?.legacyCleared;
   return legacy?.count ? `<div class="notice amber"><div><strong>旧版清空残留 · ${legacy.count} 项</strong><p>整个工作区仍有 ${legacy.revisions} 条旧修改记录，仅被旧版隐藏，尚未永久删除。</p><button class="secondary" data-action="legacy-clear">检查旧版残留</button></div></div>` : '';
@@ -228,6 +236,8 @@ function stash() {
 }
 async function persist() {
   stash();
+  await personalUI.flush();
+  try { localStorage.setItem('fengzai-last-view', state.view); } catch {}
   const snapshot = JSON.parse(JSON.stringify({ tabs: state.tabs, selectedTab: state.selectedTab, domain: state.domain, collapsedNotes: state.collapsedNotes, noteView: state.noteView, sourceVisible: state.sourceVisible }));
   persistQueue = persistQueue.catch(() => {}).then(() => api('workspaceSave', snapshot));
   await persistQueue;
@@ -265,6 +275,7 @@ function changed() {
 }
 async function loadState() {
   state.snapshot = await api('state');
+  assertUiProtocol(state.snapshot);
   state.knowledgeTree = await api('noteTree');
 }
 async function restoreWorkspaceTabs(workspace) {
@@ -292,33 +303,36 @@ function countFor(view) {
   return state.snapshot.counts[({ notes: 'note', drafts: 'draft', proposals: 'proposal', assets: 'asset' })[view]] || 0;
 }
 function shell() {
-  const active = navs.find(n => n[0] === state.view);
+  const active = navs.find(n => n[0] === state.view) || navs[0];
+  const knowledge = knowledgeViews.includes(state.view), primaryView = knowledge ? 'notes' : state.view === 'materials' ? 'assets' : state.view === 'devices' ? 'sync' : state.view;
   const newLabel = state.view === 'drafts' ? '新建草稿' : '新建笔记';
   $('#app').innerHTML = `
     <aside class="sidebar">
-      <a class="brand" href="#" data-action="home"><span class="brand-mark">${icon('notebook-pen')}</span><span>StudySelf<small>个人知识工作区</small></span></a>
-      <button class="new-note primary" data-action="new">${icon('plus')}${newLabel}</button>
-      <nav>${navs.map(([id, i, text]) => `${id === 'libraries' ? '<div class="nav-divider">工作区管理</div>' : ''}<button class="nav-item ${state.view === id ? 'active' : ''}" data-nav="${id}" title="${esc(text)}" aria-label="${esc(text)}">${icon(i)}<span>${text}</span>${countFor(id) ? `<b>${countFor(id)}</b>` : ''}</button>`).join('')}</nav>
+      <a class="brand" href="#" data-action="home"><span class="brand-mark">${icon('notebook-pen')}</span><span>FengZai·Y<small>个人管理系统</small></span></a>
+      <nav>${navs.slice(0, 11).map(([id, i, text]) => `${id === 'sync' ? '<div class="nav-tools"></div>' : ''}<button class="nav-item ${primaryView === id ? 'active' : ''}" data-nav="${id}" title="${esc(text)}" aria-label="${esc(text)}">${icon(i)}<span>${text}</span>${countFor(id) ? `<b>${countFor(id)}</b>` : ''}</button>`).join('')}</nav>
       <div class="device"><span class="device-icon">${icon('monitor')}</span><div><strong>${esc(state.snapshot.deviceName)}</strong><small>本地工作区 · v${state.snapshot.version}</small></div>${button('settings-2', 'device-name', '设备名称')}</div>
       <button class="sidebar-status" data-nav="sync"><span class="status-dot ${state.snapshot.sync.configured ? '' : 'amber'}"></span>${state.snapshot.sync.configured ? '同步目录已配置' : '同步尚未配置'}${icon('chevron-right')}</button>
     </aside>
     <div class="workspace">
-      <header class="topbar"><div class="breadcrumb">${icon(active[1])}<strong>${active[2]}</strong><span>/</span><select id="domain-filter" aria-label="选择知识库">${domainOptions(state.domain)}</select>${button('folder-plus', 'library-new', '新建知识库')}</div>
-        <div class="top-actions"><label class="search">${icon('search')}<input id="search" placeholder="${state.view === 'assets' ? '搜索名称、文件名或标签' : '搜索当前范围'}" value="${esc(state.query)}" aria-label="${state.view === 'assets' ? '搜索资料' : '搜索笔记'}"></label>${button('refresh-cw', 'refresh-view', '刷新内容')}${button('cloud-download', 'sync-now', '检查已下载更新')}</div>
+      <header class="topbar"><div class="breadcrumb">${icon(active[1])}<strong>${active[2]}</strong>${knowledge || ['assets', 'trash', 'conflicts'].includes(state.view) ? `<span>/</span><select id="domain-filter" aria-label="选择知识库">${domainOptions(state.domain)}</select>${knowledge ? button('folder-plus', 'library-new', '新建知识库') : ''}` : ''}</div>
+        <div class="top-actions"><label class="search">${icon('search')}<input id="search" placeholder="搜索当前板块" value="${esc(state.query)}" aria-label="${state.view === 'assets' ? '搜索资料' : knowledge ? '搜索笔记' : '搜索当前板块'}"></label>${button('scan-search', 'global-search', '搜索全部非秘密内容')}${knowledge ? `<button class="primary compact personal-top-new" data-action="new">${icon('plus')}${newLabel}</button>` : personalViews.includes(state.view) ? `<button class="primary compact personal-top-new" data-action="personal-new">${icon('plus')}新建</button>` : state.view === 'assets' ? button('upload', 'asset-import-top', '导入资料') : ''}${button('refresh-cw', 'refresh-view', '刷新内容')}</div>
       </header>
-      <div class="work-tabs">${state.tabs.map(tab => `<div class="work-tab ${tab.id === state.selectedTab ? 'selected' : ''}" data-tab="${tab.id}" title="${esc(libraryName(tab.domain))} / ${esc(tab.title)}">${icon('file-text')}<span>${esc(tab.title)}${tab.dirty ? ' ·' : ''}</span><small>${esc(libraryName(tab.domain))}</small><button data-close-tab="${tab.id}" aria-label="关闭标签">${icon('x')}</button></div>`).join('')}<button class="tab-add" data-action="new" title="新建笔记" aria-label="新建笔记">${icon('plus')}</button><div class="tab-spacer"></div>${button('upload', 'publish-workspace', '发布当前工作区')}${button('panels-top-left', 'adopt-workspace', '接续其他电脑的工作区')}</div>
+      ${knowledge ? `<div class="knowledge-subnav">${[['notes', '笔记'], ['drafts', '收集与草稿'], ['proposals', '整理方案'], ['libraries', '知识库管理']].map(([id, title]) => `<button ${id === 'notes' ? 'data-subnav' : 'data-nav'}="${id}" class="${state.view === id ? 'active' : ''}">${title}</button>`).join('')}</div>` : ''}
+      ${['sync', 'devices'].includes(state.view) ? `<div class="knowledge-subnav"><button data-subnav="sync" class="${state.view === 'sync' ? 'active' : ''}">发送与接收</button><button data-nav="devices" class="${state.view === 'devices' ? 'active' : ''}">设备管理</button></div>` : ''}
+      <div class="work-tabs" ${knowledge || ['conflicts', 'trash'].includes(state.view) ? '' : 'hidden'}>${state.tabs.map(tab => `<div class="work-tab ${tab.id === state.selectedTab ? 'selected' : ''}" data-tab="${tab.id}" title="${esc(libraryName(tab.domain))} / ${esc(tab.title)}">${icon('file-text')}<span>${esc(tab.title)}${tab.dirty ? ' ·' : ''}</span><small>${esc(libraryName(tab.domain))}</small><button data-close-tab="${tab.id}" aria-label="关闭标签">${icon('x')}</button></div>`).join('')}<button class="tab-add" data-action="new" title="新建笔记" aria-label="新建笔记">${icon('plus')}</button><div class="tab-spacer"></div>${button('upload', 'publish-workspace', '发布当前工作区')}${button('panels-top-left', 'adopt-workspace', '接续其他电脑的工作区')}</div>
       ${state.view === 'trash' ? `<div class="trash-toolbar"><strong>回收站 · ${esc(libraryName(state.domain))}</strong><button class="secondary danger-action" data-action="trash-empty">${icon('trash-2')}清空回收站</button></div>` : ''}
       ${state.view === 'trash' ? legacyCleanupNotice() : ''}
       <main id="main"></main>
       <footer class="statusbar"><span>${icon('hard-drive')}本地保存</span><span>修改历史自动保留</span><span class="status-right">云端上传状态：由客户端确认</span></footer>
     </div>`;
   updateUI.refreshNotice();
-  if (state.domain) $('#domain-filter').insertAdjacentHTML('afterend', button(state.view === 'drafts' ? 'list' : 'list-tree', 'knowledge-browse', state.view === 'drafts' ? '浏览草稿列表' : '浏览知识体系'));
+  if (state.domain && knowledge) $('#domain-filter').insertAdjacentHTML('afterend', button(state.view === 'drafts' ? 'list' : 'list-tree', 'knowledge-browse', state.view === 'drafts' ? '浏览草稿列表' : '浏览知识体系'));
   $('.tab-add').title = newLabel; $('.tab-add').setAttribute('aria-label', newLabel);
-  $('#domain-filter').addEventListener('change', e => run(() => selectLibrary(e.target.value)));
+  $('#domain-filter')?.addEventListener('change', e => run(() => selectLibrary(e.target.value)));
   $('#search').addEventListener('input', e => {
     state.query = e.target.value;
     clearTimeout(queryTimer); queryTimer = setTimeout(() => run(async () => {
+      if (personalViews.includes(state.view)) { await personalUI.show(state.view, state.query); return; }
       await refreshRows();
       if (libraryViews.includes(state.view)) renderRecordList(); else await renderView();
     }), 200);
@@ -326,6 +340,7 @@ function shell() {
 }
 async function render() {
   if (importingFiles) return;
+  await personalUI.flush();
   assetUI.dispose();
   stash(); state.editor?.destroy(); state.editor = null;
   await loadState(); await refreshRows(); shell(); await renderView(); redrawIcons();
@@ -343,7 +358,22 @@ async function renderView() {
   else if (state.view === 'agents') await renderAgents();
   else if (state.view === 'settings') await renderSettings();
   else if (state.view === 'assets') await assetUI.show();
+  else if (personalViews.includes(state.view)) await personalUI.show(state.view, state.query);
+  else if (state.view === 'changes') await personalUI.changes();
   redrawIcons();
+}
+const navigationPositions = new Map();
+async function navigateView(view) {
+  if (view === state.view) return;
+  await persist();
+  navigationPositions.set(state.view, { query: state.query, domain: state.domain, selected: state.selected, selectedTab: state.selectedTab });
+  personalUI.leave();
+  const prior = navigationPositions.get(view);
+  state.view = view; state.query = prior?.query || '';
+  state.domain = prior?.domain || '';
+  state.selected = prior?.selected || null; state.selectedTab = prior?.selectedTab || null;
+  try { localStorage.setItem('fengzai-last-view', view); } catch {}
+  await render();
 }
 async function renderLibrary() {
   $('#main').className = `library-layout${!state.selected ? ' browse-folders' : state.navigationHidden ? ' navigation-hidden' : ''}`;
@@ -640,7 +670,7 @@ async function linkExistingAttachments() {
   const assets = await api('assets');
   if (currentTab() !== tab) return;
   const linked = new Set((tab.draft || record.data).assetIds || []);
-  const available = assets.filter(a => a.data.domain === record.data.domain && !a.deleted && !a.conflict && !linked.has(a.id));
+  const available = assets.filter(a => !a.deleted && !a.conflict && !linked.has(a.id));
   const dialog = openModal('关联已有资料', `<form id="source-link-form" class="settings-form"><label>搜索资料<input name="query" type="search" placeholder="名称、文件名或标签"></label><div class="source-link-options"></div><div class="form-actions"><span class="muted" id="source-link-count"></span><button class="primary" type="submit" disabled>关联所选资料</button></div><p role="alert" class="material-form-error"></p></form>`);
   const selected = new Set(), form = $('#source-link-form', dialog), list = $('.source-link-options', dialog), submit = $('[type=submit]', form);
   const update = () => { $('#source-link-count', form).textContent = `已选 ${selected.size} 项`; submit.disabled = !selected.size; };
@@ -690,10 +720,11 @@ async function setSourceVisible(visible) {
 }
 async function selectLibrary(domain, open = false) {
   if (importingFiles) { $('#domain-filter').value = state.domain; toast('文件仍在导入，请完成后切换知识库'); return; }
+  state.query = ''; if ($('#search')) $('#search').value = '';
   await persist();
   state.editor?.destroy(); state.editor = null;
   state.domain = domain; state.selected = null; state.selectedTab = null;
-  state.sourceVisible = false; state.query = '';
+  state.sourceVisible = false;
   if (open) state.view = 'notes';
   await persist(); await render();
 }
@@ -732,7 +763,7 @@ async function renderSync() {
   const { sync } = state.snapshot;
   const devices = await api('deviceStatus');
   $('#main').className = 'settings-view sync-view';
-  $('#main').innerHTML = `<div class="page-heading"><div><h1>多电脑同步</h1><p>全部知识库、笔记与资料</p></div><button class="secondary" data-action="sync-scan">${icon('refresh-cw')}检查同步目录</button></div>
+  $('#main').innerHTML = `<div class="page-heading"><div><h1>多电脑同步</h1><p>知识、资料、个人业务与加密密码库</p></div><button class="secondary" data-action="sync-scan">${icon('refresh-cw')}检查同步目录</button></div>
     <div class="sync-context"><strong id="sync-config-state">${sync.configured ? '已配对' : '未配置'}</strong><span>云端上传状态：无法直接核验，由百度客户端与用户确认</span></div>
     <details id="sync-settings" ${sync.configured ? '' : 'open'}><summary>同步目录与设备配对 <span>${sync.configured ? '已配置，可修改' : '首次使用'}</span></summary>
     <p id="sync-config-lock" class="sync-meta" hidden>同步任务进行中；完成或取消任务后可修改配对。</p>
@@ -741,7 +772,7 @@ async function renderSync() {
       <div class="form-actions"><span class="muted">配对指纹：${esc(sync.channel || '尚未配置')}<br>两台电脑使用同一配对密钥；密钥不随知识库同步。</span><button class="primary" type="submit">保存配置</button></div></form>
       ${sync.configured ? `<div class="sync-disconnect"><button class="secondary" data-action="sync-disconnect">${icon('unlink')}解除本机同步绑定</button><span class="muted">保留本机资料与共享目录文件</span></div>` : ''}</details>
     <details id="sync-diagnostics"><summary>原件完整性与检查 <span>同步范围 · 修改记录</span></summary><section class="settings-section">
-    <div class="definition-list" id="sync-content-policy"><div><span>同步范围</span><strong>笔记、修改历史、信息、资料、素材及已导入文件</strong></div><div><span>原文件传输</span><strong>大文件分块 · 组装断点续传 · 校验后本地保存</strong></div><div><span>本机原文件完整性</span><strong id="sync-file-completeness">尚未检查</strong></div><div><span>传输目录清理</span><strong>不自动删除；仅释放本地副本须在客户端操作</strong></div></div>
+    <div class="definition-list" id="sync-content-policy"><div><span>同步范围</span><strong>笔记、个人业务、修改批次、加密密码库及已导入文件</strong></div><div><span>原文件传输</span><strong>大文件分块 · 组装断点续传 · 校验后本地保存</strong></div><div><span>本机原文件完整性</span><strong id="sync-file-completeness">尚未检查</strong></div><div><span>传输目录清理</span><strong>不自动删除；仅释放本地副本须在客户端操作</strong></div></div>
     <button class="secondary" data-action="sync-integrity">${icon('shield-check')}检查本机修改记录</button><div id="sync-integrity-slot"></div></section></details>`;
   $('#sync-form').addEventListener('submit', event => { event.preventDefault(); run(async () => {
     let key = $('#sync-key').value.trim();
@@ -756,9 +787,9 @@ async function renderAgents() {
   $('#main').innerHTML = `<div class="page-heading"><div><div class="eyebrow">本机 MCP</div><h1>外部 Agent</h1></div></div>
     ${mcpConnectionMarkup(access, { esc, icon })}
     <section class="settings-section"><h2>新建授权</h2><form id="agent-grant-form" class="settings-form"><div class="form-grid"><label>Agent 名称<input name="name" maxlength="100" required></label><label>有效天数<input name="days" type="number" value="30" min="1" max="365" required></label></div>
-      <div class="muted">全部知识库（含后续新建及敏感资料）：读取、收集、提交方案、直接修改笔记、创建关联和移入回收站。确认入库、永久删除和系统管理仍由你在界面操作。</div>
+      <div class="muted">全部知识库及非秘密个人业务（含敏感资料）：读取、收集、整理方案、直接修改、关联及回收。密码、恢复码和秘密备注不开放；确认入库、撤回、永久删除和系统管理由你操作。</div>
       <button class="primary" type="submit">${icon('key-round')}生成访问凭证</button></form></section>
-    <section class="settings-section"><h2>已授权 Agent</h2>${access.grants.length ? `<div class="table-scroll"><table class="data-table"><thead><tr><th>名称 / 有效期</th><th>访问范围</th><th>状态</th><th></th></tr></thead><tbody>${access.grants.map(grant => `<tr><td><strong>${esc(grant.name)}</strong><small>${formatTime(grant.expiresAt)}</small></td><td>全部知识库<small>全部 Agent 读写能力 · 含敏感资料</small></td><td>${Date.parse(grant.expiresAt) <= Date.now() ? '已到期' : '有效'}</td><td>${button('key-round', 'agent-revoke', '撤销并删除授权', `data-grant="${grant.id}"`)}</td></tr>`).join('')}</tbody></table></div>` : '<div class="section-empty">尚无授权</div>'}</section>
+    <section class="settings-section"><h2>已授权 Agent</h2>${access.grants.length ? `<div class="table-scroll"><table class="data-table"><thead><tr><th>名称 / 有效期</th><th>访问范围</th><th>状态</th><th></th></tr></thead><tbody>${access.grants.map(grant => `<tr><td><strong>${esc(grant.name)}</strong><small>${formatTime(grant.expiresAt)}</small></td><td>全部知识库及非秘密个人业务<small>含敏感资料 · 密码库不开放</small></td><td>${Date.parse(grant.expiresAt) <= Date.now() ? '已到期' : '有效'}</td><td>${button('key-round', 'agent-revoke', '撤销并删除授权', `data-grant="${grant.id}"`)}</td></tr>`).join('')}</tbody></table></div>` : '<div class="section-empty">尚无授权</div>'}</section>
     <section class="settings-section"><h2>最近访问</h2>${access.audit.length ? `<div class="table-scroll"><table class="data-table"><thead><tr><th>时间</th><th>Agent</th><th>操作</th><th>结果</th></tr></thead><tbody>${access.audit.slice(0, 30).map(item => `<tr><td>${formatTime(item.at)}</td><td>${esc(item.name)}</td><td>${esc(item.method)}</td><td>${esc(item.result)}</td></tr>`).join('')}</tbody></table></div>` : '<div class="section-empty">尚无访问记录</div>'}</section>`;
   bindMcpConnection(access, { root: $('#main'), run, toast });
   $('#agent-enabled').onchange = event => run(async () => {
@@ -776,7 +807,7 @@ async function renderAgents() {
         const values = new FormData(form);
         const grant = await api('agentGrant', { name: values.get('name'), days: Number(values.get('days')) });
         await render();
-        openModal('访问凭证（仅显示一次）', `<div class="notice amber">此凭证可读写全部知识库及敏感资料，请勿放入笔记、同步目录或公开聊天。</div><label class="settings-form">STUDYSELF_AGENT_TOKEN<input id="agent-token" type="password" readonly value="${esc(grant.token)}" autocomplete="off"></label><label class="check-row"><input id="agent-token-visible" type="checkbox">显示凭证</label><button class="secondary" id="agent-token-copy">${icon('copy')}复制凭证</button>`);
+        openModal('访问凭证（仅显示一次）', `<div class="notice amber">此凭证可读写全部知识库、非秘密个人业务及敏感资料，密码库不开放。请勿放入笔记、同步目录或公开聊天。</div><label class="settings-form">STUDYSELF_AGENT_TOKEN<input id="agent-token" type="password" readonly value="${esc(grant.token)}" autocomplete="off"></label><label class="check-row"><input id="agent-token-visible" type="checkbox">显示凭证</label><button class="secondary" id="agent-token-copy">${icon('copy')}复制凭证</button>`);
         $('#agent-token-visible').onchange = e => { $('#agent-token').type = e.target.checked ? 'text' : 'password'; };
         $('#agent-token-copy').onclick = () => run(async () => {
           const input = $('#agent-token'), copied = await copyVisibleText(grant.token, input);
@@ -837,7 +868,7 @@ async function changeStorage(mode) {
   requireStorageSaved();
   const title = mode === 'select' ? '选择或修改系统根目录' : mode === 'migrate' ? '迁移当前工作区' : '打开已有工作区';
   const dialog = openModal(title, `<form id="storage-form" class="settings-form"><label>目标文件夹<div class="input-with-action"><input id="storage-target" readonly value="${esc(directory)}">${button('folder-open', 'storage-pick', '选择目标文件夹', 'type="button"')}</div></label>
-    <div class="notice amber">${mode === 'select' ? '选择空目录将迁移当前资料；选择已有工作区将切换资料。检查后须再次确认，不会直接清空或覆盖当前知识库。' : mode === 'migrate' ? '迁移全部知识库、笔记、历史与附件。目标必须为空，校验成功后切换，原目录不删除。' : '选择已有的 StudySelf 工作区，不会合并或搬走当前资料。'}<br>本地工作区不得放入网盘同步目录。请关闭使用这些目录的其他应用实例，包括旧版本。</div><div id="storage-form-error" class="notice danger" role="alert" hidden></div><button type="submit" class="primary">${icon('search-check')}检查目录</button></form>`);
+    <div class="notice amber">${mode === 'select' ? '选择空目录将迁移当前资料；选择已有工作区将切换资料。检查后须再次确认，不会直接清空或覆盖当前知识库。' : mode === 'migrate' ? '迁移全部知识库、笔记、历史与附件。目标必须为空，校验成功后切换，原目录不删除。' : '选择已有的 FengZai·Y（兼容 StudySelf）工作区，不会合并或搬走当前资料。'}<br>本地工作区不得放入网盘同步目录。请关闭使用这些目录的其他应用实例，包括旧版本。</div><div id="storage-form-error" class="notice danger" role="alert" hidden></div><button type="submit" class="primary">${icon('search-check')}检查目录</button></form>`);
   $('#storage-form').onsubmit = async event => {
     event.preventDefault();
     const submit = $('button[type=submit]', event.target), errorBox = $('#storage-form-error');
@@ -906,8 +937,8 @@ async function pickDirectory(target) {
   }
 }
 async function pickAttachment(expectedId, duplicateMode = 'reuse') {
-  if (!expectedId) requireLibrary();
-  const domain = state.selected?.data.domain || state.domain;
+  if (!expectedId && state.view !== 'assets') requireLibrary();
+  const domain = state.view === 'assets' ? state.domain || '__materials__' : state.selected?.data.domain || state.domain;
   if (native) {
     const file = await api('chooseFile');
     return file ? api('assetImport', { path: file, expectedId, domain, duplicateMode }) : null;
@@ -946,7 +977,7 @@ function bindFileDrop(editor, tab, record) {
       if (editor.isDestroyed || state.editor !== editor || currentTab() !== tab || state.selected?.id !== record.id) return null;
       if (!canManageAttachments() || asset?.type !== 'asset' || asset.deleted || asset.conflict) throw new Error('附件或笔记已发生变化，请刷新后重试');
       stash();
-      if (asset.data.domain !== record.data.domain || !((tab.draft || state.selected.data).assetIds || []).includes(id)) throw new Error('此附件已不属于当前笔记，请重新关联后再插入');
+      if (!((tab.draft || state.selected.data).assetIds || []).includes(id)) throw new Error('此附件已不属于当前笔记，请重新关联后再插入');
       return asset;
     }
   });
@@ -1010,6 +1041,7 @@ async function openRecord(id) {
   await persist();
   state.editor?.destroy(); state.editor = null;
   const record = await api('record', { id }); if (!record) return;
+  if (businessLabels[record.type]) { await personalUI.select(record); return; }
   if (record.type === 'asset') { await assetUI.detail(id); return; }
   if (record.type === 'folder') return;
   if (record.type === 'library') { state.view = 'libraries'; state.selected = null; await render(); return; }
@@ -1318,7 +1350,7 @@ async function insertContent(kind) {
   if (kind === 'callout') { if (editor.isActive('callout')) editor.chain().focus().lift('callout').run(); else editor.chain().focus().wrapIn('callout').run(); return; }
   if (['image', 'video'].includes(kind)) {
     const matches = asset => kind === 'image' ? ['image/png', 'image/jpeg', 'image/webp', 'image/gif'].includes(asset.data.mime) : ['video/mp4', 'video/webm', 'video/quicktime'].includes(asset.data.mime);
-    const assets = (await api('assets')).filter(asset => asset.data.domain === state.selected.data.domain && matches(asset));
+    const assets = (await api('assets')).filter(asset => matches(asset));
     const dialog = openModal(kind === 'image' ? '插入图片' : '插入视频', `<form id="media-form" class="settings-form"><label>已有附件<select name="asset" required><option value="">选择附件</option>${assets.map(asset => `<option value="${asset.id}">${esc(asset.data.title)}${asset.available ? '' : '（未下载）'}</option>`).join('')}</select></label><div class="form-actions"><button type="button" class="secondary" id="import-media">${icon('upload')}导入文件</button><button type="submit" class="primary">插入</button></div></form>`);
     const insert = asset => { if (!matches(asset)) throw new Error('附件格式与所选媒体类型不符'); commit({ v: 1, kind, label: asset.data.title.slice(0, 200), assetId: asset.id }); dialog.close(); };
     $('#import-media').onclick = () => run(async () => { const asset = await pickAttachment(); if (asset) insert(asset); });
@@ -1368,6 +1400,19 @@ async function editNoteLink() {
   }); };
 }
 const actions = {
+  'personal-new': () => personalUI.createCurrent(),
+  'asset-import-top': () => actions['asset-import'](),
+  'global-search': async () => {
+    const dialog = openModal('搜索全部非秘密内容', '<label class="field-label">搜索笔记、资料、任务、账号信息与账目<input id="global-query" placeholder="密码与秘密备注不会被搜索" autocomplete="off"></label><div id="global-results" class="global-search-results"></div>');
+    let sequence = 0;
+    $('#global-query', dialog).oninput = () => run(async () => {
+      const request = ++sequence, results = await api('personalSearch', { query: $('#global-query', dialog).value, limit: 100 });
+      if (!dialog.open || request !== sequence) return;
+      $('#global-results', dialog).innerHTML = results.map(row => `<button data-global-id="${row.id}"><small>${esc(typeLabel[row.type] || row.type)}</small>${esc(row.title)}</button>`).join('');
+      dialog.querySelectorAll('[data-global-id]').forEach(button => button.onclick = () => run(async () => { dialog.close(); await openRecord(button.dataset.globalId); }));
+    });
+    $('#global-query', dialog).focus();
+  },
   ...draftUI.actions,
   ...assetUI.actions,
   ...syncUI.actions,
@@ -1660,8 +1705,8 @@ document.addEventListener('click', event => {
     });
     return;
   }
-  const nav = event.target.closest('[data-nav]');
-  if (nav) { run(async () => { await persist(); state.view = nav.dataset.nav; state.selected = null; state.selectedTab = null; state.query = ''; await render(); }); return; }
+  const nav = event.target.closest('[data-nav],[data-subnav]');
+  if (nav) { run(() => navigateView(nav.dataset.nav || nav.dataset.subnav)); return; }
   const row = event.target.closest('[data-record]');
   if (row) { run(() => openRecord(row.dataset.record)); return; }
   const close = event.target.closest('[data-close-tab]');
@@ -1705,16 +1750,17 @@ document.addEventListener('keydown', event => {
     const menu = $('.source-attachment-actions[open]');
     if (menu) { event.preventDefault(); menu.open = false; $('summary', menu).focus(); return; }
   }
-  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') { event.preventDefault(); run(saveNote); }
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') { event.preventDefault(); run(() => personalViews.includes(state.view) ? personalUI.save() : saveNote()); }
 });
 window.addEventListener('beforeunload', event => {
-  if (importingFiles || state.tabs.some(t => t.dirty) || skillUI.dirty()) { event.preventDefault(); event.returnValue = ''; }
+  if (importingFiles || state.tabs.some(t => t.dirty) || skillUI.dirty() || personalUI.dirty()) { event.preventDefault(); event.returnValue = ''; }
 });
 for (const type of ['dragover', 'drop']) document.addEventListener(type, event => {
   if ([...(event.dataTransfer?.types || [])].includes('Files')) event.preventDefault();
 });
 async function init() {
   await loadState();
+  await personalUI.init();
   try { state.listSummary = localStorage.getItem('studyself-list-summary') === 'true'; } catch {}
   state.domain = state.snapshot.workspace.domain || '';
   state.collapsedNotes = state.snapshot.workspace.collapsedNotes || [];
@@ -1727,6 +1773,7 @@ async function init() {
     state.view = ({ draft: 'drafts', proposal: 'proposals' })[state.selected?.type || tab.recordType] || 'notes';
   }
   if (state.domain && !activeLibraries().some(item => item.data.domain === state.domain)) state.domain = '';
+  try { const last = localStorage.getItem('fengzai-last-view'); if (navs.some(n => n[0] === last)) state.view = last; } catch {}
   await render();
   await updateUI.start();
   if (state.snapshot.sync.configured) {
@@ -1756,4 +1803,4 @@ async function init() {
   }, 15000);
   setInterval(() => { if (state.view === 'sync') syncUI.refreshProgress().then(redrawIcons).catch(() => {}); }, 1500);
 }
-run(init);
+void startApplication(init);

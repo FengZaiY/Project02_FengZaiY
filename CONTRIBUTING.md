@@ -15,7 +15,9 @@ npm test
 
 `npm ci` 会按锁文件重建依赖目录，并可能下载 Electron。需要网络或权限时先获得批准；不要绕过限制或为运行本项目修改全局配置。
 
-桌面开发使用 `npm start`。浏览器开发使用 `npm run dev`，默认仅监听 `127.0.0.1:4317`。预览前先构建，源码修改后需重新构建并刷新；当前没有自动热更新。
+桌面开发使用 `npm start`。浏览器开发使用 `npm run dev`，默认仅监听 `127.0.0.1:4317`。预览前先构建；修改后端源码后，须按原启动参数重新启动服务，再刷新页面。仅重新构建前端不会重载已运行的 Node 模块；当前没有自动热更新。交付预览时核验服务实际版本、工作区位置与页面，不能只检查页面标题或端口可达。
+
+`npm run test:startup` 验证旧后端、网络和初始化失败的错误页、重新加载、未保存草稿保护及窄窗布局。可信界面接口发生不兼容变化时更新 `src/core/ui-protocol.mjs` 的协议编号，前后端必须一起更新；该编号与同步格式及产品版本分开。
 
 如果端口被占用，在当前 PowerShell 会话选择另一个端口，不终止不明进程：
 
@@ -33,6 +35,12 @@ Windows 预览的目录按钮通过已鉴权的界面接口调用系统文件夹
 目录切换仅在重启时执行。已有启动配置对应的数据库不存在、损坏或凭据环境不匹配时明确失败，不初始化空库。迁移失败目标留有 `.studyself-incomplete.json` 标记，不可打开；源目录保留，重新选择另一个空目录重试。不要在未核对位置和内容前删除任何失败目录。老版本不识别新占用锁，迁移前必须关闭旧版本。
 
 ## 验证矩阵
+
+用户明确排除多电脑同步时，使用 `node scripts/test-local-audit.mjs core` 选择本机用例，不直接运行含同步的 `npm test` 或 `test:ui`；检查生成的 `artifacts/local-audit/core-selection.json`，新增参数化测试须补充选择。这个选择器只服务限定范围审查，不能替代同步改动所需的完整验证。其他本机界面和源码桌面脚本按下表选择，测试须使用隔离目录。
+
+`node scripts/test-local-audit-ui.mjs` 验证业务保存竞态、切页旧事件及窄窗；`node scripts/test-business-workflows.mjs` 串联任务关联、财务、订阅付款撤回重做、中文 CSV 退款、回收恢复和密码恢复。可用 `node scripts/test-local-audit.mjs <日志批次名> <脚本名不含扩展名> ...` 顺序运行并保存结果。核心补充回归在 `tests/local-audit.test.mjs`；实际 MCP 与随附客户端覆盖在 `tests/agent-mcp.test.mjs`。本机审查结果与边界见 [验证记录](docs/verification-local-audit-2026-10-27.md)。
+
+个人管理升级使用 `node --test tests/personal-system.test.mjs tests/agent-mcp.test.mjs tests/storage.test.mjs` 覆盖金额精度、事务批次、撤回、秘密隔离、独立密码库合并、资料迁移及新根目录恢复。构建后 `npm run test:personal` 验证五板块、跨页草稿、键盘保存、财务、密码库、修改记录和窄窗口；`npm run test:personal-desktop` 用独立 Electron profile 验证原生剪贴板、模拟锁屏及退出保存。测试输出在 artifacts。原生进程启动失败须记录失败阶段，只清理该次测试 PID，不以核心通过替代桌面结论。还需运行完整核心和既有界面回归。
 
 系统检查修复专项：`npm run test:audit-fixes` 使用隔离 Electron 工作区验证凭证/Skill/路径复制与手动回退、偏好保护、进行中及确认后新增导入、取消、退出响应和关闭数据库后重启。另运行 `node --test tests/asset-reader.test.mjs tests/current-sync.test.mjs tests/exit-check.test.mjs`，覆盖原件完整性、媒体缓存失效、缺块补齐与重启握手。测试拦截重启以避免启动第二个实例，不操作正式资料或生成安装包。
 

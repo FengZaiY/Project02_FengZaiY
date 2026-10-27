@@ -51,7 +51,10 @@ try {
     await window.desktop.call('workspaceSave', { tabs, selectedTab: tabs[1].id });
     return { a, b, tabs };
   });
-  await page.reload(); await page.locator('.tiptap').waitFor();
+  await page.reload(); await page.locator('[data-nav=settings].active').waitFor();
+  await page.locator('[data-nav=notes]').click();
+  await page.locator(`[data-tab="${dirtyRecords.tabs[1].id}"]`).click();
+  await page.locator('.tiptap').waitFor();
   await page.evaluate(async a => window.desktop.call('save', { id: a.id, type: a.type, parents: a.heads, data: { ...a.data, content: 'newer content' } }), dirtyRecords.a);
   const stale = await page.evaluate(a => window.desktop.callResult('save', { id: a.id, type: a.type, parents: a.heads, data: a.data }), dirtyRecords.a);
   assert.equal(stale.error.code, 'CONFLICT');

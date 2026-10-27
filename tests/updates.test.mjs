@@ -107,7 +107,7 @@ test('auto check persistence fails closed without changing current choice', () =
 });
 
 test('installation gate protects pending storage, dirty tabs, imports, sync, reads and overlapping requests', () => {
-  const service = { transport: {}, imports: new Set(), agents: {}, store: { local: () => ({ tabs: [] }), activeAssetReads: new Map() } };
+  const service = { transport: {}, imports: new Set(), agents: {}, store: { local: key => key === 'workspace' ? { tabs: [] } : null, activeAssetReads: new Map() } };
   const storage = { status: () => ({ restartRequired: false }) };
   assertUpdateIdle(service, storage);
   assert.throws(() => assertUpdateIdle(service, storage, 1, true), /自定义启动目录/);

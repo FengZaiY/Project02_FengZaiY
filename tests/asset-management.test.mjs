@@ -22,7 +22,7 @@ async function fixture(t) {
 }
 const entry = record => ({ id: record.id, parents: record.heads });
 
-test('local storage reflects actual note, shared and recycled originals without changing records or bindings', async t => {
+test('central originals retain note, shared and recycled references without relocating files on reads', async t => {
   const f = await fixture(t);
   const own = await f.asset('笔记图片.png'), shared = await f.asset('共享.txt'), free = await f.asset('独立.pdf'), trash = await f.asset('回收.txt');
   const parent = f.store.write({ type: 'note', data: { title: '概览', domain: f.library.id, assetIds: [shared.id] } });
@@ -33,7 +33,7 @@ test('local storage reflects actual note, shared and recycled originals without 
   const before = snapshot();
   const result = await f.call('assetCatalog', { domain: f.library.id });
   assert.equal(result.storage.root, f.store.directory);
-  for (const [asset, kind] of [[own, 'note'], [shared, 'shared'], [free, 'library']]) {
+  for (const [asset, kind] of [[own, 'central'], [shared, 'central'], [free, 'central']]) {
     const row = result.rows.find(row => row.id === asset.id);
     assert.equal(row.storage.path, f.store.assetLocation(asset.id).path);
     assert.equal(row.storage.kind, kind);
@@ -42,11 +42,12 @@ test('local storage reflects actual note, shared and recycled originals without 
     assert.equal(path.join(result.storage.root, row.storage.relativeDirectory, row.storage.filename), row.storage.path);
   }
   const owned = result.rows.find(row => row.id === own.id).storage;
-  assert.ok(owned.relativeDirectory.includes(parent.id));
-  const rootDirectory = path.join(f.store.directory, '资料库');
+  assert.ok(owned.relativeDirectory.startsWith('.fengzai-y'));
+  assert.equal(result.rows.find(row => row.id === shared.id).referenceCount, 2);
+  const rootDirectory = path.join(f.store.directory, '.fengzai-y', 'materials');
   assert.equal((await f.call('assetCatalog', { domain: f.library.id, directory: rootDirectory })).total, 3);
   assert.equal((await f.call('assetCatalog', { directory: owned.directory })).rows[0].id, own.id);
-  assert.equal((await f.call('assetDetail', { id: trash.id })).storage.kind, 'trash');
+  assert.equal((await f.call('assetDetail', { id: trash.id })).storage.kind, 'central');
   assert.equal(snapshot(), before, 'Catalog and location reads must not reorganize files or write knowledge');
 });
 

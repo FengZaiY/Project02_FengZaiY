@@ -31,7 +31,7 @@ export function createSkillInstallations({ api, esc, icon, formatTime, toast, co
       row.querySelector('[data-install-restore]').onclick = () => run(() => apply({ id: item.id, action: 'restore' }));
       row.querySelector('[data-install-mode]').onchange = event => run(async () => {
         const mode = event.target.value; event.target.value = item.mode; clean();
-        if (!await confirmBox('更改 Skill 更新方式', `<p>${esc(item.directory)}</p><p>${mode === 'auto' ? '允许 StudySelf 在运行期间自动将内置 Skill 和已保存偏好写入此位置。检测到手工修改或偏好冲突时暂停；更新前保留一份可恢复副本。' : '系统继续自动检查，发现更新后由你确认写入。'}</p>`, mode === 'auto' ? '开启自动更新' : '改为提醒后确认')) return;
+        if (!await confirmBox('更改 Skill 更新方式', `<p>${esc(item.directory)}</p><p>${mode === 'auto' ? '允许 FengZai·Y 在运行期间自动将内置 Skill 和已保存偏好写入此位置。检测到手工修改或偏好冲突时暂停；更新前保留一份可恢复副本。' : '系统继续自动检查，发现更新后由你确认写入。'}</p>`, mode === 'auto' ? '开启自动更新' : '改为提醒后确认')) return;
         await api('skillInstallConfigure', { id: item.id, mode, confirmed: true }); await refresh();
         toast(mode === 'auto' ? '已开启此安装位置的自动更新' : '已改为提醒后确认');
       });

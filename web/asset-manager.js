@@ -6,7 +6,7 @@ export function createAssetUI({ state, api, esc, icon, button, bytes, formatTime
   const $ = selector => document.querySelector(selector);
   const kinds = { image: '图片', video: '视频', audio: '音频', document: '文档', archive: '压缩包', other: '其他' };
   const types = { note: '笔记', draft: '草稿', source: '来源', proposal: '整理方案', annotation: '备注', relation: '关联', conversation: '历史资料', task: '历史任务' };
-  const filters = { kind: '', availability: '', usage: '', tag: '', sort: 'updated', trash: false, offset: 0, limit: 100, directory: '' };
+  const filters = { kind: '', availability: '', usage: '', tag: '', sort: 'updated', trash: false, offset: 0, limit: 100, directory: '', collectionId: '' };
   let selected = new Map(), scope = '', serial = 0, rows = [];
   let directoryDomain, directoriesOpen = true, rootDirectory = '';
   let stopThumbnails, stopFilterLabels;
@@ -17,9 +17,10 @@ export function createAssetUI({ state, api, esc, icon, button, bytes, formatTime
   async function show() {
     const request = ++serial, domain = state.domain, query = state.query;
     if (directoryDomain !== domain) { filters.directory = ''; directoryDomain = domain; }
-    const nextScope = JSON.stringify([domain, query, filters.kind, filters.availability, filters.usage, filters.tag, filters.trash, filters.sort, filters.directory]);
+    const nextScope = JSON.stringify([domain, query, filters.kind, filters.availability, filters.usage, filters.tag, filters.trash, filters.sort, filters.directory, filters.collectionId]);
     if (scope !== nextScope) { selected.clear(); filters.offset = 0; scope = nextScope; }
     const result = await api('assetCatalog', { ...filters, domain: domain || undefined, query });
+    const collections = await api('personalList', { type: 'materialCollection' });
     if (request !== serial || state.view !== 'assets' || state.domain !== domain || state.query !== query) return;
     if (filters.offset && !result.rows.length) { filters.offset = Math.max(0, filters.offset - filters.limit); return show(); }
     rows = result.rows;
@@ -27,7 +28,7 @@ export function createAssetUI({ state, api, esc, icon, button, bytes, formatTime
     const main = $('#main');
     dispose();
     main.className = 'settings-view material-manager';
-    main.innerHTML = `<div class="page-heading"><div><h1>资料与附件</h1><small class="muted">${esc(libraryName(domain))} · ${result.total} 项 · ${bytes(result.totalBytes)}</small></div><div class="inline-actions"><button class="primary" data-action="asset-import">${icon('upload')}导入文件</button>${button('files', 'asset-import-separate', '导入为独立资料（允许相同内容）')}</div></div>
+    main.innerHTML = `<div class="page-heading"><div><h1>资料管理</h1><small class="muted">${domain ? esc(libraryName(domain)) : '全部资料'} · ${result.total} 项 · ${bytes(result.totalBytes)}</small></div><div class="inline-actions"><button class="secondary" data-nav="materials">资料集合</button><button class="secondary" data-action="material-migrate">迁移旧资料</button><button class="primary" data-action="asset-import">${icon('upload')}导入文件</button>${button('files', 'asset-import-separate', '导入为独立资料（允许相同内容）')}</div></div>
       <section class="material-storage" aria-label="本机存放位置">
         <div class="material-storage-root">${icon('hard-drive')}<div><small>工作区根目录</small><span id="material-root-path">${esc(rootDirectory)}</span></div>
         ${button('copy', 'material-copy-root', '复制工作区根目录')}${native ? button('folder-open', 'storage-open-folder', '打开工作区根目录') : ''}</div>
@@ -39,6 +40,7 @@ export function createAssetUI({ state, api, esc, icon, button, bytes, formatTime
         <div class="material-scope-bar"><div class="material-tabs" role="group" aria-label="资料范围"><button data-action="material-active" aria-pressed="${!filters.trash}">全部资料</button><button data-action="material-trash-view" aria-pressed="${filters.trash}">${icon('trash-2')}资料回收站</button></div>
         ${button('filter-x', 'material-clear', '清除资料筛选')}</div>
         <div class="material-filters">
+        ${filter('collectionId', '集合', '资料集合', { '': '全部集合', ...Object.fromEntries(collections.map(r => [r.id, r.data.title])) })}
         ${filter('kind', '类型', '资料类型', { '': '全部类型', ...kinds })}
         ${filter('tag', '标签', '资料标签', { '': '全部标签', ...Object.fromEntries(result.tags.map(tag => [tag, tag])) })}
         ${filter('availability', '本机文件', '本机文件状态', { '': '全部本机状态', available: '本机可用', missing: '待下载或缺失', pinned: '长期保留' })}
@@ -177,19 +179,21 @@ export function createAssetUI({ state, api, esc, icon, button, bytes, formatTime
   }
   async function edit(id) {
     const row = await api('assetDetail', { id });
+    const collections = await api('personalList', { type: 'materialCollection' });
     if (row.deleted || row.conflict) { await detail(id); return; }
     const dialog = openModal('编辑资料属性', `<form id="material-edit-form" class="settings-form">
       <label>资料名称<input name="title" value="${esc(row.data.title)}" required maxlength="500"></label>
       <label>原文件名<input value="${esc(row.data.filename)}" readonly></label>
-      <label>知识库<select name="domain" required ${row.references.length || row.referencesUnknown ? 'disabled' : ''}>${domainOptions(row.data.domain, false)}</select></label>
+      <label>原知识库关联<select name="domain" required ${row.references.length || row.referencesUnknown ? 'disabled' : ''}><option value="__materials__" ${row.data.domain === '__materials__' ? 'selected' : ''}>独立资料</option>${domainOptions(row.data.domain, false)}</select></label>
       ${row.references.length || row.referencesUnknown ? '<small class="muted">已有引用或引用待核验，暂不能跨库移动。</small>' : ''}
       <label>标签（逗号分隔）<input name="tags" value="${esc(row.data.tags.join(', '))}" maxlength="10000"></label>
-      <label class="check-row"><input name="sensitive" type="checkbox" ${row.data.sensitive ? 'checked' : ''}>敏感资料（外部 Agent 需要额外授权）</label>
+      <label>所属集合（Ctrl 多选）<select name="collectionIds" multiple>${collections.map(r => `<option value="${r.id}" ${row.data.collectionIds?.includes(r.id) ? 'selected' : ''}>${esc(r.data.title)}</option>`).join('')}</select></label>
+      <label class="check-row"><input name="sensitive" type="checkbox" ${row.data.sensitive ? 'checked' : ''}>敏感资料</label>
       <div class="form-actions"><button class="primary" type="submit">保存属性</button></div><p class="material-form-error" role="alert"></p></form>`);
     bindSubmit(dialog, async form => {
       const values = Object.fromEntries(new FormData(form));
       await api('assetUpdate', { id, parents: row.heads, changes: { title: values.title, domain: values.domain || row.data.domain,
-        tags: parseTags(values.tags), sensitive: values.sensitive === 'on' } });
+        tags: parseTags(values.tags), sensitive: values.sensitive === 'on', collectionIds: new FormData(form).getAll('collectionIds') } });
       dialog.close(); await afterChange('资料属性已保存，原文件名与引用保持不变');
     });
   }
@@ -245,6 +249,20 @@ export function createAssetUI({ state, api, esc, icon, button, bytes, formatTime
     };
   }
   const actions = {
+    'material-migrate': async () => {
+      const preview = await api('materialMigrationPreview');
+      const dialog = openModal('迁移到集中原件目录', `<p>旧资料保留标识、历史、原知识库关联及全部引用。先复制并校验，成功后清理经核验的托管旧副本，外部源文件保留。</p><p>可迁移 ${preview.rows.filter(r => !r.issue).length} 项，预估额外空间 ${bytes(preview.bytes)}（另保留 64 MiB）。</p><div class="csv-preview-scroll">${preview.rows.map(r => `<p><strong>${esc(r.title)}</strong><small>${esc(r.issue || r.target)}</small></p>`).join('') || '<p>没有待迁移的旧资料</p>'}</div><div id="migration-result"></div>`, `${['pending', 'running'].includes(preview.progress?.state) ? '<button class="secondary" id="migration-resume">继续上次任务</button>' : ''}<button class="primary" id="migration-start" ${preview.rows.some(r => !r.issue) ? '' : 'disabled'}>确认迁移</button>`);
+      const migrate = resume => run(async () => {
+        dialog.querySelectorAll('button').forEach(b => { b.disabled = true; });
+        const timer = setInterval(() => { void api('materialMigrationStatus').then(status => { if (dialog.open && status?.state === 'running') $('#migration-result').textContent = `已处理 ${status.done.length} / ${status.rows.length} 项`; }).catch(() => {}); }, 700);
+        try {
+          const result = await api('materialMigrate', { token: preview.token, confirmed: true, resume });
+          $('#migration-result').textContent = `已完成 ${result.done.length} 项。${result.errors.map(e => e.message).join('；') || '迁移完成'}`;
+          toast(result.state === 'complete' ? '资料迁移完成' : '部分资料待处理，可继续任务');
+        } finally { clearInterval(timer); dialog.querySelectorAll('button').forEach(b => { b.disabled = false; }); }
+      });
+      $('#migration-start').onclick = () => migrate(false); if ($('#migration-resume')) $('#migration-resume').onclick = () => migrate(true);
+    },
     'material-directory': async target => {
       filters.directory = target.dataset.directory; directoriesOpen = true;
       if ($('#modal').open) $('#modal').close();

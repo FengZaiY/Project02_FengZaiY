@@ -4,6 +4,7 @@ import { atomicWrite, canonical, check, hashFile, inside, noSymlink, now, outsid
 import { placedTypes } from './hierarchy.mjs';
 import { legacyNoteId } from './note-hierarchy.mjs';
 import { pruneReceivedDirectory } from './received-objects.mjs';
+import { isCentralAsset } from './material-center.mjs';
 
 const names = { note: '笔记', draft: '草稿', source: '来源', annotation: '备注', relation: '关联', proposal: '整理方案', asset: '资料' };
 const safeName = title => String(title).normalize('NFKC').replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').replace(/[. ]+$/g, '').slice(0, 24) || '未命名';
@@ -52,6 +53,7 @@ export class LocalHierarchy {
     return relative;
   }
   managedOriginal(file) {
+    if (isCentralAsset(this.store, file)) return true;
     if (!outside(this.store.directory, file)) {
       const received = path.join(this.store.directory, 'received-objects');
       if (path.dirname(file) === received && /^[a-f0-9]{64}$/.test(path.basename(file))) return true;
@@ -83,6 +85,7 @@ export class LocalHierarchy {
     const local = this.store.assetLocation(record.id);
     if (!local || !fs.existsSync(local.path)) return { available: false };
     const source = local.path; noSymlink(source);
+    if (record.data.centralized || isCentralAsset(this.store, source)) return { available: fs.statSync(source).size === record.data.size && (!verify || await hashFile(source) === record.data.sha256), assetId: record.id };
     const extension = path.extname(record.data.filename).replace(/[^.a-zA-Z0-9]/g, '').slice(0, 12);
     const file = path.join(directory, `${safeName(path.basename(record.data.filename, path.extname(record.data.filename)))}-${record.id}${extension}`);
     noSymlink(file);

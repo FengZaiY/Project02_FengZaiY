@@ -73,7 +73,7 @@ export class SkillInstallations {
     check(files['SKILL.md'] !== null, '安装目录缺少 SKILL.md 入口文件，请先重新安装或补全 Skill');
     const content = Buffer.from(files['SKILL.md'] || '', 'base64').toString();
     const front = content.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/)?.[1];
-    check(front && /^name: studyself-organize\r?$/m.test(front), 'SKILL.md 的名称或头部不匹配，不是 StudySelf Skill 安装');
+    check(front && /^name: studyself-organize\r?$/m.test(front), 'SKILL.md 的名称或头部不匹配，不是 FengZai·Y Skill 安装');
   }
   public(record) {
     return { id: record.id, directory: record.directory, mode: record.mode, status: record.status,

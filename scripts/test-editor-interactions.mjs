@@ -130,11 +130,19 @@ try {
   await resize(imageBlock, 'e', -30, 0, true);
   assert.equal(await page.locator('.tiptap').evaluate(el => el.editor.getHTML()), contentBeforeCancel);
   await imageBlock.scrollIntoViewIfNeeded();
-  const shortBox = await imageBlock.boundingBox();
-  await page.mouse.move(shortBox.x + 40, shortBox.y + 35); await page.mouse.down();
-  await page.waitForTimeout(350); assert.equal(await page.locator('.block-drag-preview').count(), 0);
-  await page.mouse.move(shortBox.x + 55, shortBox.y + 35); await page.waitForTimeout(800);
-  assert.equal(await page.locator('.block-drag-preview').count(), 0); await page.mouse.up();
+  // Keep the pre-hold movement in the browser event loop: protocol round trips can
+  // consume the 150 ms margin and accidentally turn this cancellation test into a hold.
+  await imageBlock.evaluate(async element => {
+    const box = element.getBoundingClientRect(), pointerId = 91;
+    const event = (type, dx = 0) => new PointerEvent(type, { bubbles: true, isPrimary: true, pointerId, button: 0, clientX: box.x + 40 + dx, clientY: box.y + 35 });
+    element.dispatchEvent(event('pointerdown'));
+    await new Promise(resolve => setTimeout(resolve, 350));
+    if (document.querySelector('.block-drag-preview')) throw new Error('Short press started a drag before 500 ms');
+    document.dispatchEvent(event('pointermove', 15));
+    await new Promise(resolve => setTimeout(resolve, 800));
+    if (document.querySelector('.block-drag-preview')) throw new Error('Movement before the hold failed to cancel');
+    document.dispatchEvent(event('pointerup', 15));
+  });
   await hold(imageBlock); await page.keyboard.press('Escape'); await page.mouse.up();
   assert.equal(await page.locator('.block-drag-preview').count(), 0);
   assert.equal(await page.locator('.tiptap').evaluate(el => el.editor.getHTML()), contentBeforeCancel);

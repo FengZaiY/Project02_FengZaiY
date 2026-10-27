@@ -30,6 +30,7 @@ test('migration preserves all revisions, attachments, drafts, local links and cr
   const file = path.join(app.anchor, 'fixture.txt'); fs.writeFileSync(file, 'local attachment');
   const asset = await app.service.call('assetImport', { path: file, domain: library.id });
   store.local('localFileLinks', { local: file, external: path.join(app.base, 'outside.txt') });
+  store.local('materialMigration', { rows: [{ id: asset.id, source: file, target: store.assetLocation(asset.id).path }], state: 'pending', done: [], errors: [] });
   store.setSecret('pairing', 'test-only-secret');
   const grant = app.service.agents.createGrant({ name: '测试', domains: [library.id] });
   const originalEvents = store.allEvents(), deviceId = store.deviceId;
@@ -48,6 +49,8 @@ test('migration preserves all revisions, attachments, drafts, local links and cr
   assert.ok(app.service.store.assetLocation(asset.id).path.startsWith(target));
   assert.equal(app.service.store.local('localFileLinks').local, path.join(target, 'fixture.txt'));
   assert.equal(app.service.store.local('localFileLinks').external, path.join(app.base, 'outside.txt'));
+  assert.equal(app.service.store.local('materialMigration').rows[0].source, path.join(target, 'fixture.txt'));
+  assert.ok(app.service.store.local('materialMigration').rows[0].target.startsWith(target));
   assert.ok(fs.existsSync(path.join(app.anchor, 'knowledge.sqlite')));
   await app.restart();
   assert.equal(app.service.store.directory, target);
@@ -98,7 +101,7 @@ test('directory plans reject overlap, nonempty targets, missing workspaces, inva
   }
   fs.mkdirSync(target); fs.writeFileSync(path.join(target, 'keep.txt'), 'do not replace');
   await assert.rejects(app.service.call('storageSchedule', { mode: 'migrate', directory: target }), /空文件夹/);
-  await assert.rejects(app.service.call('storageInspect', { mode: 'open', directory: path.join(app.base, 'missing') }), /没有 StudySelf/);
+  await assert.rejects(app.service.call('storageInspect', { mode: 'open', directory: path.join(app.base, 'missing') }), /没有 FengZai·Y/);
   assert.equal(fs.existsSync(path.join(app.base, 'missing')), false);
   app.service.store.local('workspace', { tabs: [{ dirty: true, draft: { content: 'keep me' } }] });
   await assert.rejects(app.service.call('storageSchedule', { mode: 'migrate', directory: path.join(app.base, 'empty') }), /未保存/);
@@ -180,7 +183,7 @@ test('missing selected database is an error, never a silently initialized blank 
   await app.service.call('storageSchedule', { mode: 'migrate', directory: target });
   await app.restart(); app.close();
   fs.renameSync(path.join(target, 'knowledge.sqlite'), path.join(target, 'held.sqlite'));
-  await assert.rejects(new StorageLocation(app.anchor).open(), /没有 StudySelf/);
+  await assert.rejects(new StorageLocation(app.anchor).open(), /没有 FengZai·Y/);
   assert.equal(fs.existsSync(path.join(target, 'knowledge.sqlite')), false);
 });
 

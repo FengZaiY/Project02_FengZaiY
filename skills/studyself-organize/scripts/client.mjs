@@ -5,7 +5,7 @@ import { pathToFileURL } from 'node:url';
 export async function call(method, input = {}, requestId, env = process.env) {
   const url = new URL(env.STUDYSELF_AGENT_URL || '');
   if (url.protocol !== 'http:' || url.hostname !== '127.0.0.1' || url.username || url.password || url.search || url.hash) {
-    throw new Error('STUDYSELF_AGENT_URL must be the loopback address shown by StudySelf');
+    throw new Error('STUDYSELF_AGENT_URL must be the loopback address shown by FengZai·Y');
   }
   if (!['/', '/mcp'].includes(url.pathname)) throw new Error('STUDYSELF_AGENT_URL must point to /mcp');
   if (!env.STUDYSELF_AGENT_TOKEN) throw new Error('STUDYSELF_AGENT_TOKEN is required');
@@ -40,7 +40,8 @@ export async function call(method, input = {}, requestId, env = process.env) {
     try { failure = JSON.parse(text).error; } catch {}
     throw new Error(`${failure?.code || 'INVALID'}: ${failure?.message || text}`);
   }
-  return result.structuredContent?.value ?? JSON.parse(result.content.find(item => item.type === 'text').text).value;
+  if (result.structuredContent && Object.hasOwn(result.structuredContent, 'value')) return result.structuredContent.value;
+  return JSON.parse(result.content.find(item => item.type === 'text').text);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

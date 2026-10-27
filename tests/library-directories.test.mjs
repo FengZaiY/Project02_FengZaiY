@@ -105,22 +105,22 @@ test('tampered maps and replaced directory markers do not redirect writes outsid
   assert.equal(service.state().libraries[0].data.title, '原库');
 });
 
-test('new local and Agent uploads stay in their library folders; identical content across libraries stays isolated', async t => {
+test('new local and Agent uploads use content-addressed originals with distinct cross-library identities', async t => {
   const { directory, service, store } = setup(t);
   const a = store.saveLibrary({ title: '甲库' }), b = store.saveLibrary({ title: '乙库' });
   const file = path.join(directory, 'document.txt'); fs.writeFileSync(file, 'same bytes');
   const aa = await service.call('assetImport', { path: file, domain: a.id });
   const bb = await service.call('assetImport', { path: file, domain: b.id });
   const aPath = store.assetLocation(aa.id).path, bPath = store.assetLocation(bb.id).path;
-  assert.notEqual(aPath, bPath);
-  assert.ok(aPath.startsWith(`${store.directories.ensure(a)}${path.sep}`));
-  assert.ok(bPath.startsWith(`${store.directories.ensure(b)}${path.sep}`));
+  assert.equal(aPath, bPath); assert.notEqual(aa.id, bb.id);
+  assert.equal(aa.data.domain, a.id); assert.equal(bb.data.domain, b.id);
+  assert.ok(aPath.startsWith(path.join(store.directory, '.fengzai-y', 'materials')));
   const grant = service.agents.createGrant({ name: 'test', domains: [a.id] });
   await service.agents.configure(true);
   const bytes = Buffer.from('agent-upload');
   const result = await mcpCall('assetWrite', { domain: a.id, filename: 'agent.txt', data: bytes.toString('base64'), sha256: sha(bytes), preferencesVersion: service.agents.preferences().version }, uuid(),
     { STUDYSELF_AGENT_URL: service.agents.status().mcpUrl, STUDYSELF_AGENT_TOKEN: grant.token });
-  assert.ok(store.assetLocation(result.id).path.startsWith(`${store.directories.ensure(a)}${path.sep}`));
+  assert.ok(store.assetLocation(result.id).path.startsWith(path.join(store.directory, '.fengzai-y', 'materials')));
 });
 
 test('library folders and local mappings survive selecting a new root and restarting', async t => {
@@ -137,7 +137,7 @@ test('library folders and local mappings survive selecting a new root and restar
   const moved = (await service.call('libraryDirectory', { id: library.id })).directory;
   assert.equal(moved, path.join(target, '迁移的库'));
   assert.equal(fs.readFileSync(service.store.assetLocation(asset.id).path, 'utf8'), 'keep bytes');
-  assert.ok(service.store.assetLocation(asset.id).path.startsWith(`${moved}${path.sep}`));
+  assert.ok(service.store.assetLocation(asset.id).path.startsWith(path.join(target, '.fengzai-y', 'materials')));
   const subsequent = service.store.saveLibrary({ title: '迁移后新建' });
   assert.equal(path.dirname(service.store.directories.ensure(subsequent)), target);
 });

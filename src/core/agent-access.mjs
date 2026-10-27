@@ -7,21 +7,28 @@ import { check, uuid, now, sha, canonical, atomicWrite, noSymlink, prettyError }
 import { richReferences } from './rich-content.mjs';
 import { cleanDraftRefs, validateDraftRefs } from './draft-workflow.mjs';
 import { handleMcp } from './agent-mcp.mjs';
+import { PUBLIC_PERSONAL_TYPES, PERSONAL_SCOPE, MATERIAL_SCOPE, personalReferences } from './personal-schema.mjs';
+import { PersonalManager } from './personal-manager.mjs';
+import { MaterialCenter } from './material-center.mjs';
 
 const skillRoot = fileURLToPath(new URL('../../skills/studyself-organize/', import.meta.url));
 const skillNames = ['SKILL.md', 'references/preferences.md', 'references/api.md', 'scripts/client.mjs'];
 const preferenceId = 'becb64b1-215f-46ed-b332-ae0b36613126';
-const readableTypes = ['library', 'folder', 'note', 'draft', 'source', 'annotation', 'relation', 'proposal', 'asset'];
+const readableTypes = ['library', 'folder', 'note', 'draft', 'source', 'annotation', 'relation', 'proposal', 'asset', ...PUBLIC_PERSONAL_TYPES];
 const permissions = { bootstrap: 'read', libraries: 'read', search: 'read', record: 'read', history: 'read', assetRead: 'read',
   draftCreate: 'collect', sourceCreate: 'collect', draftUpdate: 'collect', assetWrite: 'collect',
-  propose: 'propose', proposalRevise: 'propose', noteUpdate: 'edit', relationCreate: 'edit', trash: 'trash' };
+  propose: 'propose', proposalRevise: 'propose', noteUpdate: 'edit', relationCreate: 'edit', trash: 'trash', personalList: 'read', financeReport: 'read',
+  taskSave: 'edit', projectSave: 'edit', accountSave: 'edit', subscriptionSave: 'edit', moneyAccountSave: 'edit', moneyEntrySave: 'edit', budgetSave: 'edit', collectionSave: 'edit', personalBatch: 'edit', subscriptionPay: 'edit', materialUpdate: 'edit' };
 const mutations = new Set(['draftCreate', 'sourceCreate', 'draftUpdate', 'assetWrite', 'propose', 'proposalRevise', 'noteUpdate', 'relationCreate', 'trash']);
+for (const method of Object.keys(permissions)) if (permissions[method] === 'edit') mutations.add(method);
+const businessMethods = { taskSave: 'personalTask', projectSave: 'personalProject', accountSave: 'loginAccount', subscriptionSave: 'subscription', moneyAccountSave: 'moneyAccount', moneyEntrySave: 'moneyEntry', budgetSave: 'moneyBudget', collectionSave: 'materialCollection' };
 const maxAsset = 16 * 1024 * 1024;
 const allPermissions = ['read', 'collect', 'propose', 'edit', 'trash'];
 
 export class AgentAccess {
   constructor(store) {
     this.store = store;
+    this.personal = new PersonalManager(store); this.materials = new MaterialCenter(store);
     this.server = null;
     this.closed = false;
     this.error = null;
@@ -100,13 +107,14 @@ export class AgentAccess {
     return grant;
   }
   scope(grant, domain) {
+    if ([PERSONAL_SCOPE, MATERIAL_SCOPE].includes(domain)) return;
     check(this.store.libraries().some(item => item.data.domain === domain && !item.deleted && !item.conflict), '知识库已删除或存在冲突', 'FORBIDDEN');
   }
   checkData(grant, data, seen = new Set(), virtual = new Map()) {
     this.scope(grant, data.domain);
     check(!data.sensitive || grant.sensitive, '敏感资料未授权', 'FORBIDDEN');
     if (data.items) virtual = new Map(data.items.map(item => [item.targetId, { id: item.targetId, type: 'note', data: item.data, versions: [{ data: item.data }] }]));
-    const refs = [...(data.sourceIds || []), ...(data.assetIds || []), ...richReferences(data).refs, ...[data.noteId, data.from, data.to, data.folderId, data.parentId].filter(Boolean)];
+    const refs = [...(data.sourceIds || []), ...personalReferences(data), ...richReferences(data).refs, ...[data.noteId, data.from, data.to, data.folderId, data.parentId].filter(Boolean)];
     for (const id of refs) {
       if (this.store.isRetiredAI(id)) continue;
       this.readable(grant, this.store.get(id), seen, virtual);
@@ -141,6 +149,10 @@ export class AgentAccess {
   }
   dispatch(grant, { method, input = {}, requestId }) {
     try {
+      check(Object.hasOwn(permissions, method), '未授权的操作', 'FORBIDDEN');
+      const current = this.grants().find(item => item.id === grant.id && item.hash === grant.hash);
+      check(current && !current.revoked && Date.parse(current.expiresAt) > Date.now(), '授权已撤销、过期或不存在', 'UNAUTHORIZED');
+      check(!this.store.materialMigrating && !this.store.permanentDeleting, '资料维护正在进行', 'BUSY');
       check(Object.hasOwn(permissions, method) && grant.permissions.includes(permissions[method]), '未授权的操作', 'FORBIDDEN');
       check(input && typeof input === 'object' && !Array.isArray(input), 'Invalid input');
       if (!mutations.has(method)) {
@@ -155,28 +167,29 @@ export class AgentAccess {
         if (prior) {
           check(prior.digest === digest, '同一 requestId 不能用于不同内容', 'CONFLICT');
           const result = JSON.parse(prior.result);
-          this.readable(grant, this.store.get(result.id));
-          this.readable(grant, result);
+          for (const record of result.records || [result]) { this.readable(grant, this.store.get(record.id)); this.readable(grant, record); }
           this.audit(grant, method, requestId, 'REPLAY');
           return result;
         }
         const prefs = this.preferences();
         check(!prefs.conflict && input.preferencesVersion === prefs.version, '整理偏好已变化或存在冲突，请重新读取 bootstrap', 'PREFERENCES_CHANGED');
-        const result = this.mutate(grant, method, input);
+        const result = this.store.change(`Agent · ${method}`, `Agent：${grant.name}`, () => this.mutate(grant, method, input));
         this.store.db.prepare('INSERT INTO agent_requests VALUES(?,?,?,?)').run(grant.id, requestId, digest, JSON.stringify(result));
         this.audit(grant, method, requestId, 'OK');
         return result;
       });
-    } catch (error) { this.audit(grant, method, requestId, error.code || 'INVALID'); throw error; }
+    } catch (error) { if (this.grants().some(item => item.id === grant.id)) this.audit(grant, method, requestId, error.code || 'INVALID'); throw error; }
   }
   read(grant, method, input) {
     if (method === 'bootstrap') {
       const files = this.skillFiles();
-      return { protocolVersion: 1, capabilities: { mcp: { transport: 'streamable-http', toolPrefix: 'studyself_' } }, skillVersion: sha(canonical(files)), skill: files['SKILL.md'], apiReference: files['references/api.md'],
+      return { protocolVersion: 1, product: 'FengZai·Y', capabilities: { mcp: { transport: 'streamable-http', toolPrefix: 'studyself_' }, personalTypes: PUBLIC_PERSONAL_TYPES, syncFormat: 7, secrets: false }, skillVersion: sha(canonical(files)), skill: files['SKILL.md'], apiReference: files['references/api.md'],
         preferences: this.preferences(), access: { scope: 'all', domains: this.store.libraries().filter(item => !item.deleted && !item.conflict).map(item => item.data.domain),
           permissions: grant.permissions, sensitive: grant.sensitive, expiresAt: grant.expiresAt } };
     }
     if (method === 'libraries') return this.store.libraries().filter(item => this.canRead(grant, item)).map(({ id, data, heads, conflict }) => ({ id, data, heads, conflict }));
+    if (method === 'personalList') return this.personal.list(input).filter(record => this.canRead(grant, record));
+    if (method === 'financeReport') return this.personal.report(input);
     if (method === 'search') {
       if (input.domain) this.scope(grant, input.domain);
       check(!input.type || readableTypes.includes(input.type), '不支持的内容类型');
@@ -205,6 +218,16 @@ export class AgentAccess {
     return { id: record.id, filename: record.data.filename, mime: record.data.mime, sha256: record.data.sha256, data: data.toString('base64') };
   }
   mutate(grant, method, input) {
+    if (businessMethods[method]) {
+      check(Array.isArray(input.parents), '请提供基础版本；新记录使用空数组');
+      return this.personal.save({ ...input, type: businessMethods[method] }, `Agent：${grant.name}`);
+    }
+    if (method === 'personalBatch') {
+      check(input.items?.every(item => Array.isArray(item.parents)), '每项须提供基础版本');
+      return this.personal.batch(input, `Agent：${grant.name}`);
+    }
+    if (method === 'subscriptionPay') return this.personal.paySubscription(input, `Agent：${grant.name}`);
+    if (method === 'materialUpdate') return this.materials.update(input, `Agent：${grant.name}`);
     const write = (type, data, id = uuid(), parents = []) => {
       this.checkData(grant, data);
       this.store.writeRaw({ type, data, id, parents });
@@ -221,12 +244,14 @@ export class AgentAccess {
       check(bytes.toString('base64') === input.data, 'Invalid base64 attachment');
       check(bytes.length <= maxAsset && hash === input.sha256, '附件哈希或大小不符');
       const data = { title: input.filename, domain: input.domain, filename: input.filename, mime: String(input.mime || 'application/octet-stream').slice(0, 200),
+        ...(this.store.personalSystem || input.domain === MATERIAL_SCOPE ? { centralized: true, collectionIds: [], libraryDomains: input.domain === MATERIAL_SCOPE ? [] : [input.domain] } : {}),
         size: bytes.length, sha256: hash, priority: 'normal', sensitive: input.sensitive === true,
         ...(input.folderId ? { folderId: input.folderId } : {}) };
       this.checkData(grant, data);
       const target = this.store.directories.assetPath(input.domain, hash);
       noSymlink(target);
-      atomicWrite(target, bytes);
+      if (fs.existsSync(target)) check(sha(fs.readFileSync(target)) === hash, '资料目标已变化，停止写入');
+      else fs.writeFileSync(target, bytes, { flag: 'wx' });
       const record = write('asset', data);
       this.store.bindAsset(record.id, target);
       return record;
@@ -251,7 +276,7 @@ export class AgentAccess {
     check(!record.conflict && !record.deleted, '请先在系统内处理冲突或恢复资料', 'CONFLICT');
     check(Array.isArray(input.parents) && canonical([...input.parents].sort()) === canonical(record.heads), '内容已变化，请读取最新版本', 'CONFLICT');
     if (method === 'trash') {
-      check(['note', 'draft', 'source', 'annotation', 'relation', 'proposal'].includes(record.type), '不允许删除该类型');
+      check(['note', 'draft', 'source', 'annotation', 'relation', 'proposal', 'asset', ...PUBLIC_PERSONAL_TYPES].includes(record.type), '不允许删除该类型');
       this.store.writeRaw({ id: record.id, type: record.type, data: record.data, parents: input.parents, deleted: true });
       return this.store.get(record.id);
     }

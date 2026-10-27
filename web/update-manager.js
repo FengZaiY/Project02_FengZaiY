@@ -12,7 +12,7 @@ export function createUpdateUI({ api, native, esc, icon, bytes, formatTime, redr
   function refreshNotice() {
     if (!status) return;
     const nav = document.querySelector('[data-nav=settings]');
-    if (nav) { nav.classList.toggle('has-update', ['available', 'downloaded'].includes(status.phase)); nav.title = ['available', 'downloaded'].includes(status.phase) ? `StudySelf ${status.latestVersion} 可更新` : '系统设置'; }
+    if (nav) { nav.classList.toggle('has-update', ['available', 'downloaded'].includes(status.phase)); nav.title = ['available', 'downloaded'].includes(status.phase) ? `FengZai·Y ${status.latestVersion} 可更新` : '系统设置'; }
   }
   function receive(next) {
     status = next;

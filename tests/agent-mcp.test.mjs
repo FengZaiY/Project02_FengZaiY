@@ -33,6 +33,80 @@ const noteData = (library, title = '概念') => ({ title, domain: library.data.d
 const value = result => { assert.ok(!result.isError, result.content?.[0]?.text); return result.structuredContent.value; };
 const error = result => { assert.equal(result.isError, true); return JSON.parse(result.content[0].text).error; };
 
+test('all public business MCP tools complete linked local workflows through the SDK and shipped client', async t => {
+  const { service, call, write, url, grant, prefs } = await setup(t);
+  const save = async (method, data, previous) => value(await write(method, { data, parents: previous?.heads || [], ...(previous ? { id: previous.id } : {}) }));
+  const project = await save('projectSave', { title: '审计项目', status: 'active' });
+  const task = await save('taskSave', { title: '审计任务', projectId: project.id, status: 'todo', priority: 'high' });
+  const done = await save('taskSave', { ...task.data, status: 'done' }, task);
+  assert.equal(done.data.status, 'done');
+  assert.equal(value(await call('history', { id: done.id })).length, 2);
+  assert.equal(error(await write('trash', { id: project.id, parents: project.heads })).code, 'REFERENCED');
+  const account = await save('accountSave', { title: '工具账号', website: 'https://example.com', username: 'audit' });
+  const subscription = await save('subscriptionSave', { title: '工具订阅', accountId: account.id, amount: 199, currency: 'CNY', cycle: 'monthly', nextDate: '2026-10-01', status: 'active' });
+  const cash = await save('moneyAccountSave', { title: '现金', currency: 'CNY', kind: 'cash', opening: 10000, openingDate: '2026-01-01' });
+  const bank = await save('moneyAccountSave', { title: '储蓄', currency: 'CNY', kind: 'cash', opening: 0, openingDate: '2026-01-01' });
+  await save('moneyEntrySave', { title: '转账', currency: 'CNY', kind: 'transfer', amount: 500, toAmount: 500, accountId: cash.id, toAccountId: bank.id, date: '2026-10-01' });
+  const expense = await save('moneyEntrySave', { title: '材料', currency: 'CNY', kind: 'expense', amount: 300, accountId: cash.id, date: '2026-10-01', category: '学习' });
+  await save('moneyEntrySave', { title: '退款', currency: 'CNY', kind: 'refund', amount: 100, accountId: cash.id, refundOf: expense.id, date: '2026-10-02' });
+  await save('budgetSave', { title: '学习预算', month: '2026-10', category: '学习', amount: 600, currency: 'CNY' });
+  const paymentArgs = { id: subscription.id, parents: subscription.heads, accountId: cash.id, date: '2026-10-01' }, request = uuid();
+  const payment = value(await write('subscriptionPay', paymentArgs, request));
+  assert.equal(value(await write('subscriptionPay', paymentArgs, request)).id, payment.id);
+  const report = value(await call('financeReport', { month: '2026-10' }));
+  assert.equal(report.complete, true); assert.equal(report.expense, 399); assert.equal(report.netAssets, 9601); assert.equal(report.budgets[0].remaining, 400);
+  const collection = await save('collectionSave', { title: '材料集合' }), bytes = Buffer.from('MCP isolated original');
+  const asset = value(await write('assetWrite', { domain: '__materials__', filename: 'audit.txt', mime: 'text/plain', data: bytes.toString('base64'), sha256: sha(bytes) }));
+  const updated = value(await write('materialUpdate', { id: asset.id, parents: asset.heads, changes: { title: '审计资料', collectionIds: [collection.id] } }));
+  await save('taskSave', { ...done.data, assetIds: [asset.id] }, done);
+  assert.equal(value(await call('assetRead', { id: asset.id })).data, bytes.toString('base64'));
+  assert.deepEqual(updated.data.collectionIds, [collection.id]);
+  assert.equal(error(await write('trash', { id: asset.id, parents: updated.heads })).code, 'ASSET_REFERENCED');
+  const env = { STUDYSELF_AGENT_URL: url, STUDYSELF_AGENT_TOKEN: grant.token };
+  const viaSkill = await httpCall('accountSave', { preferencesVersion: prefs, parents: [], data: { title: 'Skill 脚本账号' } }, uuid(), env);
+  assert.equal((await httpCall('record', { id: viaSkill.id }, undefined, env)).data.title, 'Skill 脚本账号');
+  assert.equal(value(await write('trash', { id: viaSkill.id, parents: viaSkill.heads })).deleted, true);
+  assert.ok(value(await call('personalList', { type: 'loginAccount', trash: true })).some(r => r.id === viaSkill.id));
+  const prepared = await service.passwordVault.setup({ password: 'mcp-audit-master-password' });
+  service.passwordVault.confirmSetup({ token: prepared.token, confirmed: true });
+  const secret = service.passwordVault.save({ accountId: account.id, value: { password: 'mcp-audit-secret-value' } });
+  assert.equal(error(await call('record', { id: secret.id })).code, 'FORBIDDEN');
+  assert.equal(value(await call('search', { query: 'mcp-audit-secret-value' })).total, 0);
+  assert.ok(!JSON.stringify(value(await call('personalList'))).includes('mcp-audit-secret-value'));
+  assert.ok(!JSON.stringify(value(await call('financeReport'))).includes(service.store.directory));
+  service.agents.revoke(grant.id);
+  await assert.rejects(httpCall('personalList', {}, undefined, env));
+});
+
+test('shipped Skill client reads standard text-only MCP tool results', async t => {
+  const expected = { records: [{ id: uuid(), title: '文本结果' }] };
+  t.mock.method(globalThis, 'fetch', async (_url, request) => {
+    const input = JSON.parse(request.body);
+    if (input.method === 'notifications/initialized') return new Response(null, { status: 202 });
+    const result = input.method === 'initialize' ? { protocolVersion: '2025-11-25' }
+      : input.method === 'tools/list' ? { tools: [{ name: 'studyself_personal_list' }] }
+        : { content: [{ type: 'text', text: JSON.stringify(expected) }] };
+    return Response.json({ jsonrpc: '2.0', id: input.id, result });
+  });
+  assert.deepEqual(await httpCall('personalList', {}, undefined, { STUDYSELF_AGENT_URL: 'http://127.0.0.1:12345/mcp', STUDYSELF_AGENT_TOKEN: 'test' }), expected);
+});
+
+test('personal MCP tools atomically write nonsecret records, replay and reject vault fields', async t => {
+  const { service, call, write } = await setup(t), projectId = uuid();
+  const items = [{ type: 'personalProject', id: projectId, parents: [], data: { title: 'MCP 项目', status: 'active' } },
+    { type: 'personalTask', parents: [], data: { title: 'MCP 任务', projectId, status: 'todo', priority: 'normal' } }];
+  const requestId = uuid(), batch = value(await write('personalBatch', { items }, requestId));
+  assert.equal(value(await write('personalBatch', { items }, requestId)).records[1].id, batch.records[1].id);
+  assert.equal(value(await call('personalList', { type: 'personalTask' })).length, 1);
+  assert.equal((await write('accountSave', { parents: [], data: { title: '秘密不得提交', password: 'forbidden' } })).isError, true);
+  assert.equal(service.store.list({ type: 'loginAccount' }).length, 0);
+  assert.equal((await call('personalList', { type: 'vaultSecret' })).isError, true);
+  assert.equal((await call('vaultUnlock', { password: 'forbidden' })).isError, true);
+  const before = service.store.allEvents().length;
+  assert.equal((await write('personalBatch', { items: [{ type: 'loginAccount', parents: [], data: { title: '应回滚' } }, { type: 'personalTask', parents: [], data: { title: '缺少状态' } }] })).isError, true);
+  assert.equal(service.store.allEvents().length, before);
+});
+
 test('MCP SDK handshake, scoped discovery, bootstrap and collection-to-reviewed-proposal', async t => {
   const { service, library, client, call, write, grant } = await setup(t);
   assert.equal(client.getServerVersion().name, 'studyself');

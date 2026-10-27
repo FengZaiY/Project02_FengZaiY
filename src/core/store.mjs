@@ -16,6 +16,8 @@ import { noteTree, hasNoteChildren, validateNotePlacement, validateProposalHiera
 import { compareNoteOrder, orderBetween, validNoteOrder } from './note-order.mjs';
 import { uuid, now, sha, canonical, check, isId, isHash, atomicWrite, encrypt, decrypt } from './util.mjs';
 import { persistentRevisionData, revisionChecksum } from './revision-integrity.mjs';
+import { PERSONAL_TYPES, MATERIAL_SCOPE, cleanPersonal } from './personal-schema.mjs';
+import { validatePersonalWrite } from './personal-records.mjs';
 const GLOBAL_SCOPE = '__all_libraries__';
 
 const COMMON = ['title', 'domain', 'tags', 'sensitive'];
@@ -28,7 +30,7 @@ const FIELDS = {
   relation: [...COMMON, 'from', 'to', 'description'],
   proposal: [...COMMON, 'items', 'content'],
   workspace: [...COMMON, 'tabs', 'selectedTab', 'originDevice'],
-  asset: [...COMMON, 'filename', 'size', 'sha256', 'mime', 'priority'],
+  asset: [...COMMON, 'filename', 'size', 'sha256', 'mime', 'priority', 'collectionIds', 'libraryDomains', 'centralized'],
   library: [...COMMON, 'description'],
   folder: [...COMMON, 'description', 'parentId'],
   agentPreferences: [...COMMON, 'content'],
@@ -42,6 +44,7 @@ for (const type of placedTypes) FIELDS[type].push('folderId');
 
 export function cleanData(type, data, { legacyPresentation = false } = {}) {
   check(data && typeof data === 'object' && !Array.isArray(data), 'Invalid record content');
+  if (PERSONAL_TYPES.includes(type)) return cleanPersonal(type, data);
   if (type === 'workspace' && !legacyPresentation) check(canonical(withoutPresentation(type, data)) === canonical(data),
     '交互阅读已移除，请刷新工作区', 'RETIRED');
   const result = Object.fromEntries(Object.entries(data).filter(([k]) => FIELDS[type]?.includes(k)));
@@ -74,6 +77,9 @@ export function cleanData(type, data, { legacyPresentation = false } = {}) {
     if (result[field]) check(Array.isArray(result[field]) && result[field].every(isId), 'Invalid attachment/source IDs');
   }
   if (type === 'asset') {
+    check(result.collectionIds === undefined || Array.isArray(result.collectionIds) && result.collectionIds.length <= 200 && result.collectionIds.every(isId), '资料集合无效');
+    check(result.libraryDomains === undefined || Array.isArray(result.libraryDomains) && result.libraryDomains.length <= 200 && result.libraryDomains.every(s => typeof s === 'string' && s.length <= 100), '资料知识库关联无效');
+    check(result.centralized === undefined || result.centralized === true, '资料中心标识无效');
     check(isHash(result.sha256) && Number.isSafeInteger(result.size) && result.size >= 0, 'Invalid attachment metadata');
     check(typeof result.filename === 'string' && result.filename.length <= 255 && !/[\\/\0]/.test(result.filename), 'Invalid attachment name');
     check(['normal', 'large'].includes(result.priority), 'Invalid attachment priority');
@@ -206,9 +212,28 @@ export class Store {
   setSecret(key, value) { this.local(`secret:${key}`, this.vault.seal(value)); }
   secret(key) { const value = this.local(`secret:${key}`); return value ? this.vault.open(value) : null; }
   transaction(fn) {
-    this.db.exec('BEGIN IMMEDIATE');
-    try { const result = fn(); this.db.exec('COMMIT'); return result; }
-    catch (error) { this.db.exec('ROLLBACK'); throw error; }
+    const depth = this.transactionDepth || 0, savepoint = `nested_${depth}`;
+    const changes = this.changeContext && new Map([...this.changeContext].map(([id, entry]) => [id, structuredClone(entry)]));
+    this.db.exec(depth ? `SAVEPOINT ${savepoint}` : 'BEGIN IMMEDIATE');
+    this.transactionDepth = depth + 1;
+    try { const result = fn(); check(!result?.then, '数据库事务不能跨越异步操作'); this.db.exec(depth ? `RELEASE ${savepoint}` : 'COMMIT'); return result; }
+    catch (error) {
+      this.db.exec(depth ? `ROLLBACK TO ${savepoint}; RELEASE ${savepoint}` : 'ROLLBACK');
+      if (changes && this.changeContext) { this.changeContext.clear(); for (const [id, entry] of changes) this.changeContext.set(id, entry); }
+      throw error;
+    } finally { this.transactionDepth = depth; }
+  }
+  change(title, actor, fn, reversalOf) {
+    if (this.changeContext) return this.transaction(fn);
+    return this.transaction(() => {
+      const entries = new Map(); this.changeContext = entries;
+      try {
+        const result = fn(); check(!result?.then, '修改批次不能跨越异步操作');
+        this.changeContext = null;
+        if (entries.size) this.writeRaw({ type: 'changeBatch', data: { title, actor, entries: [...entries.values()], ...(reversalOf ? { reversalOf } : {}) } });
+        return result;
+      } finally { this.changeContext = null; }
+    });
   }
   event(id) { const row = this.db.prepare('SELECT json FROM events WHERE id=?').get(id); return row && JSON.parse(row.json); }
   headIds(id) { return this.db.prepare('SELECT event_id FROM heads WHERE entity_id=? ORDER BY event_id').all(id).map(row => row.event_id); }
@@ -323,8 +348,13 @@ export class Store {
     }
     if (deleted && type === 'note') check(!hasNoteChildren(this, id), '此笔记仍有下级笔记（含回收站/待确认方案），请先调整，不会连带删除');
     if (type === 'asset') validateAssetChange(this, id, content.data, deleted);
+    validatePersonalWrite(this, type, content.data, id, deleted);
     const event = { ...content, hash: sha(canonical(content)) };
     validateEvent(event);
+    if (this.changeContext && type !== 'changeBatch') {
+      const prior = this.changeContext.get(id);
+      this.changeContext.set(id, { id, before: prior?.before || this.headIds(id), after: [event.id] });
+    }
     this.insert(event, false);
     this.setMeta('sequence', sequence);
     return event;
@@ -384,7 +414,7 @@ export class Store {
     for (const record of records.filter(record => CONTENT_TYPES.includes(record.type))) {
       if (record.type === 'folder' && noteIds.has(legacyNoteId(record.id))) continue;
       for (const scope of new Set(record.versions.map(version => version.data.domain))) {
-        if (scope === GLOBAL_SCOPE) continue;
+        if (scope === GLOBAL_SCOPE || scope === MATERIAL_SCOPE) continue;
         const count = scopes.get(scope) || { active: 0, total: 0 };
         count.total++;
         if (!record.deleted) count.active++;

@@ -99,9 +99,9 @@ try {
   await page.locator('.tiptap').press('Control+Shift+z'); await saved();
   await until(() => !app.service.localHierarchy.status().pending && !app.service.localHierarchy.status().busy);
   const movedPath = store.assetLocation(asset.id).path;
-  assert.ok(movedPath.includes(parent.id) && movedPath.includes(child.id));
+  assert.equal(movedPath, oldPath, 'Central originals keep their stable path when note hierarchy changes');
   assert.equal(await hashFile(movedPath), asset.data.sha256);
-  assert.equal(fs.existsSync(oldPath), false);
+  assert.equal(fs.existsSync(oldPath), true);
   assert.equal(fs.existsSync(extra), true);
   assert.equal(fs.existsSync(original), true);
   assert.equal(store.assetLocation(shared.id).path, sharedPath);
@@ -115,7 +115,7 @@ try {
   await saved(); await sameEditor();
   await until(() => store.assetLocation(asset.id).path === oldPath && !app.service.localHierarchy.status().pending);
   assert.equal(store.get(leaf.id).data.parentNoteId, child.id);
-  assert.equal(fs.existsSync(movedPath), false);
+  assert.equal(fs.existsSync(movedPath), true);
   // Invalid targets, Escape and forged drag payloads do not create history.
   const historyBefore = store.history(child.id).length;
   await startDrag(child.id); await hover(node(leaf.id));
