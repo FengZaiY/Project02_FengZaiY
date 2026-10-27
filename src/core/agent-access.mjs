@@ -11,7 +11,7 @@ import { PUBLIC_PERSONAL_TYPES, PERSONAL_SCOPE, MATERIAL_SCOPE, personalReferenc
 import { PersonalManager } from './personal-manager.mjs';
 import { MaterialCenter } from './material-center.mjs';
 
-const skillRoot = fileURLToPath(new URL('../../skills/studyself-organize/', import.meta.url));
+const skillRoot = fileURLToPath(new URL('../../skills/fengzaiy/', import.meta.url));
 const skillNames = ['SKILL.md', 'references/preferences.md', 'references/api.md', 'scripts/client.mjs'];
 const preferenceId = 'becb64b1-215f-46ed-b332-ae0b36613126';
 const readableTypes = ['library', 'folder', 'note', 'draft', 'source', 'annotation', 'relation', 'proposal', 'asset', ...PUBLIC_PERSONAL_TYPES];
@@ -183,7 +183,7 @@ export class AgentAccess {
   read(grant, method, input) {
     if (method === 'bootstrap') {
       const files = this.skillFiles();
-      return { protocolVersion: 1, product: 'FengZai·Y', capabilities: { mcp: { transport: 'streamable-http', toolPrefix: 'studyself_' }, personalTypes: PUBLIC_PERSONAL_TYPES, syncFormat: 7, secrets: false }, skillVersion: sha(canonical(files)), skill: files['SKILL.md'], apiReference: files['references/api.md'],
+      return { protocolVersion: 1, product: 'FengZaiY', capabilities: { mcp: { transport: 'streamable-http', toolPrefix: 'FengZaiY_' }, personalTypes: PUBLIC_PERSONAL_TYPES, syncFormat: 8, secrets: false }, skillVersion: sha(canonical(files)), skill: files['SKILL.md'], apiReference: files['references/api.md'],
         preferences: this.preferences(), access: { scope: 'all', domains: this.store.libraries().filter(item => !item.deleted && !item.conflict).map(item => item.data.domain),
           permissions: grant.permissions, sensitive: grant.sensitive, expiresAt: grant.expiresAt } };
     }

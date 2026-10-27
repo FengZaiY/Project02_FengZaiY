@@ -77,7 +77,7 @@ try {
     await page.locator('.attachment-drop-marker').waitFor();
   };
   const drag = async (id, target) => { await beginDrag(id, target); await page.mouse.up(); };
-  const link = body.locator(`a[href="studyself://asset/${text.id}"]`);
+  const link = body.locator(`a[href="fengzaiy://asset/${text.id}"]`);
   await source(text.id).click();
   await page.locator('#source-preview .text-preview').waitFor();
   assert.match(await page.locator('#source-preview').innerText(), /原附件中的讲义内容/);
@@ -117,14 +117,14 @@ try {
   assert.equal(await html(), beforeCancel);
   await body.evaluate(el => {
     const transfer = new DataTransfer();
-    transfer.setData('application/x-studyself-attachment', 'forged');
+    transfer.setData('application/x-fengzaiy-attachment', 'forged');
     transfer.setData('text/html', '<p>伪造拖拽内容</p>');
     const rect = el.getBoundingClientRect();
     el.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: transfer, clientX: rect.x + 5, clientY: rect.y + 5 }));
   });
   assert.equal(await html(), beforeCancel, 'External forged attachment payload must not insert anything');
   await drag(text.id);
-  await page.waitForFunction(id => document.querySelectorAll(`.tiptap a[href="studyself://asset/${id}"]`).length === 2, text.id);
+  await page.waitForFunction(id => document.querySelectorAll(`.tiptap a[href="fengzaiy://asset/${id}"]`).length === 2, text.id);
   await drag(image.id);
   await page.waitForFunction(() => document.querySelector('.tiptap img')?.naturalWidth === 320);
   await drag(video.id);
@@ -161,7 +161,7 @@ try {
   await drag(text.id); await started;
   await body.press('Control+Home'); await page.keyboard.insertText('校验期间的新输入');
   release();
-  await page.waitForFunction(id => document.querySelectorAll(`.tiptap a[href="studyself://asset/${id}"]`).length === 3, text.id);
+  await page.waitForFunction(id => document.querySelectorAll(`.tiptap a[href="fengzaiy://asset/${id}"]`).length === 3, text.id);
   await saved(); await page.unroute('**/api'); await sameEditor();
   assert.match(store.get(note.id).data.content, /校验期间的新输入/);
   assert.match(await body.innerText(), /校验期间的新输入第一段文字保持不变[\s\S]*课程讲义.txt[\s\S]*第二段用于插入附件/);

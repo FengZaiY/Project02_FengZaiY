@@ -20,7 +20,7 @@ try {
   };
   const a = await create('课程讲义.txt'), b = await create('补充资料.txt'), inline = await create('正文资料.txt'), outside = await create('其他库私有资料.txt', other.id);
   const note = store.write({ type: draftMode ? 'draft' : 'note', data: { title: '原附件管理', domain: library.id, assetIds: [a.id],
-    format: 'html', content: `<p>我的学习笔记</p><p><a href="studyself://asset/${inline.id}">正文引用讲义</a></p>` } });
+    format: 'html', content: `<p>我的学习笔记</p><p><a href="fengzaiy://asset/${inline.id}">正文引用讲义</a></p>` } });
   const shared = store.write({ type: 'note', data: { title: '另一篇笔记', domain: library.id, assetIds: [a.id] } });
   try { browser = await chromium.launch({ headless: true }); }
   catch { browser = await chromium.launch({ channel: 'msedge', headless: true }); }
@@ -103,7 +103,7 @@ try {
   await saved(); await page.unroute('**/api');
   assert.deepEqual(store.get(note.id).data.assetIds, [inline.id, b.id]);
   assert.match(store.get(note.id).data.content, /保存期间继续输入/);
-  assert.match(store.get(note.id).data.content, new RegExp(`studyself://asset/${inline.id}`));
+  assert.match(store.get(note.id).data.content, new RegExp(`fengzaiy://asset/${inline.id}`));
   assert.deepEqual(store.get(shared.id).heads, shared.heads);
   assert.ok(fs.existsSync(store.assetLocation(a.id).path));
   assert.equal(store.get(a.id).deleted, false);

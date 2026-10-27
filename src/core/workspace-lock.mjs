@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { check, noSymlink, uuid } from './util.mjs';
+import { legacyNames } from './legacy-names.mjs';
 
 export function lockFile(file) {
   noSymlink(file);
@@ -31,4 +32,12 @@ export function lockFile(file) {
   throw new Error('无法取得工作区锁');
 }
 
-export const workspaceLock = directory => lockFile(path.join(directory, '.studyself-lock.json'));
+// Hold the legacy lock too, so an older executable cannot open the same SQLite database.
+export function compatibleLock(directory, current, previous) {
+  const releasePrevious = lockFile(path.join(directory, previous));
+  let releaseCurrent;
+  try { releaseCurrent = lockFile(path.join(directory, current)); }
+  catch (error) { releasePrevious(); throw error; }
+  return () => { try { releaseCurrent(); } finally { releasePrevious(); } };
+}
+export const workspaceLock = directory => compatibleLock(directory, '.fengzaiy-lock.json', legacyNames.workspaceLock);

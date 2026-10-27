@@ -26,15 +26,17 @@ $env:PORT = '4318'
 npm run dev
 ```
 
-浏览器预览默认数据目录为 `.local/preview`。`STUDYSELF_DATA` 可设置独立测试数据目录；不要指向运行中的正式桌面数据库。
+浏览器预览默认数据目录为 `.local/preview`。`FENGZAIY_DATA` 可设置独立测试数据目录；不要指向运行中的正式桌面数据库。
 
 Windows 预览的目录按钮通过已鉴权的界面接口调用系统文件夹窗口，使用系统自带 Windows PowerShell 的固定 STA 脚本，不修改执行策略或接受用户命令。需要交互式 Windows 桌面；非 Windows 环境显示不支持提示。根目录入口先选文件夹，再检查与确认。`tests/directory-picker.test.mjs` 覆盖取消、失败、并发、鉴权及关闭清理；`test:storage` 用隔离选择器验证界面，不弹出真实窗口。原生窗口外观与真实手动选择应单独核对。
 
-本地存储设置以初始启动目录为配置锚点，在相邻的 `<初始目录>.storage.json` 保存当前路径和待生效变更，不写进共享知识版本。桌面 `--data-dir=<目录>` 与预览 `STUDYSELF_DATA` 均选择锚点；设置迁移后继续用相同参数启动，自动打开新路径。默认桌面锚点为 Electron userData 下的 `workspace`。不要把锚点配置当作同步文件，也不要手工复制运行中的 SQLite。
+本地存储设置以初始启动目录为配置锚点，在相邻的 `<初始目录>.storage.json` 保存当前路径和待生效变更，不写进共享知识版本。桌面 `--data-dir=<目录>` 与预览 `FENGZAIY_DATA` 均选择锚点；设置迁移后继续用相同参数启动，自动打开新路径。默认桌面锚点为 Electron userData 下的 `workspace`。不要把锚点配置当作同步文件，也不要手工复制运行中的 SQLite。
 
-目录切换仅在重启时执行。已有启动配置对应的数据库不存在、损坏或凭据环境不匹配时明确失败，不初始化空库。迁移失败目标留有 `.studyself-incomplete.json` 标记，不可打开；源目录保留，重新选择另一个空目录重试。不要在未核对位置和内容前删除任何失败目录。老版本不识别新占用锁，迁移前必须关闭旧版本。
+目录切换仅在重启时执行。已有启动配置对应的数据库不存在、损坏或凭据环境不匹配时明确失败，不初始化空库。迁移失败目标留有 `.fengzaiy-incomplete.json` 标记，不可打开；源目录保留，重新选择另一个空目录重试。不要在未核对位置和内容前删除任何失败目录。老版本不识别新占用锁，迁移前必须关闭旧版本。
 
 ## 验证矩阵
+
+命名兼容专项：`node --test tests/branding.test.mjs tests/naming-format.test.mjs`，构建后运行 `node scripts/test-naming-ui.mjs` 和 `node scripts/test-naming-startup.mjs`。覆盖旧链接与身份、新 MCP 配置/Skill 导出、旧安装迁移提示和新启动变量优先级；格式专项只做单工作区清单预检，不替代多电脑同步验收。证据见 [命名验证](docs/verification-fengzaiy-naming-2026-10-27.md)。
 
 用户明确排除多电脑同步时，使用 `node scripts/test-local-audit.mjs core` 选择本机用例，不直接运行含同步的 `npm test` 或 `test:ui`；检查生成的 `artifacts/local-audit/core-selection.json`，新增参数化测试须补充选择。这个选择器只服务限定范围审查，不能替代同步改动所需的完整验证。其他本机界面和源码桌面脚本按下表选择，测试须使用隔离目录。
 
@@ -105,9 +107,9 @@ MCP 适配使用生产依赖 `@modelcontextprotocol/sdk` 和 `zod`，是唯一�
 
 以下安装包命令仅适用于用户明确指定的打包任务。
 
-`npm run dist` 生成 `release/StudySelf-<版本>-Setup.exe`。`npm run test:packaged` 验证 `release/win-unpacked/StudySelf.exe`，不等于验证安装向导、卸载或跨版本升级。
+`npm run dist` 生成 `release/FengZaiY-<版本>-Setup.exe`。`npm run test:packaged` 验证 `release/win-unpacked/FengZaiY.exe`，不等于验证安装向导、卸载或跨版本升级。
 
-在线更新源码已接入 electron-updater，默认共用 `FengZaiY/Project02_StudySelf` 的公开 GitHub Releases（package metadata 保存来源）。独立打包任务可通过 `STUDYSELF_UPDATE_GITHUB=owner/repo` 或 `STUDYSELF_UPDATE_URL=https://.../` 二选一覆盖来源，`scripts/release-config.mjs` 同时生成发布配置和安装包内来源。`npm run dist` 使用 `--publish never`，只构建、不上传。详细流程见 [在线发布说明](docs/online-updates.md)。版本号涉及 `package.json`、锁文件、业务状态和界面显示；发布时搜索所有版本引用，避免只改其中一个。交付说明保留实际签名状态及本轮测试范围，不把百度产品能力验证列为交付门槛。
+在线更新源码已接入 electron-updater，默认共用 `FengZaiY/Project02_StudySelf` 的公开 GitHub Releases（package metadata 保存来源）。独立打包任务可通过 `FENGZAIY_UPDATE_GITHUB=owner/repo` 或 `FENGZAIY_UPDATE_URL=https://.../` 二选一覆盖来源，`scripts/release-config.mjs` 同时生成发布配置和安装包内来源。`npm run dist` 使用 `--publish never`，只构建、不上传。详细流程见 [在线发布说明](docs/online-updates.md)。版本号涉及 `package.json`、锁文件、业务状态和界面显示；发布时搜索所有版本引用，避免只改其中一个。交付说明保留实际签名状态及本轮测试范围，不把百度产品能力验证列为交付门槛。
 
 日常修改后保留旧安装包，不把它宣称为包含最新源码。进入独立打包任务时，再基于指定源码构建并验证新安装包，不能沿用旧产物冒充本次交付。
 
@@ -125,6 +127,6 @@ MCP 适配使用生产依赖 `@modelcontextprotocol/sdk` 和 `zod`，是唯一�
 
 复杂任务使用 [计划约定](docs/plans/README.md)，重要架构变化使用 [决策约定](docs/decisions/README.md)。完成后更新相关状态和验证依据，不自动把“计划”改写成“已实现”。
 
-Skill 源码位于 `skills/studyself-organize/`，随应用发布；从“系统设置”页导出含当前偏好快照的 ZIP，解压后将 `studyself-organize` 目录交给目标 Agent 的 Skill 管理入口。“系统设置”维护整理偏好，“外部 Agent”管理 MCP、凭证和访问记录。宿主使用 MCP 配置；明确采用 Node 脚本时使用 `STUDYSELF_AGENT_URL`（MCP 地址）与 `STUDYSELF_AGENT_TOKEN` 环境变量。不得把真实凭证写进 Skill、仓库、示例或测试报告。
+Skill 源码位于 `skills/fengzaiy/`，随应用发布；从“系统设置”页导出含当前偏好快照的 ZIP，解压后将 `fengzaiy` 目录交给目标 Agent 的 Skill 管理入口。“系统设置”维护整理偏好，“外部 Agent”管理 MCP、凭证和访问记录。宿主使用 MCP 配置；明确采用 Node 脚本时使用 `FENGZAIY_AGENT_URL`（MCP 地址）与 `FENGZAIY_AGENT_TOKEN` 环境变量。不得把真实凭证写进 Skill、仓库、示例或测试报告。
 
 接口和偏好变化必须同步更新 Skill。`bootstrap` 在运行时提供最新版指引；用户在“安装更新”关联的本机位置可检查后确认或自动更新，未关联位置不改写。运行 `node --test tests/skill-installations.test.mjs` 与 `npm run test:skills` 验证文件保护、失败/重启恢复、锁、过期预览、模式、目录弹窗及布局；测试只关联隔离目录，禁止使用真实外部 Agent 安装。内置模型/讨论专项脚本已退役，不能把历史测试结果当作当前功能。

@@ -2,7 +2,7 @@ import { _electron as electron } from 'playwright';
 import electronPath from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
-import { call as mcpCall } from '../skills/studyself-organize/scripts/client.mjs';
+import { call as mcpCall } from '../skills/fengzaiy/scripts/client.mjs';
 import assert from 'node:assert/strict';
 import { docxFixture } from './fixtures/docx.mjs';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -24,7 +24,7 @@ const application = await electron.launch({
 try {
   const page = await application.firstWindow();
   const errors = [];
-  page.on('requestfailed', request => { if (request.url().startsWith('studyself-media:')) console.error('Native media request failed:', request.failure()); });
+  page.on('requestfailed', request => { if (request.url().startsWith('fengzaiy-media:')) console.error('Native media request failed:', request.failure()); });
   page.on('pageerror', error => errors.push(error.message));
   await page.waitForFunction(() => !!window.desktop && !!document.querySelector('[data-nav="notes"]'));
   assert.match(await page.evaluate(() => navigator.userAgent), /FengZaiY\//);
@@ -43,7 +43,7 @@ try {
     await page.locator('[data-skill-tab=installs]').click();
     await page.locator('[data-install-add]').waitFor();
     const skill = await page.evaluate(() => window.desktop.call('agentSkill'));
-    const installed = path.join(fs.mkdtempSync(path.join(root, 'skill-')), 'studyself-organize');
+    const installed = path.join(fs.mkdtempSync(path.join(root, 'skill-')), 'FengZaiY');
     for (const [name, content] of Object.entries(skillExportFiles(skill))) {
       fs.mkdirSync(path.dirname(path.join(installed, name)), { recursive: true }); fs.writeFileSync(path.join(installed, name), content);
     }
@@ -82,14 +82,14 @@ try {
   await assert.rejects(page.evaluate(() => window.desktop.call('backupCreate')), /Unsupported/);
   assert.equal(data.access.enabled, true);
   assert.ok(!JSON.stringify(data.access).includes(data.token));
-  const record = await mcpCall('record', { id: data.note.id }, undefined, { STUDYSELF_AGENT_URL: data.access.mcpUrl, STUDYSELF_AGENT_TOKEN: data.token });
+  const record = await mcpCall('record', { id: data.note.id }, undefined, { FENGZAIY_AGENT_URL: data.access.mcpUrl, FENGZAIY_AGENT_TOKEN: data.token });
   assert.equal(record.data.title, '桌面启动验证');
   if (!packaged) {
-    const mcp = new Client({ name: 'studyself-desktop-test', version: '1.0.0' });
+    const mcp = new Client({ name: 'fengzaiy-desktop-test', version: '1.0.0' });
     try {
       await mcp.connect(new StreamableHTTPClientTransport(new URL(data.access.mcpUrl), { requestInit: { headers: { Authorization: `Bearer ${data.token}` } } }));
-      assert.ok((await mcp.listTools()).tools.some(tool => tool.name === 'studyself_propose'));
-      const result = await mcp.callTool({ name: 'studyself_record', arguments: { id: data.note.id } });
+      assert.ok((await mcp.listTools()).tools.some(tool => tool.name === 'FengZaiY_propose'));
+      const result = await mcp.callTool({ name: 'FengZaiY_record', arguments: { id: data.note.id } });
       assert.equal(result.structuredContent.value.data.title, '桌面启动验证');
     } finally { await mcp.close(); }
     await page.locator('[data-nav="agents"]').click();
@@ -136,7 +136,7 @@ try {
       try { const data = await window.desktop.call('assetContent', { id }); preview = { mime: data.mime, bytes: data.data?.length }; } catch (e) { preview = e.message; }
       return { src: img?.src, width: img?.naturalWidth, detail, preview };
     }, asset.id));
-    console.error('Native media response:', await application.evaluate(async ({ net }, id) => { const response = await net.fetch(`studyself-media://asset/${id}`); return { status: response.status, bytes: (await response.arrayBuffer()).byteLength }; }, asset.id));
+    console.error('Native media response:', await application.evaluate(async ({ net }, id) => { const response = await net.fetch(`fengzaiy-media://asset/${id}`); return { status: response.status, bytes: (await response.arrayBuffer()).byteLength }; }, asset.id));
     throw error;
   });
   await page.locator('#file-input').setInputFiles(imagePath);
@@ -171,42 +171,42 @@ try {
   assert.equal(pasted.data.mime, 'image/png');
   assert.equal(pasted.data.sha256, asset.data.sha256);
   await application.evaluate(({ dialog, shell }, file) => {
-    globalThis.studyselfTestDialogs = { choose: dialog.showOpenDialog, message: dialog.showMessageBox, open: shell.openPath };
+    globalThis.fengzaiyTestDialogs = { choose: dialog.showOpenDialog, message: dialog.showMessageBox, open: shell.openPath };
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [file] });
     dialog.showMessageBox = async () => ({ response: 1 });
-    shell.openPath = async value => { globalThis.studyselfTestOpened = value; return ''; };
+    shell.openPath = async value => { globalThis.fengzaiyTestOpened = value; return ''; };
   }, imagePath);
   const localLink = await page.evaluate(() => window.desktop.call('bindLocalFile'));
   assert.equal(localLink.name, 'native-image.png'); assert.ok(!JSON.stringify(localLink).includes(profile));
   await page.evaluate(id => window.desktop.call('openLocalFile', { id }), localLink.id);
-  assert.equal(await application.evaluate(() => globalThis.studyselfTestOpened), imagePath);
+  assert.equal(await application.evaluate(() => globalThis.fengzaiyTestOpened), imagePath);
   const libraryDirectory = await page.evaluate(async () => {
     const library = (await window.desktop.call('state')).libraries[0];
     await window.desktop.call('libraryOpenFolder', { id: library.id });
     return library.localDirectory;
   });
   assert.equal(path.dirname(libraryDirectory), profile);
-  assert.equal(await application.evaluate(() => globalThis.studyselfTestOpened), libraryDirectory);
-  await application.evaluate(({ dialog }) => { globalThis.studyselfTestOpened = null; dialog.showMessageBox = async () => ({ response: 0 }); });
+  assert.equal(await application.evaluate(() => globalThis.fengzaiyTestOpened), libraryDirectory);
+  await application.evaluate(({ dialog }) => { globalThis.fengzaiyTestOpened = null; dialog.showMessageBox = async () => ({ response: 0 }); });
   assert.equal(await page.evaluate(id => window.desktop.call('openLocalFile', { id }), localLink.id), false);
-  assert.equal(await application.evaluate(() => globalThis.studyselfTestOpened), null);
+  assert.equal(await application.evaluate(() => globalThis.fengzaiyTestOpened), null);
   await application.evaluate(({ dialog }, file) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [file] }); }, path.join(profile, 'not-allowed.exe'));
   await assert.rejects(page.evaluate(() => window.desktop.call('bindLocalFile')), /只允许本机/);
   await assert.rejects(page.evaluate(() => window.desktop.call('openLocalFile', { id: '11111111-1111-1111-1111-111111111111' })), /尚未绑定/);
-  await application.evaluate(({ dialog, shell }) => { const old = globalThis.studyselfTestDialogs; dialog.showOpenDialog = old.choose; dialog.showMessageBox = old.message; shell.openPath = old.open; });
+  await application.evaluate(({ dialog, shell }) => { const old = globalThis.fengzaiyTestDialogs; dialog.showOpenDialog = old.choose; dialog.showMessageBox = old.message; shell.openPath = old.open; });
   await page.locator('[data-nav="assets"]').click();
   const nativeThumbnail = page.locator(`[data-material-row="${asset.id}"] .material-thumbnail`);
   await nativeThumbnail.scrollIntoViewIfNeeded();
   await page.waitForFunction(id => document.querySelector(`[data-material-row="${id}"] .material-thumbnail`)?.dataset.thumbnailState === 'ready', asset.id);
   assert.equal(await nativeThumbnail.locator('img').evaluate(el => el.naturalWidth), 240);
-  assert.ok((await nativeThumbnail.locator('img').getAttribute('src')).startsWith('studyself-media://asset/'));
+  assert.ok((await nativeThumbnail.locator('img').getAttribute('src')).startsWith('fengzaiy-media://asset/'));
   await page.screenshot({ path: path.join(root, 'asset-thumbnails-native.png') });
   const wordPath = path.join(profile, 'desktop-preview.docx');
   fs.writeFileSync(wordPath, await docxFixture({ image: Buffer.from(imageData, 'base64') }));
   const wordNote = await page.evaluate(async file => {
     const asset = await window.desktop.call('assetImport', { path: file, domain: 'AI' });
     return window.desktop.call('save', { type: 'note', data: { title: '桌面 Word 预览', domain: 'AI', format: 'html',
-      content: `<p><a href="studyself://asset/${asset.id}">Word 原资料</a></p>`, assetIds: [asset.id] } });
+      content: `<p><a href="fengzaiy://asset/${asset.id}">Word 原资料</a></p>`, assetIds: [asset.id] } });
   }, wordPath);
   await page.locator('[data-nav="notes"]').click();
   await page.locator(`[data-record="${wordNote.id}"]`).click();

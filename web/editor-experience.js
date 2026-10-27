@@ -8,9 +8,9 @@ import { textMatches, parseClipboardTable, quoteTsv, copyText } from './editor-t
 import { parseNoteLink } from '../src/core/rich-schema.mjs';
 import './editor-experience.css';
 
-const markKey = new PluginKey('studyselfFind');
+const markKey = new PluginKey('fengzaiyFind');
 export const editorMarkers = Extension.create({
-  name: 'studyselfMarkers',
+  name: 'fengzaiyMarkers',
   addProseMirrorPlugins() {
     return [new Plugin({
       key: markKey,
@@ -180,7 +180,7 @@ export function mountEditorExperience({ editor, panel, insert, link, annotate, r
         if (stopped || serial !== generation || queryStamp !== stamp) return;
         drawChoices(records.map(record => ({ name: `${record.data.title} · ${libraryName(record.data.domain)}`, symbol: 'FileText',
           execute: () => editor.chain().focus().insertContent({ type: 'text', text: record.data.title,
-            marks: [{ type: 'link', attrs: { href: `studyself://note/${record.id}` } }] })
+            marks: [{ type: 'link', attrs: { href: `fengzaiy://note/${record.id}` } }] })
             .command(({ tr }) => { tr.removeStoredMark(editor.schema.marks.link); return true; }).insertContent(' ').run()
         })), true);
       } catch (error) { closeMenu(); toast(error.message, true); }
@@ -226,14 +226,14 @@ export function mountEditorExperience({ editor, panel, insert, link, annotate, r
   const surface = document.createElement('div'); surface.className = 'editor-surface'; scroll.before(surface); surface.append(scroll, outline);
   const readBar = document.createElement('div'); readBar.className = 'editor-reading-bar';
   let prefs = {};
-  try { prefs = JSON.parse(localStorage.getItem('studyself-reading') || '{}'); } catch {}
+  try { prefs = JSON.parse(localStorage.getItem('fengzaiy-reading') ?? localStorage.getItem('studyself-reading') ?? '{}'); } catch {}
   function applyReading() {
     panel.style.setProperty('--reading-size', `${[14, 16, 18, 20].includes(prefs.size) ? prefs.size : 16}px`);
     panel.dataset.readingWidth = prefs.width === 'wide' ? 'wide' : 'comfortable';
     outline.hidden = !prefs.outline;
     document.querySelector('#app')?.classList.toggle('editor-focus', !!prefs.focus);
     directoryButton.setAttribute('aria-pressed', String(!!prefs.outline)); focusButton.setAttribute('aria-pressed', String(!!prefs.focus));
-    try { localStorage.setItem('studyself-reading', JSON.stringify(prefs)); } catch {}
+    try { localStorage.setItem('fengzaiy-reading', JSON.stringify(prefs)); } catch {}
   }
   const directoryButton = control('展开或收起正文目录', 'ListTree', () => { prefs.outline = !prefs.outline; applyReading(); });
   const focusButton = control('专注编辑', 'Maximize2', () => { prefs.focus = !prefs.focus; applyReading(); });

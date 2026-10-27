@@ -100,14 +100,14 @@ try {
 
   await end(); await page.keyboard.insertText('[[参考');
   await page.locator('.editor-command-menu [role=option]', { hasText: '参考概念' }).click();
-  assert.equal(await page.locator(`.tiptap a[href="studyself://note/${target.id}"]`).count(), 1);
+  assert.equal(await page.locator(`.tiptap a[href="fengzaiy://note/${target.id}"]`).count(), 1);
   await end(); await page.keyboard.insertText('[[跨库');
   await page.locator('.reference-scope').waitFor();
   assert.equal(await page.locator('.editor-command-menu [role=option]').count(), 0);
   await page.locator('.reference-scope input').check();
   await page.locator('.editor-command-menu [role=option]', { hasText: '跨库参考' }).click();
-  assert.equal(await page.locator(`.tiptap a[href="studyself://note/${other.id}"]`).count(), 1);
-  await page.locator(`.tiptap a[href="studyself://note/${target.id}"]`).hover();
+  assert.equal(await page.locator(`.tiptap a[href="fengzaiy://note/${other.id}"]`).count(), 1);
+  await page.locator(`.tiptap a[href="fengzaiy://note/${target.id}"]`).hover();
   await page.locator('.note-link-preview:not([hidden])').waitFor();
   assert.match(await page.locator('.note-link-preview').innerText(), /参考内容摘要/);
 
@@ -207,7 +207,7 @@ try {
   await saved();
   assert.ok(app.service.store.history(original.id).some(event => event.id === oldRevision));
   assert.doesNotMatch(app.service.store.get(original.id).data.content, /editor-match|selection-tools|editor-command-menu/);
-  assert.match(app.service.store.get(original.id).data.content, new RegExp(`studyself://note/${target.id}`));
+  assert.match(app.service.store.get(original.id).data.content, new RegExp(`fengzaiy://note/${target.id}`));
   if (draftMode) await page.locator('[data-nav=notes]').click();
   await page.locator(`[data-record="${target.id}"]`).click();
   await page.waitForFunction(() => document.querySelector('#note-title')?.value === '参考概念');

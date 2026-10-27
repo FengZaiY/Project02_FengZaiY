@@ -78,8 +78,8 @@ export class GitVersions {
     const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_')));
     const nullFile = process.platform === 'win32' ? 'NUL' : os.devNull;
     Object.assign(env, { GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: nullFile, GIT_TERMINAL_PROMPT: '0',
-      GIT_AUTHOR_NAME: 'StudySelf', GIT_AUTHOR_EMAIL: 'local@studyself.invalid',
-      GIT_COMMITTER_NAME: 'StudySelf', GIT_COMMITTER_EMAIL: 'local@studyself.invalid', ...options.env });
+      GIT_AUTHOR_NAME: 'FengZaiY', GIT_AUTHOR_EMAIL: 'local@fengzaiy.invalid',
+      GIT_COMMITTER_NAME: 'FengZaiY', GIT_COMMITTER_EMAIL: 'local@fengzaiy.invalid', ...options.env });
     try {
       return execFileSync('git', ['-c', `safe.directory=${directory.replaceAll('\\', '/')}`,
         '-c', `core.hooksPath=${nullFile}`, '-c', 'protocol.allow=never', '--git-dir', directory, ...args],

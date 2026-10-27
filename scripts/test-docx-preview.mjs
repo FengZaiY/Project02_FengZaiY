@@ -43,7 +43,7 @@ try {
   for (let i = 0; i < 7; i++) extra.push(await create(`附加资料${i}.txt`, Buffer.from(`资料${i}`)));
   const note = app.service.store.write({ type: 'note', data: { title: 'Word 附件预览', domain: library.id,
     assetIds: [docx.id, broken.id, large.id, text.id, ...extra.map(a => a.id)], format: 'html',
-    content: `<p>阅读原文时继续记笔记。</p><p><a href="studyself://asset/${docx.id}">正文中的 Word 引用</a></p>` } });
+    content: `<p>阅读原文时继续记笔记。</p><p><a href="fengzaiy://asset/${docx.id}">正文中的 Word 引用</a></p>` } });
   const other = app.service.store.write({ type: 'note', data: { title: '另一篇笔记', domain: library.id, content: '这里不能出现旧预览' } });
   const revisions = app.service.store.history(note.id).length, hash = docx.data.sha256;
   await page.reload(); await page.locator(`[data-record="${note.id}"]`).click();

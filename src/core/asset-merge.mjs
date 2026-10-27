@@ -12,7 +12,7 @@ const supported = new Set(['note', 'draft', 'source', 'annotation', 'relation', 
 const escapeAttribute = value => value.replaceAll('&', '&amp;').replaceAll('"', '&quot;').replaceAll('<', '&lt;');
 const linkValue = (value, replacements) => {
   const link = parseNoteLink(value);
-  return link?.kind === 'asset' && replacements.has(link.id) ? `studyself://asset/${replacements.get(link.id)}` : value;
+  return link?.kind === 'asset' && replacements.has(link.id) ? `fengzaiy://asset/${replacements.get(link.id)}` : value;
 };
 function applyEdits(text, edits) {
   for (const edit of edits.sort((a, b) => b.start - a.start)) text = text.slice(0, edit.start) + edit.value + text.slice(edit.end);

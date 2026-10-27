@@ -47,7 +47,7 @@ test('empty trash respects library scope, closes tabs and removes payload histor
 
 test('references, proposals, hierarchy, dirty tabs and protected dependency chains are kept', t => {
   const f = fixture(t), target = f.trash(f.note('被引用'));
-  const owner = f.store.write({ type: 'note', data: { title: '引用者', domain: f.domain, content: `[引用](studyself://note/${target.id})` } });
+  const owner = f.store.write({ type: 'note', data: { title: '引用者', domain: f.domain, content: `[引用](fengzaiy://note/${target.id})` } });
   const dependency = f.trash(f.note('二级依赖'));
   f.store.write({ id: target.id, parents: target.heads, type: 'note', deleted: true, data: { ...target.data, sourceIds: [dependency.id] } });
   const dirty = f.trash(f.note('未保存'));

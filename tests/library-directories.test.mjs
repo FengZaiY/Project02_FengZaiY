@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { call as mcpCall } from '../skills/studyself-organize/scripts/client.mjs';
+import { call as mcpCall } from '../skills/fengzaiy/scripts/client.mjs';
 import path from 'node:path';
 import { Service } from '../src/core/service.mjs';
 import { Store } from '../src/core/store.mjs';
@@ -25,7 +25,7 @@ test('a new library creates an owned child directory; rename/delete/restore keep
   const library = await service.call('librarySave', { title: '人工智能' });
   const directory = (await service.call('libraryDirectory', { id: library.id })).directory;
   assert.equal(directory, path.join(store.directory, '人工智能'));
-  assert.equal(JSON.parse(fs.readFileSync(path.join(directory, '.studyself-library.json'), 'utf8')).libraryId, library.id);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(directory, '.fengzaiy-library.json'), 'utf8')).libraryId, library.id);
   const changed = store.saveLibrary({ id: library.id, title: 'AI研究', parents: library.heads });
   assert.equal(store.directories.ensure(changed), directory);
   const deleted = store.remove(changed.id, changed.heads);
@@ -50,7 +50,7 @@ test('Windows-invalid, reserved and colliding names never claim unrelated files 
     assert.ok(fs.statSync(directory).isDirectory());
   }
   assert.equal(fs.readFileSync(path.join(occupied, 'keep.txt'), 'utf8'), 'untouched');
-  assert.equal(fs.existsSync(path.join(occupied, '.studyself-library.json')), false);
+  assert.equal(fs.existsSync(path.join(occupied, '.fengzaiy-library.json')), false);
   assert.notEqual(store.directories.ensure(store.libraries().find(item => item.data.title === 'A/B')),
     store.directories.ensure(store.libraries().find(item => item.data.title === 'A:B')));
 });
@@ -78,7 +78,7 @@ test('legacy libraries get local directories without rewriting history or exposi
   assert.deepEqual(store.allEvents(), events);
   const grant = service.agents.createGrant({ name: 'test', domains: ['旧领域'] });
   await service.agents.configure(true);
-  const payload = await mcpCall('libraries', {}, undefined, { STUDYSELF_AGENT_URL: service.agents.status().mcpUrl, STUDYSELF_AGENT_TOKEN: grant.token });
+  const payload = await mcpCall('libraries', {}, undefined, { FENGZAIY_AGENT_URL: service.agents.status().mcpUrl, FENGZAIY_AGENT_TOKEN: grant.token });
   assert.ok(payload.some(item => item.id === library.id));
   assert.ok(!JSON.stringify(payload).includes(store.directory));
   assert.ok(!JSON.stringify(payload).includes('localDirectory'));
@@ -99,7 +99,7 @@ test('tampered maps and replaced directory markers do not redirect writes outsid
   store.local('libraryDirectories', { [library.id]: 'alias' });
   await assert.rejects(service.call('libraryDirectory', { id: library.id }), /Symbolic/);
   store.local('libraryDirectories', saved);
-  const marker = path.join(store.directory, saved[library.id], '.studyself-library.json');
+  const marker = path.join(store.directory, saved[library.id], '.fengzaiy-library.json');
   fs.writeFileSync(marker, JSON.stringify({ format: 1, libraryId: uuid() }));
   await assert.rejects(service.call('libraryDirectory', { id: library.id }), /替换|标识/);
   assert.equal(service.state().libraries[0].data.title, '原库');
@@ -119,7 +119,7 @@ test('new local and Agent uploads use content-addressed originals with distinct 
   await service.agents.configure(true);
   const bytes = Buffer.from('agent-upload');
   const result = await mcpCall('assetWrite', { domain: a.id, filename: 'agent.txt', data: bytes.toString('base64'), sha256: sha(bytes), preferencesVersion: service.agents.preferences().version }, uuid(),
-    { STUDYSELF_AGENT_URL: service.agents.status().mcpUrl, STUDYSELF_AGENT_TOKEN: grant.token });
+    { FENGZAIY_AGENT_URL: service.agents.status().mcpUrl, FENGZAIY_AGENT_TOKEN: grant.token });
   assert.ok(store.assetLocation(result.id).path.startsWith(path.join(store.directory, '.fengzai-y', 'materials')));
 });
 

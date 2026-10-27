@@ -10,7 +10,7 @@ export function installExitCheck({ bridge, api, snapshot, save, persist, openMod
     }
     const request = { id, saving: false, error: '', backend: null };
     current = request;
-    const dialog = openModal(restarting ? '重启并应用存储变更' : '退出 FengZai·Y', `<div id="exit-check-status" aria-live="polite">正在检查保存状态…</div><p id="exit-check-error" class="notice danger" role="alert" hidden></p>`,
+    const dialog = openModal(restarting ? '重启并应用存储变更' : '退出 FengZaiY', `<div id="exit-check-status" aria-live="polite">正在检查保存状态…</div><p id="exit-check-error" class="notice danger" role="alert" hidden></p>`,
       '<button class="secondary" id="exit-continue">继续使用</button><button class="secondary" id="exit-sync">查看同步</button><button class="primary" id="exit-confirm" disabled>正在检查…</button>');
     const find = selector => dialog.querySelector(selector);
     const refresh = () => {

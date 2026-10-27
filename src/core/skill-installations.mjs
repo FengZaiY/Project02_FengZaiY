@@ -1,13 +1,18 @@
+import { compatiblePath, legacyNames } from './legacy-names.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { check, uuid, now, sha, canonical, atomicWrite, outside } from './util.mjs';
-import { lockFile } from './workspace-lock.mjs';
+import { compatibleLock } from './workspace-lock.mjs';
 
 const names = ['SKILL.md', 'references/preferences.md', 'references/api.md', 'scripts/client.mjs', 'manifest.json'];
-const marker = '.studyself-install.json';
+const marker = '.fengzaiy-install.json';
+const markerPath = directory => compatiblePath(directory, marker, legacyNames.skillMarker);
+const installationLock = directory => compatibleLock(directory, '.fengzaiy-update.lock', legacyNames.skillLock);
+const legacyInstallation = directory => path.basename(directory).toLowerCase() === legacyNames.skill;
+const migrationMessage = '请导出 FengZaiY.zip，在 Agent 中安装新的 fengzaiy 目录后重新关联；旧安装文件和恢复副本保持原样。';
 const key = 'skillInstallations';
-const source = fileURLToPath(new URL('../../skills/studyself-organize', import.meta.url));
+const source = fileURLToPath(new URL('../../skills/fengzaiy', import.meta.url));
 const digest = files => sha(canonical(files));
 const revision = record => digest({ id: record.id, directory: record.directory, marker: record.marker, mode: record.mode,
   hashes: record.hashes, backup: record.backup || null, journal: record.journal || null, updatedAt: record.updatedAt || null });
@@ -44,7 +49,7 @@ function packageFiles(bundle) {
   check(!bundle.preferences.conflict, '整理偏好存在冲突，请先合并', 'CONFLICT');
   const files = { ...bundle.files,
     'references/preferences.md': `${bundle.preferences.baseline}\n\n## 用户补充（导出快照）\n\n${bundle.preferences.content || '暂无补充'}\n\n偏好版本：${bundle.preferences.version}\n`,
-    'manifest.json': JSON.stringify({ name: 'studyself-organize', protocolVersion: 1, skillVersion: bundle.skillVersion,
+    'manifest.json': JSON.stringify({ name: 'fengzaiy', protocolVersion: 1, skillVersion: bundle.skillVersion,
       preferencesVersion: bundle.preferences.version, exportVersion: bundle.exportVersion }, null, 2) };
   check(Object.keys(files).length === names.length && names.every(name => typeof files[name] === 'string'), '内置 Skill 文件契约已变化，请升级安装更新器');
   return Object.fromEntries(names.map(name => [name, Buffer.from(files[name]).toString('base64')]));
@@ -58,7 +63,7 @@ export class SkillInstallations {
     check(typeof directory === 'string' && path.isAbsolute(directory), '请选择已安装 Skill 的完整目录');
     check(!directory.startsWith('\\\\') && !directory.startsWith('//'), '请选择本机目录，不支持网络共享路径');
     directory = path.resolve(directory); safePath(directory);
-    check(fs.statSync(directory).isDirectory() && path.basename(directory).toLowerCase() === 'studyself-organize', '请选择已有的 studyself-organize 文件夹');
+    check(fs.statSync(directory).isDirectory() && ['fengzaiy', legacyNames.skill].includes(path.basename(directory).toLowerCase()), '请选择已有的 FengZaiY 文件夹');
     for (const protectedRoot of [source, this.store.directory, this.store.local('syncFolder')].filter(Boolean)) {
       check(outside(protectedRoot, directory) && outside(directory, protectedRoot), '不能关联系统内置 Skill、工作区或同步目录');
     }
@@ -66,14 +71,14 @@ export class SkillInstallations {
   }
   owned(record) {
     this.target(record.directory);
-    const value = readFile(path.join(record.directory, marker));
+    const value = readFile(markerPath(record.directory));
     check(value && Buffer.from(value, 'base64').toString() === record.marker, '安装归属已变化，请重新核对关联', 'CONFLICT');
   }
   identity(files) {
     check(files['SKILL.md'] !== null, '安装目录缺少 SKILL.md 入口文件，请先重新安装或补全 Skill');
     const content = Buffer.from(files['SKILL.md'] || '', 'base64').toString();
     const front = content.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/)?.[1];
-    check(front && /^name: studyself-organize\r?$/m.test(front), 'SKILL.md 的名称或头部不匹配，不是 FengZai·Y Skill 安装');
+    check(front && /^name: (?:fengzaiy|studyself-organize)\r?$/m.test(front), 'SKILL.md 的名称或头部不匹配，不是 FengZaiY Skill 安装');
   }
   public(record) {
     return { id: record.id, directory: record.directory, mode: record.mode, status: record.status,
@@ -107,11 +112,12 @@ export class SkillInstallations {
     const currentHashes = hashes(files);
     record.missingFiles = names.filter(name => files[name] === null);
     record.changedFiles = names.filter(name => currentHashes[name] !== record.hashes[name]);
-    if (record.missingFiles.length) record.status = 'incomplete';
+    if (legacyInstallation(record.directory)) record.status = 'rename-required';
+    else if (record.missingFiles.length) record.status = 'incomplete';
     else if (record.changedFiles.length) record.status = 'modified';
     else if (bundle.preferences.conflict) record.status = 'conflict';
     else record.status = digest(files) === digest(packageFiles(bundle)) ? 'current' : 'outdated';
-    record.checkedAt = now(); record.error = null; this.save(record);
+    record.checkedAt = now(); record.error = record.status === 'rename-required' ? migrationMessage : null; this.save(record);
     return files;
   }
   check({ automatic = false } = {}) {
@@ -119,7 +125,7 @@ export class SkillInstallations {
     for (const record of this.records()) {
       let release;
       try {
-        this.owned(record); release = lockFile(path.join(record.directory, '.studyself-update.lock'));
+        this.owned(record); release = installationLock(record.directory);
         if (record.journal) { this.recover(record); continue; }
         const files = this.inspect(record, bundle);
         if (automatic && record.mode === 'auto' && record.status === 'outdated') this.write(record, files, packageFiles(bundle), bundle.exportVersion);
@@ -138,10 +144,11 @@ export class SkillInstallations {
     const record = id ? this.records().find(item => item.id === id) : null;
     check(action === 'link' ? !id : !!record, '安装关联不存在');
     const target = this.target(record?.directory || directory);
+    check(!['update', 'repair'].includes(action) || !legacyInstallation(target), migrationMessage, 'RETIRED');
     if (action === 'link') {
       check(this.records().length < 20, '最多关联 20 个安装位置');
       check(!this.records().some(item => item.directory.toLowerCase() === target.toLowerCase()), '该位置已经关联');
-      check(!readFile(path.join(target, marker)), '此安装由另一个工作区管理，请先在原工作区解除关联');
+      check(!readFile(markerPath(target)), '此安装由另一个工作区管理，请先在原工作区解除关联');
     } else { this.owned(record); check(action === 'restore' || !record.journal, '上次更新尚未恢复，请先检查更新或恢复文件'); }
     const before = snapshot(target);
     const missing = names.filter(name => before[name] === null);
@@ -166,17 +173,17 @@ export class SkillInstallations {
     this.previews.delete(token);
     const { action, directory, before, after } = preview;
     this.target(directory);
-    const release = lockFile(path.join(directory, '.studyself-update.lock'));
+    const release = installationLock(directory);
     try {
       check(digest(snapshot(directory)) === digest(before), '安装文件已变化，请重新预览', 'CONFLICT');
       check(this.agents.skillPackage().exportVersion === preview.version, '系统 Skill 或偏好已变化，请重新预览', 'CONFLICT');
       if (action === 'link') {
         check(this.records().length < 20, '最多关联 20 个安装位置');
-        check(!readFile(path.join(directory, marker)) && !this.records().some(item => item.directory.toLowerCase() === directory.toLowerCase()), '安装已被关联，请重新检查', 'CONFLICT');
+        check(!readFile(markerPath(directory)) && !this.records().some(item => item.directory.toLowerCase() === directory.toLowerCase()), '安装已被关联，请重新检查', 'CONFLICT');
         const id = uuid(), record = { id, directory, mode: 'manual', hashes: hashes(before), status: 'outdated', marker: JSON.stringify({ v: 1, id }) };
-        atomicWrite(path.join(directory, marker), record.marker);
+        atomicWrite(markerPath(directory), record.marker);
         try { this.store.local(key, [...this.records(), record]); }
-        catch (error) { fs.unlinkSync(path.join(directory, marker)); throw error; }
+        catch (error) { fs.unlinkSync(markerPath(directory)); throw error; }
         this.inspect(record, this.agents.skillPackage()); return this.public(record);
       }
       const record = this.records().find(item => item.id === preview.id);
@@ -214,6 +221,7 @@ export class SkillInstallations {
   configure({ id, mode, confirmed }) {
     check(confirmed === true && ['manual', 'auto'].includes(mode), '请确认更新模式');
     const record = this.records().find(item => item.id === id); check(record, '安装关联不存在');
+    check(mode !== 'auto' || !legacyInstallation(record.directory), migrationMessage, 'RETIRED');
     this.owned(record); check(!record.journal, '请先处理未完成更新');
     record.mode = mode; this.save(record); this.nextCheck = 0;
     return this.public(record);
@@ -227,8 +235,8 @@ export class SkillInstallations {
     try { this.owned(record); owned = true; }
     catch (error) { if (!['ENOENT', 'CONFLICT', 'INVALID'].includes(error.code)) throw error; }
     if (owned) {
-      const release = lockFile(path.join(record.directory, '.studyself-update.lock'));
-      try { this.owned(record); fs.unlinkSync(path.join(record.directory, marker)); } finally { release(); }
+      const release = installationLock(record.directory);
+      try { this.owned(record); fs.unlinkSync(markerPath(record.directory)); } finally { release(); }
     }
     this.store.local(key, this.records().filter(item => item.id !== id)); return this.list();
   }

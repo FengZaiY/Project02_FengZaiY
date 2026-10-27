@@ -25,7 +25,7 @@ try {
   const image = await create('示意图.png', Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aS2sAAAAASUVORK5CYII=', 'base64'));
   const missing = await create('缺失资料.pdf'); fs.unlinkSync(store.assetLocation(missing.id).path);
   const long = await create('这是一个很长的课程资料文件名用于确认表格换行及文字不会遮挡相邻操作列.txt');
-  const note = store.write({ type: 'note', data: { title: '引用课程的笔记', domain: library.id, content: `[课程](studyself://asset/${a.id})` } });
+  const note = store.write({ type: 'note', data: { title: '引用课程的笔记', domain: library.id, content: `[课程](fengzaiy://asset/${a.id})` } });
   const originalLocation = store.assetLocation(a.id).path;
   try { browser = await chromium.launch({ headless: true }); }
   catch { browser = await chromium.launch({ channel: 'msedge', headless: true }); }

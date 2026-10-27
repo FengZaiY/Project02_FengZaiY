@@ -1,3 +1,4 @@
+import { syncRootPath } from './legacy-names.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { GitVersions, SHARED, eventHeads, primaryRole } from './git-versions.mjs';
@@ -31,7 +32,7 @@ export class GitSync {
   }
   channel() {
     const config = this.config(); check(config.configured, '请先配置同步目录与配对密钥');
-    return new DirectoryChannel(path.join(config.folder, 'StudySelfSync', 'v2', config.channel), Buffer.from(this.store.secret('pairing'), 'hex'));
+    return new DirectoryChannel(path.join(syncRootPath(config.folder), 'v2', config.channel), Buffer.from(this.store.secret('pairing'), 'hex'));
   }
   channelKey() { return this.config().channel || 'unconfigured'; }
   publications() { return this.store.local(`v2Publications:${this.channelKey()}`) || []; }

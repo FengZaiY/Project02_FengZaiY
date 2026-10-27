@@ -40,10 +40,10 @@ try {
   await page.locator('#agent-preferences-form [type=submit]').click();
   await page.locator('#skill-edit-status', { hasText: '已保存' }).waitFor();
   const download = page.waitForEvent('download'); await page.locator('[data-action=agent-export]').click();
-  const file = await download; await file.saveAs(path.join(root, 'studyself-organize.zip'));
-  const zip = await JSZip.loadAsync(fs.readFileSync(path.join(root, 'studyself-organize.zip')));
-  assert.match(await zip.file('studyself-organize/references/preferences.md').async('string'), /待保存规则 <script>/);
-  assert.equal(JSON.parse(await zip.file('studyself-organize/manifest.json').async('string')).exportVersion, app.service.agents.skillPackage().exportVersion);
+  const file = await download; await file.saveAs(path.join(root, 'FengZaiY.zip'));
+  const zip = await JSZip.loadAsync(fs.readFileSync(path.join(root, 'FengZaiY.zip')));
+  assert.match(await zip.file('fengzaiy/references/preferences.md').async('string'), /待保存规则 <script>/);
+  assert.equal(JSON.parse(await zip.file('fengzaiy/manifest.json').async('string')).exportVersion, app.service.agents.skillPackage().exportVersion);
   await page.locator('.skill-versions', { hasText: '与当前一致' }).waitFor();
   await page.locator('[data-skill-tab=history]').click();
   const historical = page.locator('.skill-history').filter({ has: page.locator(`[data-skill-restore="${first.heads[0]}"]`) });
@@ -82,7 +82,7 @@ try {
   await page.locator('#modal [data-confirm]').click();
   await page.locator('#skill-edit-status', { hasText: '已保存' }).waitFor();
   assert.equal(app.service.agents.preferences().content, '对照后的规则');
-  const installation = path.join(fs.mkdtempSync(path.join(root, 'installed-')), 'studyself-organize');
+  const installation = path.join(fs.mkdtempSync(path.join(root, 'installed-')), 'FengZaiY');
   for (const [name, content] of Object.entries(skillExportFiles(app.service.agents.skillPackage()))) {
     fs.mkdirSync(path.dirname(path.join(installation, name)), { recursive: true }); fs.writeFileSync(path.join(installation, name), content);
   }
@@ -110,7 +110,7 @@ try {
   await page.locator('[data-install-mode]').selectOption('auto'); await page.locator('#modal [data-confirm]').click();
   await page.waitForFunction(async () => {
     const token = document.querySelector('meta[name=local-token]').content;
-    const result = await (await fetch('/api', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-StudySelf-Token': token }, body: JSON.stringify({ method: 'skillInstallList', input: {} }) })).json();
+    const result = await (await fetch('/api', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-FengZaiY-Token': token }, body: JSON.stringify({ method: 'skillInstallList', input: {} }) })).json();
     return result.value?.[0]?.status === 'current';
   });
   fs.appendFileSync(path.join(installation, 'references/api.md'), '\nmanual addition');

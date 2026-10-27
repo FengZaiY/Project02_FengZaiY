@@ -8,7 +8,7 @@ import { once } from 'node:events';
 import { writeSyncPointer } from '../src/core/sync-publication.mjs';
 
 function fixture(t) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'studyself-pointer-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fengzaiy-pointer-'));
   const file = path.join(root, 'current-test.sscurrent');
   fs.writeFileSync(file, 'previous');
   const rename = fs.renameSync, unlink = fs.unlinkSync, open = fs.openSync;

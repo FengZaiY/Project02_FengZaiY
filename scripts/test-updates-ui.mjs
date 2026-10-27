@@ -20,7 +20,7 @@ try {
   assert.match(await page.locator('#upgrade-settings').innerText(), /github.com\/FengZaiY\/Project02_StudySelf\/releases/);
   assert.equal(await page.locator('[data-update=check]').isDisabled(), true);
   for (const method of ['updateStatus', 'updateCheck', 'updateDownload', 'updateInstall', 'updateConfigure']) {
-    const result = await page.evaluate(async ({ method, token }) => (await fetch('/api', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-StudySelf-Token': token }, body: JSON.stringify({ method }) })).json(), { method, token: app.token });
+    const result = await page.evaluate(async ({ method, token }) => (await fetch('/api', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-FengZaiY-Token': token }, body: JSON.stringify({ method }) })).json(), { method, token: app.token });
     assert.ok(result.error, 'preview must not expose installer RPC');
   }
   await page.screenshot({ path: path.join(root, 'browser-preview.png') });
@@ -32,7 +32,7 @@ try {
   };
   engine.downloadUpdate = () => new Promise(resolve => { finishDownload = () => { engine.emit('update-downloaded', { version: '0.2.0' }); resolve([]); }; engine.emit('download-progress', { percent: 42, transferred: 42000, total: 100000 }); });
   const manager = new UpdateManager({ version: '0.1.1', packaged: true, platform: 'win32',
-    source: { provider: 'generic', url: 'https://updates.example.test/studyself/' }, createUpdater: () => engine,
+    source: { provider: 'generic', url: 'https://updates.example.test/fengzaiy/' }, createUpdater: () => engine,
     notify: value => { void page.evaluate(status => window.updateTestReceive?.(status), value).catch(() => {}); } });
   await page.exposeFunction('testDesktopCall', async (method, input) => {
     if (method === 'save' && rejectSaves) throw new Error('隔离测试：保存失败');

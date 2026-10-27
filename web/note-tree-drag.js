@@ -1,4 +1,4 @@
-const dragType = 'application/x-studyself-note-tree';
+const dragType = 'application/x-fengzaiy-note-tree';
 
 export function createNoteTreeDrag({ state, move, render, run, toast }) {
   let session, hint, marked, scrollTimer;

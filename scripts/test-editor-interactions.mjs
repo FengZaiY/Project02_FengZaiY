@@ -87,7 +87,7 @@ try {
   await wait(() => app.service.store.get(note.id).data.assetIds?.length === 3);
   await page.waitForFunction(() => document.querySelector('.tiptap video')?.readyState >= 1);
   assert.equal(await page.locator('.tiptap img').count(), 2);
-  assert.equal(await page.locator('.tiptap a[href^="studyself://asset"]').innerText(), '原资料.txt');
+  assert.equal(await page.locator('.tiptap a[href^="fengzaiy://asset"]').innerText(), '原资料.txt');
   await page.route('**/upload?*', async route => {
     if (decodeURIComponent(route.request().headers()['x-filename']) === '失败.txt') await route.fulfill({ status: 400, json: { error: { message: '测试导入失败' } } });
     else await route.continue();

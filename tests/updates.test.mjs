@@ -12,7 +12,7 @@ import updaterPackage from 'electron-updater';
 import { HttpExecutor } from 'builder-util-runtime';
 import { ElectronHttpExecutor } from 'electron-updater/out/electronHttpExecutor.js';
 
-const source = { provider: 'generic', url: 'https://updates.example.test/studyself/' };
+const source = { provider: 'generic', url: 'https://updates.example.test/fengzaiy/' };
 function setup(options = {}) {
   const engine = new EventEmitter();
   engine.checkForUpdates = async () => {
@@ -33,12 +33,12 @@ test('online source requires explicit HTTPS directory or public GitHub repositor
   }
   assert.throws(() => updateSource({ provider: 'github', owner: '../x', repo: 'repo' }));
   assert.throws(() => updateSource({ provider: 's3' }));
-  assert.deepEqual(releaseConfig({}).extraMetadata.studyselfUpdateSource,
+  assert.deepEqual(releaseConfig({}).extraMetadata.fengzaiyUpdateSource,
     { provider: 'github', owner: 'FengZaiY', repo: 'Project02_StudySelf', private: false, releaseType: 'release' });
-  assert.throws(() => releaseConfig({ STUDYSELF_UPDATE_URL: source.url, STUDYSELF_UPDATE_GITHUB: 'owner/repo' }));
-  for (const env of [{ STUDYSELF_UPDATE_URL: source.url }, { STUDYSELF_UPDATE_GITHUB: 'owner/repo' }]) {
+  assert.throws(() => releaseConfig({ FENGZAIY_UPDATE_URL: source.url, FENGZAIY_UPDATE_GITHUB: 'owner/repo' }));
+  for (const env of [{ FENGZAIY_UPDATE_URL: source.url }, { FENGZAIY_UPDATE_GITHUB: 'owner/repo' }]) {
     const config = releaseConfig(env);
-    assert.deepEqual(config.extraMetadata.studyselfUpdateSource, config.publish[0]);
+    assert.deepEqual(config.extraMetadata.fengzaiyUpdateSource, config.publish[0]);
     assert.equal(config.win.target, 'nsis');
     assert.equal(config.nsis.deleteAppDataOnUninstall, false);
   }
@@ -139,7 +139,7 @@ test('real NSIS updater parses an isolated feed, verifies SHA512 and rejects dam
   const directory = fs.mkdtempSync(path.join(root, 'case-'));
   const config = path.join(directory, 'app-update.yml');
   fs.writeFileSync(config, JSON.stringify({ updaterCacheDirName: 'cache' }));
-  const fakeApp = { version: '0.1.1', isPackaged: true, name: 'StudySelf', userDataPath: directory, baseCachePath: directory,
+  const fakeApp = { version: '0.1.1', isPackaged: true, name: 'FengZaiY', userDataPath: directory, baseCachePath: directory,
     appUpdateConfigPath: config, whenReady: async () => {}, onQuit: () => assert.fail('ordinary quit must not install') };
   const manager = new UpdateManager({ version: '0.1.1', packaged: true, platform: 'win32', source, createUpdater: () => {
     const engine = new updaterPackage.NsisUpdater(undefined, fakeApp);

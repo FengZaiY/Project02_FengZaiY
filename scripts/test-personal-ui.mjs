@@ -12,7 +12,7 @@ try {
   const page = await browser.newPage({ viewport: { width: 1480, height: 940 } }), errors = [];
   page.on('pageerror', error => errors.push(error.message));
   await page.goto(app.url); await page.locator('[data-nav=tasks]').waitFor();
-  assert.equal(await page.title(), 'FengZai·Y · 个人管理系统');
+  assert.equal(await page.title(), 'FengZaiY · 个人管理系统');
   await page.locator('[data-nav=tasks]').click(); await page.locator('[data-personal=new]').click();
   await page.locator('#personal-form [name=title]').fill('准备个人资料清单');
   await page.locator('#personal-form [name=content]').fill('整理笔记并核对附件');

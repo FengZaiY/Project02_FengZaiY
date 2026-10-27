@@ -1,6 +1,6 @@
 export function createSkillInstallations({ api, esc, icon, formatTime, toast, confirmBox, redrawIcons, run, pickDirectory, dirty }) {
   let host;
-  const labels = { current: '与当前一致', outdated: '有更新', incomplete: '安装文件缺失', modified: '检测到手工修改', conflict: '偏好存在冲突', error: '需要处理' };
+  const labels = { current: '与当前一致', outdated: '有更新', incomplete: '安装文件缺失', modified: '检测到手工修改', conflict: '偏好存在冲突', error: '需要处理', 'rename-required': '需更换安装名称' };
   const clean = () => { if (dirty()) throw new Error('请先保存或撤销未保存的整理偏好'); };
   async function refresh(check = false) {
     const target = host;
@@ -11,7 +11,7 @@ export function createSkillInstallations({ api, esc, icon, formatTime, toast, co
     if (notice) notice.textContent = count ? `${count} 个安装有更新或需要处理` : '';
     target.innerHTML = `<div class="skill-install-heading"><h3>已关联安装</h3><div><button class="secondary" data-install-add>${icon('folder-open')}关联安装目录</button><button class="icon-button" data-install-check title="检查 Skill 更新" aria-label="检查 Skill 更新">${icon('refresh-cw')}</button></div></div>
       ${installs.length ? installs.map(item => `<section class="skill-install-row" data-install-id="${esc(item.id)}">
-        <div class="skill-install-path"><strong>studyself-organize</strong><span class="pill">${labels[item.status] || '待检查'}</span><p>${esc(item.directory)}</p>
+        <div class="skill-install-path"><strong>FengZaiY</strong><span class="pill">${labels[item.status] || '待检查'}</span><p>${esc(item.directory)}</p>
         <small>${item.updatedAt ? `最近写入 ${formatTime(item.updatedAt)}` : '尚未更新安装文件'}${item.checkedAt ? ` · 最近检查 ${formatTime(item.checkedAt)}` : ''}</small>
         ${item.version ? `<small title="${esc(item.version)}">文件版本 ${esc(item.version.slice(0, 12))}</small>` : ''}
         ${item.missingFiles?.length ? `<p class="skill-install-warning">缺少文件：${item.missingFiles.map(esc).join('、')}</p>` : ''}
@@ -31,7 +31,7 @@ export function createSkillInstallations({ api, esc, icon, formatTime, toast, co
       row.querySelector('[data-install-restore]').onclick = () => run(() => apply({ id: item.id, action: 'restore' }));
       row.querySelector('[data-install-mode]').onchange = event => run(async () => {
         const mode = event.target.value; event.target.value = item.mode; clean();
-        if (!await confirmBox('更改 Skill 更新方式', `<p>${esc(item.directory)}</p><p>${mode === 'auto' ? '允许 FengZai·Y 在运行期间自动将内置 Skill 和已保存偏好写入此位置。检测到手工修改或偏好冲突时暂停；更新前保留一份可恢复副本。' : '系统继续自动检查，发现更新后由你确认写入。'}</p>`, mode === 'auto' ? '开启自动更新' : '改为提醒后确认')) return;
+        if (!await confirmBox('更改 Skill 更新方式', `<p>${esc(item.directory)}</p><p>${mode === 'auto' ? '允许 FengZaiY 在运行期间自动将内置 Skill 和已保存偏好写入此位置。检测到手工修改或偏好冲突时暂停；更新前保留一份可恢复副本。' : '系统继续自动检查，发现更新后由你确认写入。'}</p>`, mode === 'auto' ? '开启自动更新' : '改为提醒后确认')) return;
         await api('skillInstallConfigure', { id: item.id, mode, confirmed: true }); await refresh();
         toast(mode === 'auto' ? '已开启此安装位置的自动更新' : '已改为提醒后确认');
       });

@@ -1,13 +1,14 @@
+import { legacyNames, libraryMarkerPath } from './legacy-names.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { check, inside, isId, isHash, noSymlink, sha } from './util.mjs';
 import { centralAssetPath } from './material-center.mjs';
 import { MATERIAL_SCOPE } from './personal-schema.mjs';
 
-const markerName = '.studyself-library.json';
+const markerName = '.fengzaiy-library.json';
 const reserved = new Set(['objects', 'assets', 'incoming', 'opened-files', 'electron-profile', 'knowledge.sqlite', 'device-vault.key', 'version-repositories', 'version-staging', 'received-objects']);
 export function legacyLibraryId(scope) {
-  const hash = sha(`studyself-legacy-library:${scope}`).slice(0, 32);
+  const hash = sha(`${legacyNames.librarySeed}${scope}`).slice(0, 32);
   return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-${hash.slice(12, 16)}-${hash.slice(16, 20)}-${hash.slice(20)}`;
 }
 function folderName(title) {
@@ -25,7 +26,7 @@ export class LibraryDirectories {
     return directory;
   }
   owns(directory, id) {
-    const marker = path.join(directory, markerName);
+    const marker = libraryMarkerPath(directory);
     noSymlink(marker);
     if (!fs.existsSync(marker) || !fs.statSync(marker).isFile() || fs.statSync(marker).size > 4096) return false;
     try { const data = JSON.parse(fs.readFileSync(marker, 'utf8')); return data.format === 1 && data.libraryId === id; }

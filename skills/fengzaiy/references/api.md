@@ -8,7 +8,7 @@
 
 连接 `http://127.0.0.1:<端口>/mcp`，在请求头传 `Authorization: Bearer <凭证>`。使用标准 MCP 客户端握手与发现工具；无服务端会话，不提供旧 HTTP+SSE、stdio 或 OAuth 授权流程。只接受本机请求，Host 必须匹配，拒绝 Origin；仅支持云端执行或浏览器跨域的客户端不能直接连接。
 
-工具名是 `studyself_` + 下划线方法名，例如 `studyself_bootstrap`、`studyself_record`、`studyself_draft_create`、`studyself_propose`、`studyself_proposal_revise`。每个工具都有输入 schema，有效凭证可发现全部现有 Agent 工具，不包含系统管理工具。下文各方法的 input 字段直接作为工具 arguments，写入在同一层提供 `requestId` 与 `preferencesVersion`；不要再包装成任意 method/input 转发。
+工具名是 `FengZaiY_` + 下划线方法名，例如 `FengZaiY_bootstrap`、`FengZaiY_record`、`FengZaiY_draft_create`、`FengZaiY_propose`、`FengZaiY_proposal_revise`。每个工具都有输入 schema，有效凭证可发现全部现有 Agent 工具，不包含系统管理工具。下文各方法的 input 字段直接作为工具 arguments，写入在同一层提供 `requestId` 与 `preferencesVersion`；不要再包装成任意 method/input 转发。
 
 成功返回 `structuredContent: {value: ...}` 与同值 JSON 文本。业务失败返回 `isError: true` 与含 `error.code/message` 的文本；过期凭证在 HTTP 层返回 401。写入重试复用相同 requestId 和正文，宿主 MCP 工具与 MCP 脚本共用幂等记录。先调用 bootstrap 读取实际规则和授权，每批写入前再次读取。不自动调用确认入库或系统设置。
 
@@ -18,13 +18,13 @@ MCP 配置示例不包含真实凭证，由受信任界面显示/复制。已连
 
 `POST /v1/rpc` 已停用，返回 404，不提供任意 method/input 转发。所有外部操作通过 `/mcp` 具名工具执行；接口地址与开发预览页面地址不同。
 
-`scripts/client.mjs` 使用相同 MCP：初始化、声明已初始化、发现工具、调用具名工具。配置 `STUDYSELF_AGENT_URL` 为界面显示的 MCP 地址，凭证使用 `STUDYSELF_AGENT_TOKEN`。客户端不自动重试；写入 requestId 为 8 至 100 位字母、数字、短横线、下划线。
+`scripts/client.mjs` 使用相同 MCP：初始化、声明已初始化、发现工具、调用具名工具。配置 `FENGZAIY_AGENT_URL` 为界面显示的 MCP 地址，凭证使用 `FENGZAIY_AGENT_TOKEN`。客户端不自动重试；写入 requestId 为 8 至 100 位字母、数字、短横线、下划线。
 
 有效凭证统一包含全部当前及以后新建知识库、敏感资料以及 read/collect/propose/edit/trash 能力。bootstrap.access.scope 为 `all`，domains 是当时可用知识库列表，不是固定授权清单。确认入库、永久删除、系统设置和授权管理仍不开放。旧有效凭证启动时升级至此范围，不延长有效期；旧撤销项删除，失效凭证不能重新使用。
 
 ## 读取
 
-FengZai·Y 保留协议 v1、`studyself_` 工具前缀与旧连接身份。bootstrap.capabilities 返回 `personalTypes`、`syncFormat: 7`、`secrets: false`。新业务范围为 `__personal__`，独立资料范围为 `__materials__`；两者都不是知识库，不得通过创建知识库模拟。
+FengZaiY 使用协议 v1 和 `FengZaiY_` 工具前缀。bootstrap.capabilities 返回 `personalTypes`、`syncFormat: 8`（支持的最高格式）、`secrets: false`。含新命名链接或导图元数据的内容使用 format 8，所有电脑须升级。新业务范围为 `__personal__`，独立资料范围为 `__materials__`；两者都不是知识库，不得通过创建知识库模拟。
 
 - `bootstrap {}`：协议、最新 Skill 正文/协议说明、Skill 内容哈希、偏好（baseline、content、version、conflict、heads）、当前授权。
 - `libraries {}`：授权知识库。创建、改名、删除知识库由用户在系统操作。
@@ -163,15 +163,15 @@ FengZai·Y 保留协议 v1、`studyself_` 工具前缀与旧连接身份。boots
 
 Mermaid 界面模板包括流程、框架/架构（flowchart 分组）、思维导图、看板、甘特、UML 类/时序/状态图、饼/柱/折线图。思维导图提供主题可视化编辑，其他图表继续使用源文本预览，不是独立项目管理系统。
 
-思维导图仍为 `kind: "diagram"`、`source: "mindmap\n..."`。界面可添加 `%% studyself-mindmap:{"v":1,"layout":"balanced","palette":"classic","collapsed":[]}` 注释；layout 可为 balanced/right，palette 可为 classic/bright/quiet。collapsed 使用当前先序遍历位置（中心为 m0），结构改写后须重新映射，无法映射时清空 collapsed 以展开全部主题，不删除主题。普通 Mermaid 可忽略此注释继续显示。可视化编辑最多 500 个主题、40 层；特殊图标、样式或多行语法保留源文本路径。块版本及接口授权不变，不增加任意元数据字段。
+思维导图仍为 `kind: "diagram"`、`source: "mindmap\n..."`。界面可添加 `%% fengzaiy-mindmap:{"v":1,"layout":"balanced","palette":"classic","collapsed":[]}` 注释；layout 可为 balanced/right，palette 可为 classic/bright/quiet。collapsed 使用当前先序遍历位置（中心为 m0），结构改写后须重新映射，无法映射时清空 collapsed 以展开全部主题，不删除主题。普通 Mermaid 可忽略此注释继续显示。可视化编辑最多 500 个主题、40 层；特殊图标、样式或多行语法保留源文本路径。块版本及接口授权不变，不增加任意元数据字段。
 
 正文中图表（含思维导图）与画板预览复用 `data-ss-layout` 的 width/height/align 和纯媒体 `data-ss-row`；调整整块大小、位置不改 source/shapes。保留用户已有布局，不将正文尺寸误写入导图内部布局注释。界面按原始比例显示，窗口宽度可能进一步约束实际尺寸。
 
-系统链接用 `studyself://note/<记录UUID>` 或 `studyself://asset/<附件UUID>`。外部链接只允许无内嵌账号密码的 HTTP/HTTPS。`studyself://local/<UUID>` 为用户在桌面版建立的本机文件绑定，Agent 不能创建绑定或通过它读取本机文件。不得将该标识改写为路径。
+系统链接用 `fengzaiy://note/<记录UUID>` 或 `fengzaiy://asset/<附件UUID>`。外部链接只允许无内嵌账号密码的 HTTP/HTTPS。`fengzaiy://local/<UUID>` 为用户在桌面版建立的本机文件绑定，Agent 不能创建绑定或通过它读取本机文件。不得将该标识改写为路径。
 
 授权检查会独立解析正文和来源网址中的内部引用，包括 Markdown 链接，不依赖 `sourceIds` / `assetIds` 是否列全。新媒体块保存时补全附件列表；历史内容及其哈希不改写。省略引用列表不能绕过跨库或敏感权限。局部修改保留原始块、来源和任务状态；两台电脑都需更新后再编辑富内容，旧编辑器可能丢弃未知节点。
 
-Markdown 导出保留富内容块的 HTML/JSON 和内部链接，但不是原文件打包；第三方 Markdown 阅读器不保证可渲染或解析 StudySelf 链接。
+Markdown 导出保留富内容块的 HTML/JSON 和内部链接，但不是原文件打包；第三方 Markdown 阅读器不保证可渲染或解析 FengZaiY 链接。
 
 ## 已取消的页面字段
 

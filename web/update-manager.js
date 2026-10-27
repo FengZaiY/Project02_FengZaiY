@@ -1,5 +1,5 @@
 import './update-manager.css';
-import { studyselfUpdateSource } from '../package.json';
+import { fengzaiyUpdateSource } from '../package.json';
 import { sourceLabel } from '../src/desktop/update-source.mjs';
 
 const phases = { preview: '浏览器开发预览', development: '桌面开发模式', unconfigured: '尚未配置更新来源',
@@ -12,7 +12,7 @@ export function createUpdateUI({ api, native, esc, icon, bytes, formatTime, redr
   function refreshNotice() {
     if (!status) return;
     const nav = document.querySelector('[data-nav=settings]');
-    if (nav) { nav.classList.toggle('has-update', ['available', 'downloaded'].includes(status.phase)); nav.title = ['available', 'downloaded'].includes(status.phase) ? `FengZai·Y ${status.latestVersion} 可更新` : '系统设置'; }
+    if (nav) { nav.classList.toggle('has-update', ['available', 'downloaded'].includes(status.phase)); nav.title = ['available', 'downloaded'].includes(status.phase) ? `FengZaiY ${status.latestVersion} 可更新` : '系统设置'; }
   }
   function receive(next) {
     status = next;
@@ -66,7 +66,7 @@ export function createUpdateUI({ api, native, esc, icon, bytes, formatTime, redr
     },
     async mount(element, version) {
       host = element;
-      if (!native) receive({ phase: 'preview', currentVersion: version, supported: false, autoCheck: false, source: sourceLabel(studyselfUpdateSource) });
+      if (!native) receive({ phase: 'preview', currentVersion: version, supported: false, autoCheck: false, source: sourceLabel(fengzaiyUpdateSource) });
       else {
         try { receive(await api('updateStatus')); }
         catch (error) { host.textContent = `读取更新状态失败：${error.message}`; }

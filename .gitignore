@@ -27,6 +27,11 @@ AGENTS.override.md
 *.partial
 *.storage.json
 *.storage.json.lock
+.fengzaiy-lock.json
+.fengzaiy-incomplete.json
+.fengzaiy-library.json
+FengZaiYSync/
+# Prior workspace and transport names remain private during migration.
 .studyself-lock.json
 .studyself-incomplete.json
 .studyself-library.json

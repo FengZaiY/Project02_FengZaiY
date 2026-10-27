@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { call as mcpCall } from '../skills/studyself-organize/scripts/client.mjs';
+import { call as mcpCall } from '../skills/fengzaiy/scripts/client.mjs';
 import path from 'node:path';
 import { Store, validateEvent } from '../src/core/store.mjs';
 import { Service } from '../src/core/service.mjs';
@@ -254,7 +254,7 @@ test('draft filtering precedes pagination and search can include processed draft
 test('MCP Agent may submit versioned proposals but cannot invoke trusted archive methods', async t => {
   const f = fixture(t); await f.access.configure(true);
   const request = (method, input) => mcpCall(method, { preferencesVersion: f.access.preferences().version, ...input }, uuid(),
-    { STUDYSELF_AGENT_URL: f.access.status().mcpUrl, STUDYSELF_AGENT_TOKEN: f.issued.token });
+    { FENGZAIY_AGENT_URL: f.access.status().mcpUrl, FENGZAIY_AGENT_TOKEN: f.issued.token });
   const created = await request('propose', { domain: f.domain, items: [{ draftRefs: [{ id: f.draft.id, versionId: f.draft.heads[0], complete: true }],
     data: { title: 'MCP 草稿整理', domain: f.domain, content: '整理结果' } }] });
   assert.equal(created.data.items[0].draftRefs[0].complete, true);

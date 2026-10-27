@@ -9,6 +9,8 @@
 
 ## 设计与验收
 
+- [FengZaiY 命名验证](verification-fengzaiy-naming-2026-10-27.md)：MCP/Skill/配置改名、旧数据兼容、format 8 边界及原预览核对。
+
 - [本机全功能与 MCP / Skill 检查](verification-local-audit-2026-10-27.md)：排除多电脑同步的覆盖、缺陷修复、200 项核心与 33 个界面/桌面脚本结果。
 
 - [FengZai·Y 升级验证](verification-fengzai-2026-10-27.md)：五板块、密码库、财务、迁移、format 7 和桌面验证边界。
@@ -16,7 +18,7 @@
 - [架构说明](architecture.md)：修改历史、当前内容同步、原件断点与权限；退役格式单独标注。
 - [在线发布说明](online-updates.md)：独立发布仓库、更新来源与安装验收。
 - [验证记录](verification.md)：带日期的实际测试结果。
-- [同步验收与可选双机联调](baidu-acceptance.md)：StudySelf 自身的版本、完整性与恢复要求，以及按需进行的部署联调。
+- [同步验收与可选双机联调](baidu-acceptance.md)：FengZaiY 自身的版本、完整性与恢复要求，以及按需进行的部署联调。
 - [计划目录](plans/README.md)：跨模块和多阶段任务。
 - [决策目录](decisions/README.md)：重大方案及其边界。
 

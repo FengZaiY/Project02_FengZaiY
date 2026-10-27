@@ -126,7 +126,7 @@ try {
   assert.equal(await page.locator('.note-tree-drop-hint').count(), 0);
   assert.equal(store.history(child.id).length, historyBefore);
   await node(parent.id).evaluate(el => {
-    const transfer = new DataTransfer(); transfer.setData('application/x-studyself-note-tree', 'forged');
+    const transfer = new DataTransfer(); transfer.setData('application/x-fengzaiy-note-tree', 'forged');
     el.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: transfer }));
   });
   assert.equal(store.history(child.id).length, historyBefore);

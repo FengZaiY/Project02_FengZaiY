@@ -53,7 +53,7 @@ export function cleanNoteHtml(html) {
   const clean = DOMPurify.sanitize(inert.innerHTML, { ALLOW_DATA_ATTR: false, ADD_ATTR: ['data-ss-block', 'data-ss-layout', 'data-ss-row', 'data-ss-container', 'data-type', 'data-checked', 'data-callout', 'colwidth'],
     ADD_URI_SAFE_ATTR: ['data-ss-block', 'data-ss-layout', 'data-ss-row', 'data-ss-container', 'data-type', 'data-checked', 'data-callout', 'colwidth'],
     FORBID_ATTR: ['id', 'name'], FORBID_TAGS: ['img', 'iframe', 'video', 'audio', 'style', 'input', 'form', 'button', 'select', 'textarea', 'svg', 'math'],
-    ALLOWED_URI_REGEXP: /^(?:https?:\/\/|studyself:\/\/(?:note|asset|local)\/)/i });
+    ALLOWED_URI_REGEXP: /^(?:https?:\/\/|(?:fengzaiy|studyself):\/\/(?:note|asset|local)\/)/i });
   const template = document.createElement('template'); template.innerHTML = clean;
   for (const a of template.content.querySelectorAll('a')) if (!safeNoteLink(a.getAttribute('href'))) a.removeAttribute('href');
   unwrapTextLayouts(template.content);
@@ -86,7 +86,7 @@ export async function renderBlock(host, block, mediaUrl) {
         const figure = host.closest('.rich-block'); if (figure) fitMedia(figure);
       });
       media.src = mediaUrl(block.assetId); host.append(media);
-      media.onerror = () => { if (renderTokens.get(host) === token) { host.textContent = '媒体未下载、格式不支持或校验失败。'; const a = document.createElement('a'); a.href = `studyself://asset/${block.assetId}`; a.textContent = '关联附件'; host.append(a); } };
+      media.onerror = () => { if (renderTokens.get(host) === token) { host.textContent = '媒体未下载、格式不支持或校验失败。'; const a = document.createElement('a'); a.href = `fengzaiy://asset/${block.assetId}`; a.textContent = '关联附件'; host.append(a); } };
     } else if (block.kind === 'sticker') {
       const paper = document.createElement('div'); paper.className = `rich-sticker ${block.color}`; paper.textContent = block.text; host.append(paper);
     } else if (block.kind === 'canvas') {
@@ -161,12 +161,12 @@ export function richExtensions({ mediaUrl, edit }) {
     })];
 }
 export function addRichMarkdownRules(converter) {
-  converter.addRule('studyself-layout', { filter: node => node.hasAttribute?.('data-ss-row') || node.hasAttribute?.('data-ss-container'),
+  converter.addRule('fengzaiy-layout', { filter: node => node.hasAttribute?.('data-ss-row') || node.hasAttribute?.('data-ss-container'),
     replacement: (_text, node) => `\n\n${node.outerHTML}\n\n` });
-  converter.addRule('studyself-block', { filter: node => node.nodeName === 'FIGURE' && node.hasAttribute('data-ss-block'),
+  converter.addRule('fengzaiy-block', { filter: node => node.nodeName === 'FIGURE' && node.hasAttribute('data-ss-block'),
     replacement: (_text, node) => `\n\n${node.outerHTML}\n\n` });
-  converter.addRule('studyself-callout', { filter: node => node.nodeName === 'ASIDE' && node.hasAttribute('data-callout'), replacement: text => `\n\n> [!NOTE]\n${text.trim().split('\n').map(line => `> ${line}`).join('\n')}\n\n` });
-  converter.addRule('studyself-task', { filter: node => node.nodeName === 'LI' && node.getAttribute('data-type') === 'taskItem', replacement: (text, node) => `\n- [${node.getAttribute('data-checked') === 'true' ? 'x' : ' '}] ${text.trim()}\n` });
+  converter.addRule('fengzaiy-callout', { filter: node => node.nodeName === 'ASIDE' && node.hasAttribute('data-callout'), replacement: text => `\n\n> [!NOTE]\n${text.trim().split('\n').map(line => `> ${line}`).join('\n')}\n\n` });
+  converter.addRule('fengzaiy-task', { filter: node => node.nodeName === 'LI' && node.getAttribute('data-type') === 'taskItem', replacement: (text, node) => `\n- [${node.getAttribute('data-checked') === 'true' ? 'x' : ' '}] ${text.trim()}\n` });
 }
 export function editRichBlock(block, commit, { openModal, mediaUrl, fail }) {
   if (block.kind === 'canvas') { openCanvas(block, commit, { openModal, fail }); return; }

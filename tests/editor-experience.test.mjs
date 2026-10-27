@@ -33,7 +33,7 @@ test('spreadsheet clipboard supports quoted cells, multiline text, empty trailin
   assert.equal(quoteTsv('a\tb\n"c"'), '"a\tb\n""c"""');
 });
 test('desktop clipboard import confines temporary files and preserves the imported image', async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'studyself-clipboard-'));
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'fengzaiy-clipboard-'));
   const service = new Service(directory);
   try {
     const library = service.store.saveLibrary({ title: '剪贴板测试' });

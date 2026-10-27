@@ -116,7 +116,7 @@ test('saved local edits merge with downloaded edits; unsaved tabs block; repeate
 test('current sync preserves row layout, bounded dimensions and nested original-file references', async t => {
   const f = fixture(t), asset = await f.file(f.a, 100, 'layout.png');
   const payload = JSON.stringify({ v: 1, kind: 'image', label: '图片', assetId: asset.id }).replaceAll('"', '&quot;');
-  const content = `<div data-ss-row="true"><figure data-ss-block="${payload}" data-ss-layout="{&quot;width&quot;:45,&quot;height&quot;:180,&quot;align&quot;:&quot;left&quot;}"><figcaption>图片</figcaption></figure><section data-ss-container="true"><p><a href="studyself://asset/${asset.id}">原文件</a></p></section></div>`;
+  const content = `<div data-ss-row="true"><figure data-ss-block="${payload}" data-ss-layout="{&quot;width&quot;:45,&quot;height&quot;:180,&quot;align&quot;:&quot;left&quot;}"><figcaption>图片</figcaption></figure><section data-ss-container="true"><p><a href="fengzaiy://asset/${asset.id}">原文件</a></p></section></div>`;
   const note = f.a.store.write({ type: 'note', data: { title: '排版笔记', domain: f.domain, content, format: 'html' } });
   await f.publish(f.a); f.deliver(f.a, f.b); await f.b.sync.importLatest();
   assert.equal(f.b.store.get(note.id).data.content, content);

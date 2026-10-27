@@ -97,7 +97,7 @@ export class Service {
     summary.trash -= legacy.filter(item => item.deleted).length;
     return { ...summary, libraries: this.store.directories.describe(this.store.libraries()), sync: this.transport.config(),
       workspace: this.store.local('workspace') || { tabs: [], selectedTab: null },
-      version: '0.1.12', uiProtocol: UI_PROTOCOL, localDataDirectory: this.store.directory, localHierarchy: this.localHierarchy.status(), deletion: deletionStatus(this.store),
+      version: '0.1.13', uiProtocol: UI_PROTOCOL, localDataDirectory: this.store.directory, localHierarchy: this.localHierarchy.status(), deletion: deletionStatus(this.store),
       skillInstallations: this.skillInstallations.summary() };
   }
   async finishDeletion() {

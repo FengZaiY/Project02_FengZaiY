@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import assert from 'node:assert/strict';
 import { createServer } from '../src/server.mjs';
-import { call } from '../skills/studyself-organize/scripts/client.mjs';
+import { call } from '../skills/fengzaiy/scripts/client.mjs';
 import { uuid } from '../src/core/util.mjs';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
@@ -40,15 +40,15 @@ try {
   assert.equal(await page.locator('#agent-url').count(), 0);
   assert.equal(await page.getByRole('heading', { name: '连接', exact: true }).count(), 0);
   assert.equal(await page.locator('#agent-mcp-url').innerText(), `${url}/mcp`);
-  assert.match(await page.locator('#agent-mcp-config').inputValue(), /bearer_token_env_var = "STUDYSELF_AGENT_TOKEN"/);
+  assert.match(await page.locator('#agent-mcp-config').inputValue(), /bearer_token_env_var = "FENGZAIY_AGENT_TOKEN"/);
   await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
   await page.locator('#agent-mcp-copy-url').click();
   assert.equal(await page.evaluate(() => navigator.clipboard.readText()), `${url}/mcp`);
   await page.locator('#agent-mcp-client').selectOption('http');
   await page.locator('#agent-mcp-copy-config').click();
   const copied = JSON.parse(await page.evaluate(() => navigator.clipboard.readText()));
-  assert.equal(copied.mcpServers.studyself.url, `${url}/mcp`);
-  assert.match(copied.mcpServers.studyself.headers.Authorization, /填写/);
+  assert.equal(copied.mcpServers.FengZaiY.url, `${url}/mcp`);
+  assert.match(copied.mcpServers.FengZaiY.headers.Authorization, /填写/);
   const copyTargets = [
     { button: '#agent-mcp-copy-url', target: '#agent-mcp-url', label: '地址' },
     { button: '#agent-mcp-copy-config', target: '#agent-mcp-config', label: '配置', client: 'codex' },
@@ -110,7 +110,7 @@ try {
   await page.locator('#agent-token').waitFor();
   const token = await page.locator('#agent-token').inputValue();
   assert.equal(await page.locator('#agent-token').getAttribute('type'), 'password');
-  const env = { STUDYSELF_AGENT_URL: url, STUDYSELF_AGENT_TOKEN: token };
+  const env = { FENGZAIY_AGENT_URL: url, FENGZAIY_AGENT_TOKEN: token };
   await page.locator('#modal [data-modal-close]').click();
   await page.locator('[data-nav="settings"]').click();
   await page.locator('#agent-preferences-form textarea').fill('每个案例附适用条件，不做默认优劣排名。');
@@ -121,13 +121,13 @@ try {
   await page.locator('#agent-preferences-form').waitFor();
   assert.equal(await page.locator('#agent-preferences-form textarea').inputValue(), '每个案例附适用条件，不做默认优劣排名。');
   const boot = await call('bootstrap', {}, undefined, env);
-  mcpClient = new Client({ name: 'studyself-ui-test', version: '1.0.0' });
+  mcpClient = new Client({ name: 'fengzaiy-ui-test', version: '1.0.0' });
   await mcpClient.connect(new StreamableHTTPClientTransport(new URL(`${url}/mcp`), { requestInit: { headers: { Authorization: `Bearer ${token}` } } }));
-  assert.ok((await mcpClient.listTools()).tools.some(tool => tool.name === 'studyself_propose'));
+  assert.ok((await mcpClient.listTools()).tools.some(tool => tool.name === 'FengZaiY_propose'));
   assert.match(boot.preferences.content, /适用条件/);
   const source = await call('sourceCreate', { preferencesVersion: boot.preferences.version,
     data: { title: '课程原文', domain: library.id, content: '原始课程资料', url: 'https://example.invalid/course' } }, uuid(), env);
-  const proposed = await mcpClient.callTool({ name: 'studyself_propose', arguments: { requestId: uuid(), preferencesVersion: boot.preferences.version, title: '外部 Agent 整理方案', domain: library.id,
+  const proposed = await mcpClient.callTool({ name: 'FengZaiY_propose', arguments: { requestId: uuid(), preferencesVersion: boot.preferences.version, title: '外部 Agent 整理方案', domain: library.id,
     content: '待补充：第二节课程截图',
     items: ['概念', '案例'].map(title => ({ data: { title, domain: library.id, content: `${title}的待确认正文`, sourceIds: [source.id] } })) } });
   assert.ok(!proposed.isError, proposed.content[0].text);
@@ -185,7 +185,7 @@ try {
   await page.setViewportSize({ width: 1165, height: 892 });
   const download = page.waitForEvent('download');
   await page.locator('[data-action="agent-export"]').click();
-  await (await download).saveAs(path.join(root, 'studyself-organize.zip'));
+  await (await download).saveAs(path.join(root, 'FengZaiY.zip'));
   await page.locator('[data-nav="agents"]').click();
   await page.locator('[data-action="agent-revoke"]').click();
   await page.locator('#modal [data-confirm]').click();

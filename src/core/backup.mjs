@@ -18,7 +18,7 @@ export class BackupManager {
     noSymlink(destination);
     check(outside(this.store.directory, destination), 'Backup directory must be outside the local database directory');
     this.running = true;
-    const id = uuid(), root = path.join(destination, `StudySelf-${new Date().toISOString().replace(/[:.]/g, '-')}-${id.slice(0, 8)}`);
+    const id = uuid(), root = path.join(destination, `FengZaiY-${new Date().toISOString().replace(/[:.]/g, '-')}-${id.slice(0, 8)}`);
     try {
       fs.mkdirSync(root, { recursive: true });
       // Export committed immutable revisions; the running SQLite database and credentials are excluded.

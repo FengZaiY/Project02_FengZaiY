@@ -21,11 +21,12 @@ export function flattenMindmap(root) {
 // Mermaid owns parsing; raw declarations remain intact until that topic is edited.
 export function mindmapFromParsed(source, parsed, plainText = text => text) {
   const lines = source.split(/\r?\n/);
-  const metaLine = lines.find(line => line.trim().startsWith('%% studyself-mindmap:'));
-  requireValue(lines.filter(line => line.trim().startsWith('%% studyself-mindmap:')).length <= 1, '导图包含重复布局信息，请先在源文本中处理');
+  const metadataLine = line => /^%% (?:fengzaiy|studyself)-mindmap:/.test(line.trim());
+  const metaLine = lines.find(metadataLine);
+  requireValue(lines.filter(metadataLine).length <= 1, '导图包含重复布局信息，请先在源文本中处理');
   let meta = {};
   if (metaLine) {
-    meta = JSON.parse(metaLine.trim().slice('%% studyself-mindmap:'.length));
+    meta = JSON.parse(metaLine.trim().replace(/^%% (?:fengzaiy|studyself)-mindmap:/, ''));
     requireValue(meta.v === 1 && ['balanced', 'right'].includes(meta.layout) && Object.hasOwn(mindmapPalettes, meta.palette)
       && Array.isArray(meta.collapsed) && meta.collapsed.every(id => /^m\d+$/.test(id))
       && Object.keys(meta).every(key => ['v', 'layout', 'palette', 'collapsed'].includes(key)), '此导图的布局信息暂不支持可视化编辑，请保留源文本');
@@ -45,7 +46,7 @@ export function mindmapFromParsed(source, parsed, plainText = text => text) {
   const root = convert(parsed);
   requireValue(index === declarations.length, '此导图包含多行主题或特殊语法，请保留源文本');
   return { root, layout: meta.layout || 'balanced', palette: meta.palette || 'classic',
-    comments: lines.filter(line => line.trim().startsWith('%%') && !line.trim().startsWith('%% studyself-mindmap:')) };
+    comments: lines.filter(line => line.trim().startsWith('%%') && !metadataLine(line)) };
 }
 
 function labelDeclaration(node) {
@@ -59,7 +60,7 @@ export function serializeMindmap(model) {
   const nodes = flattenMindmap(model.root);
   const meta = { v: 1, layout: model.layout, palette: model.palette,
     collapsed: nodes.flatMap(({ node }, index) => node.collapsed ? [`m${index}`] : []) };
-  const source = ['mindmap', `%% studyself-mindmap:${JSON.stringify(meta)}`, ...(model.comments || []),
+  const source = ['mindmap', `%% fengzaiy-mindmap:${JSON.stringify(meta)}`, ...(model.comments || []),
     ...nodes.map(({ node, depth }) => `${'  '.repeat(depth + 1)}${labelDeclaration(node)}`)].join('\n');
   requireValue(source.length <= 30000, '导图源文本超过 30000 字，请拆分导图');
   return source;

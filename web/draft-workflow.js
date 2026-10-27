@@ -61,7 +61,7 @@ export function createDraftUI({ state, api, esc, icon, openModal, saveNote, pers
     });
     $('#copy-draft-request').onclick = () => run(async () => {
       if (state.tabs.some(tab => tab.recordId === record.id && tab.dirty)) throw new Error('请先保存草稿，再复制整理请求');
-      await navigator.clipboard.writeText(`请读取 FengZai·Y 的最新 Skill 和整理偏好，整理草稿 ${record.id}（知识库 ${record.data.domain}）。先读取最新正文与 heads，再在方案每个相关项的 draftRefs 中填写 {id, versionId}。当前所见版本：${record.heads.join(', ')}。保留出处、附件及不同观点；列出全部待处理内容，等待我部分或全部确认，不直接归档。`);
+      await navigator.clipboard.writeText(`请读取 FengZaiY 的最新 Skill 和整理偏好，整理草稿 ${record.id}（知识库 ${record.data.domain}）。先读取最新正文与 heads，再在方案每个相关项的 draftRefs 中填写 {id, versionId}。当前所见版本：${record.heads.join(', ')}。保留出处、附件及不同观点；列出全部待处理内容，等待我部分或全部确认，不直接归档。`);
       toast('整理请求已复制');
     });
     redrawIcons();

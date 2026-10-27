@@ -8,7 +8,7 @@ import { _electron as electron } from 'playwright';
 import electronPath from 'electron';
 
 const output = path.resolve('artifacts/audit-fixes-desktop'); fs.mkdirSync(output, { recursive: true });
-const root = fs.mkdtempSync(path.join(os.tmpdir(), 'studyself-repair-desktop-'));
+const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fengzaiy-repair-desktop-'));
 const profile = path.join(root, 'profile');
 const application = await electron.launch({ executablePath: electronPath,
   args: [path.resolve('.'), '--smoke-test', '--test-exit', `--data-dir=${profile}`], timeout: 40000 });
@@ -115,7 +115,7 @@ try {
     window.close = () => { globalThis.auditCloseRequested = true; };
     app.relaunch = () => {
       const fs = process.getBuiltinModule('fs'), path = process.getBuiltinModule('path');
-      fs.writeFileSync(marker, JSON.stringify({ workspaceLocked: fs.existsSync(path.join(profile, '.studyself-lock.json')), locationLocked: fs.existsSync(`${profile}.storage.json.lock`) }));
+      fs.writeFileSync(marker, JSON.stringify({ workspaceLocked: fs.existsSync(path.join(profile, '.fengzaiy-lock.json')), locationLocked: fs.existsSync(`${profile}.storage.json.lock`) }));
     };
   }, { marker, profile });
   await page.locator('[data-action=storage-restart]').click();

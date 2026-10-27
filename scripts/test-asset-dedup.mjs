@@ -17,7 +17,7 @@ try {
   const renamed = path.join(root, '讲义副本.txt'); fs.copyFileSync(file, renamed);
   const b = await app.service.call('assetImport', { path: renamed, domain: library.id, duplicateMode: 'separate' });
   const note = store.write({ type: 'note', data: { title: '学习笔记', domain: library.id, format: 'html',
-    content: `<p>保留正文与<a href="studyself://asset/${b.id}">原始讲义</a></p>`, assetIds: [a.id, b.id] } });
+    content: `<p>保留正文与<a href="fengzaiy://asset/${b.id}">原始讲义</a></p>`, assetIds: [a.id, b.id] } });
   await app.service.call('assetUpdate', { id: b.id, parents: b.heads, changes: { tags: ['课程'], sensitive: true } });
   try { browser = await chromium.launch({ headless: true }); }
   catch { browser = await chromium.launch({ channel: 'msedge', headless: true }); }
@@ -102,7 +102,7 @@ try {
   await page.waitForFunction(() => document.querySelectorAll('[data-material-row]').length === 1);
   assert.deepEqual(store.get(note.id).data.assetIds, [a.id]);
   assert.match(store.get(note.id).data.content, /未保存输入/);
-  assert.ok(store.get(note.id).data.content.includes(`studyself://asset/${a.id}`));
+  assert.ok(store.get(note.id).data.content.includes(`fengzaiy://asset/${a.id}`));
   assert.equal(store.get(b.id).deleted, true); assert.equal(store.get(third.id).deleted, true);
   assert.equal(store.get(a.id).data.sensitive, true);
   assert.deepEqual(store.get(added.id).data.assetIds, [a.id]);

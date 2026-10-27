@@ -1,3 +1,4 @@
+import { incompleteMarkerPath, legacyNames } from './legacy-names.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync, backup } from 'node:sqlite';
@@ -7,7 +8,7 @@ import { atomicWrite, check, hashFile, noSymlink, outside, uuid } from './util.m
 import { lockFile, workspaceLock } from './workspace-lock.mjs';
 
 const databaseName = 'knowledge.sqlite';
-const incompleteName = '.studyself-incomplete.json';
+const incompleteName = '.fengzaiy-incomplete.json';
 const separate = (a, b) => outside(a, b) && outside(b, a);
 const localValue = (db, key) => JSON.parse(db.prepare('SELECT value FROM local_config WHERE key=?').get(key)?.value || 'null');
 
@@ -31,9 +32,9 @@ function checkBoundaries(db, target) {
 
 function inspectDatabase(directory, environment) {
   directoryPath(directory);
-  check(!fs.existsSync(path.join(directory, incompleteName)), '该目录包含未完成迁移，不能作为工作区打开');
+  check(!fs.existsSync(incompleteMarkerPath(directory)), '该目录包含未完成迁移，不能作为工作区打开');
   const file = path.join(directory, databaseName);
-  check(fs.existsSync(file), '该目录没有 FengZai·Y 工作区，请选择包含 knowledge.sqlite 的文件夹');
+  check(fs.existsSync(file), '该目录没有 FengZaiY 工作区，请选择包含 knowledge.sqlite 的文件夹');
   noSymlink(file);
   noSymlink(path.join(directory, 'device-vault.key'));
   check((fs.existsSync(path.join(directory, 'device-vault.key')) ? 'preview' : 'desktop') === environment,
@@ -42,7 +43,7 @@ function inspectDatabase(directory, environment) {
   try {
     check(Object.values(db.prepare('PRAGMA quick_check').get())[0] === 'ok', '工作区数据库校验失败');
     for (const table of ['meta', 'events', 'heads', 'pending', 'rejected', 'packets', 'receipts', 'assets', 'local_config']) {
-      check(db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(table), '不是完整的 FengZai·Y 工作区');
+      check(db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(table), '不是完整的 FengZaiY 工作区');
     }
     const deviceId = db.prepare("SELECT value FROM meta WHERE key='deviceId'").get()?.value;
     check(deviceId, '工作区缺少设备标识');
@@ -57,7 +58,7 @@ function inspectDatabase(directory, environment) {
 
 async function copyTree(source, target, root = true) {
   const excluded = new Set([databaseName, `${databaseName}-wal`, `${databaseName}-shm`, `${databaseName}-journal`,
-    '.studyself-lock.json', incompleteName, 'electron-profile', 'incoming', 'opened-files']);
+    '.fengzaiy-lock.json', legacyNames.workspaceLock, legacyNames.incompleteMarker, incompleteName, 'electron-profile', 'incoming', 'opened-files']);
   for (const entry of fs.readdirSync(source, { withFileTypes: true })) {
     if (root && excluded.has(entry.name)) continue;
     const from = path.join(source, entry.name), to = path.join(target, entry.name);
@@ -145,7 +146,7 @@ export class StorageLocation {
       return { mode, directory: target, counts: { ...snapshot.counts,
         library: snapshot.libraries.filter(item => !item.deleted || item.contentCount > 0).length } };
     }
-    check(fs.existsSync(path.join(target, databaseName)), '该目录没有 FengZai·Y 工作区，请选择包含 knowledge.sqlite 的文件夹');
+    check(fs.existsSync(path.join(target, databaseName)), '该目录没有 FengZaiY 工作区，请选择包含 knowledge.sqlite 的文件夹');
     const release = workspaceLock(target);
     try { return { mode, ...inspectDatabase(target, this.environment) }; }
     finally { release(); }
@@ -166,7 +167,7 @@ export class StorageLocation {
         check(this.config.format === 1, '不支持的本地存储配置');
         this.current = directoryPath(this.config.directory);
         inspectDatabase(this.current, this.environment);
-      } else if (fs.existsSync(path.join(this.current, databaseName)) || fs.existsSync(path.join(this.current, incompleteName))) {
+      } else if (fs.existsSync(path.join(this.current, databaseName)) || fs.existsSync(incompleteMarkerPath(this.current))) {
         inspectDatabase(this.current, this.environment);
       } else if (fs.existsSync(this.current)) {
         check(fs.readdirSync(this.current).every(name => name === 'electron-profile'), '目录非空且没有工作区数据库，不会在此创建空库');
@@ -188,7 +189,7 @@ export class StorageLocation {
           candidate = new Service(pending.directory, { ...options, storage: this });
           await candidate.ready;
           // Rename/write failure keeps the old startup pointer and the source intact.
-          if (pending.mode === 'migrate') fs.unlinkSync(path.join(pending.directory, incompleteName));
+          if (pending.mode === 'migrate') fs.unlinkSync(incompleteMarkerPath(pending.directory));
           this.write({ format: 1, directory: pending.directory, pending: null,
             lastChange: { mode: pending.mode, previous: this.current, at: new Date().toISOString() } });
           this.current = pending.directory;

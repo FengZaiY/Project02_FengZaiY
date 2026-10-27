@@ -75,9 +75,9 @@ test('merge rewrites current rich links, media and source fields atomically whil
   const f = await setup(t);
   const asset = f.b.id;
   const block = JSON.stringify({ v: 1, kind: 'image', label: '保持标题', assetId: asset }).replaceAll('"', '&quot;');
-  const content = `<p data-user="keep">正文 <a href="studyself://asset/${asset}">原文</a></p><figure data-ss-block="${block}" data-ss-layout='{"width":60,"height":null,"align":"left"}'></figure><pre>studyself://asset/${asset}</pre>`;
+  const content = `<p data-user="keep">正文 <a href="fengzaiy://asset/${asset}">原文</a></p><figure data-ss-block="${block}" data-ss-layout='{"width":60,"height":null,"align":"left"}'></figure><pre>fengzaiy://asset/${asset}</pre>`;
   const note = f.store.write({ type: 'note', data: { title: '引用笔记', domain: f.library.id, format: 'html', content, assetIds: [f.a.id, asset] } });
-  const source = f.store.write({ type: 'source', data: { title: '来源', domain: f.library.id, url: `studyself://asset/${asset}` } });
+  const source = f.store.write({ type: 'source', data: { title: '来源', domain: f.library.id, url: `fengzaiy://asset/${asset}` } });
   const proposal = f.store.write({ type: 'proposal', data: { title: '待确认方案', domain: f.library.id, items: [{ id: uuid(), targetId: uuid(), parents: [], data: { title: '待确认', domain: f.library.id, assetIds: [asset] } }] } });
   await f.call('assetUpdate', { id: asset, parents: f.b.heads, changes: { tags: ['标签乙'], sensitive: true } });
   const plan = await f.preview();
@@ -88,12 +88,12 @@ test('merge rewrites current rich links, media and source fields atomically whil
   assert.equal(result.retired[0], asset);
   assert.deepEqual(f.store.get(note.id).data.assetIds, [f.a.id]);
   const after = f.store.get(note.id).data.content;
-  assert.ok(after.includes(`href="studyself://asset/${f.a.id}"`));
+  assert.ok(after.includes(`href="fengzaiy://asset/${f.a.id}"`));
   assert.ok(after.includes(`assetId&quot;:&quot;${f.a.id}`));
   assert.ok(after.includes(`data-ss-layout='{"width":60,"height":null,"align":"left"}'`));
-  assert.ok(after.includes(`<pre>studyself://asset/${asset}</pre>`));
+  assert.ok(after.includes(`<pre>fengzaiy://asset/${asset}</pre>`));
   assert.equal(f.store.history(note.id).find(v => v.id === note.heads[0]).data.content, content);
-  assert.equal(f.store.get(source.id).data.url, `studyself://asset/${f.a.id}`);
+  assert.equal(f.store.get(source.id).data.url, `fengzaiy://asset/${f.a.id}`);
   assert.deepEqual(f.store.get(proposal.id).data.items[0].data.assetIds, [f.a.id]);
   assert.equal(f.store.get(asset).deleted, true);
   assert.ok(fs.existsSync(f.store.assetLocation(asset).path));
@@ -108,10 +108,10 @@ test('merge rewrites current rich links, media and source fields atomically whil
 
 test('merge updates Markdown links without changing code, refuses unsupported link definitions and preserves unknown blocks', () => {
   const from = uuid(), to = uuid(), replacements = new Map([[from, to]]);
-  const markdown = `正文 [原件](studyself://asset/${from})\n\n\`studyself://asset/${from}\`\n\n\`\`\`text\n[示例](studyself://asset/${from})\n\`\`\`\n`;
+  const markdown = `正文 [原件](fengzaiy://asset/${from})\n\n\`fengzaiy://asset/${from}\`\n\n\`\`\`text\n[示例](fengzaiy://asset/${from})\n\`\`\`\n`;
   const changed = replaceAssetReferences({ content: markdown }, replacements).content;
-  assert.equal(changed, markdown.replace(`正文 [原件](studyself://asset/${from})`, `正文 [原件](studyself://asset/${to})`));
-  assert.throws(() => replaceAssetReferences({ content: `[原件][ref]\n\n[ref]: studyself://asset/${from}` }, replacements), /引用式/);
+  assert.equal(changed, markdown.replace(`正文 [原件](fengzaiy://asset/${from})`, `正文 [原件](fengzaiy://asset/${to})`));
+  assert.throws(() => replaceAssetReferences({ content: `[原件][ref]\n\n[ref]: fengzaiy://asset/${from}` }, replacements), /引用式/);
   assert.throws(() => replaceAssetReferences({ format: 'html', content: '<figure data-ss-block=\'{"v":99,"kind":"future"}\'></figure>' }, replacements), /类型/);
 });
 

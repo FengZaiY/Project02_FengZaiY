@@ -142,7 +142,7 @@ try {
   assert.equal(await page.locator('.tiptap figure').evaluate(element => JSON.parse(element.dataset.ssBlock).source), savedBlock.source);
   const downloadPromise = page.waitForEvent('download'); await page.locator('[data-action=export]').click();
   const download = await downloadPromise; const output = path.join(root, 'mindmap.md'); await download.saveAs(output);
-  assert.match(fs.readFileSync(output, 'utf8'), /studyself-mindmap/);
+  assert.match(fs.readFileSync(output, 'utf8'), /fengzaiy-mindmap/);
   assert.deepEqual(errors, []);
   console.log('PASS: visual topics, keyboard, IME, drag reparent, collapse, layout, palette, zoom, undo, save/reopen, punctuation, source fallback, cancel and export.');
 } catch (error) {

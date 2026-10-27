@@ -10,7 +10,7 @@ import { createServer } from '../src/server.mjs';
 import { richReferences } from '../src/core/rich-content.mjs';
 import { validateBlock, validateLayout, parseNoteLink, safeNoteLink, encodeBlock } from '../src/core/rich-schema.mjs';
 import { uuid, sha } from '../src/core/util.mjs';
-import { call } from '../skills/studyself-organize/scripts/client.mjs';
+import { call } from '../skills/fengzaiy/scripts/client.mjs';
 
 const root = path.resolve('artifacts/rich-tests'); fs.mkdirSync(root, { recursive: true });
 const temp = () => fs.mkdtempSync(path.join(root, 'case-'));
@@ -25,17 +25,17 @@ test('rich schemas validate bounded shapes and safe portable links', () => {
   assert.throws(() => validateBlock({ ...fixture, path: 'C:/secret' }));
   assert.throws(() => validateBlock({ v: 1, kind: 'image', label: 'bad', assetId: 'file:///C:/secret' }));
   assert.throws(() => validateBlock({ v: 1, kind: 'canvas', label: 'bad', shapes: [{ type: 'rect', id: '1', x: Infinity, y: 0, width: 1, height: 1, text: '', fill: '#123456' }] }));
-  for (const url of ['javascript:alert(1)', 'file:///C:/secret', 'https://user:pass@example.com', 'studyself://note/not-an-id']) assert.equal(safeNoteLink(url), false);
-  const id = uuid(); assert.deepEqual(parseNoteLink(`studyself://note/${id}`), { kind: 'note', id });
+  for (const url of ['javascript:alert(1)', 'file:///C:/secret', 'https://user:pass@example.com', 'fengzaiy://note/not-an-id']) assert.equal(safeNoteLink(url), false);
+  const id = uuid(); assert.deepEqual(parseNoteLink(`fengzaiy://note/${id}`), { kind: 'note', id });
   assert.equal(safeNoteLink('https://example.com/report.pdf'), true);
 });
 
 test('HTML parser discovers embedded media, encoded links and Markdown links independently of declared IDs', () => {
   const asset = uuid(), note = uuid(), local = uuid();
-  const content = blockHtml({ v: 1, kind: 'image', label: '图', assetId: asset }) + `<a href="studyself&#58;//note/${note}">笔记</a><a href="studyself://local/${local}">本机文件</a>`;
+  const content = blockHtml({ v: 1, kind: 'image', label: '图', assetId: asset }) + `<a href="fengzaiy&#58;//note/${note}">笔记</a><a href="fengzaiy://local/${local}">本机文件</a>`;
   assert.deepEqual(new Set(richReferences({ content, format: 'html' }).refs), new Set([asset, note]));
-  assert.deepEqual(richReferences({ content: `[笔记](studyself://note/${note})` }).refs, [note]);
-  assert.deepEqual(richReferences({ url: `studyself://asset/${asset}` }).assets, [asset]);
+  assert.deepEqual(richReferences({ content: `[笔记](fengzaiy://note/${note})` }).refs, [note]);
+  assert.deepEqual(richReferences({ url: `fengzaiy://asset/${asset}` }).assets, [asset]);
 });
 
 test('layout metadata is bounded and nested rows retain all attachment references', () => {
@@ -43,7 +43,7 @@ test('layout metadata is bounded and nested rows retain all attachment reference
   for (const layout of [{ width: 0, height: null, align: 'left' }, { width: 50, height: 2000, align: 'left' },
     { width: 50, height: null, align: 'url(file:secret)' }, { width: 50, height: null, align: 'left', path: 'C:/private' }]) assert.throws(() => validateLayout(layout));
   const id = uuid(), another = uuid();
-  const content = `<div data-ss-row="true"><section data-ss-container="true" data-ss-layout="{&quot;width&quot;:50,&quot;height&quot;:null,&quot;align&quot;:&quot;left&quot;}"><p><a href="studyself://asset/${another}">附件</a></p></section>${blockHtml({ v: 1, kind: 'image', label: '图', assetId: id })}</div>`;
+  const content = `<div data-ss-row="true"><section data-ss-container="true" data-ss-layout="{&quot;width&quot;:50,&quot;height&quot;:null,&quot;align&quot;:&quot;left&quot;}"><p><a href="fengzaiy://asset/${another}">附件</a></p></section>${blockHtml({ v: 1, kind: 'image', label: '图', assetId: id })}</div>`;
   assert.deepEqual(new Set(richReferences({ content, format: 'html' }).assets), new Set([id, another]));
   assert.throws(() => richReferences({ content: '<section data-ss-layout="{&quot;width&quot;:999}"></section>', format: 'html' }));
 });
@@ -54,10 +54,10 @@ test('embedded references allow all libraries and sensitivity while checking exi
   const other = store.write({ type: 'note', data: { title: '另一库', domain: b.data.domain, content: 'private' } });
   const sensitive = store.write({ type: 'asset', data: { title: '敏感图片', domain: a.data.domain, sensitive: true, filename: 'secret.png', mime: 'image/png', size: 1, sha256: sha('x'), priority: 'normal' } });
   const grant = service.agents.createGrant({ name: '测试', domains: [a.data.domain] }); await service.agents.configure(true);
-  const env = { STUDYSELF_AGENT_URL: service.agents.status().url, STUDYSELF_AGENT_TOKEN: grant.token };
+  const env = { FENGZAIY_AGENT_URL: service.agents.status().url, FENGZAIY_AGENT_TOKEN: grant.token };
   const rpc = (method, input, requestId) => call(method, input, requestId, env);
   const write = data => rpc('draftCreate', { data, preferencesVersion: service.agents.preferences().version }, uuid());
-  for (const content of [`<a href="studyself://note/${other.id}">链接</a>`, blockHtml({ v: 1, kind: 'image', label: '图', assetId: sensitive.id })]) {
+  for (const content of [`<a href="fengzaiy://note/${other.id}">链接</a>`, blockHtml({ v: 1, kind: 'image', label: '图', assetId: sensitive.id })]) {
     const data = { title: '嵌入引用', domain: a.data.domain, format: 'html', content };
     assert.equal((await write(data)).data.content, content);
     const old = store.write({ type: 'note', data });
@@ -65,7 +65,7 @@ test('embedded references allow all libraries and sensitivity while checking exi
     store.write({ id: old.id, type: 'note', parents: old.heads, data: { ...data, content: '公开正文', assetIds: [] } });
     assert.equal((await rpc('history', { id: old.id })).length, 2);
   }
-  await assert.rejects(rpc('sourceCreate', { data: { title: '缺失引用', domain: a.data.domain, url: `studyself://note/${uuid()}` }, preferencesVersion: service.agents.preferences().version }, uuid()), /FORBIDDEN/);
+  await assert.rejects(rpc('sourceCreate', { data: { title: '缺失引用', domain: a.data.domain, url: `fengzaiy://note/${uuid()}` }, preferencesVersion: service.agents.preferences().version }, uuid()), /FORBIDDEN/);
   const data = { title: '公式', domain: a.data.domain, format: 'html', content: blockHtml(fixture) }, requestId = uuid();
   const input = { data, preferencesVersion: service.agents.preferences().version };
   const first = await rpc('draftCreate', input, requestId), replay = await rpc('draftCreate', input, requestId);

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { call as mcpCall } from '../skills/studyself-organize/scripts/client.mjs';
+import { call as mcpCall } from '../skills/fengzaiy/scripts/client.mjs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { StorageLocation } from '../src/core/storage-location.mjs';
@@ -101,7 +101,7 @@ test('directory plans reject overlap, nonempty targets, missing workspaces, inva
   }
   fs.mkdirSync(target); fs.writeFileSync(path.join(target, 'keep.txt'), 'do not replace');
   await assert.rejects(app.service.call('storageSchedule', { mode: 'migrate', directory: target }), /空文件夹/);
-  await assert.rejects(app.service.call('storageInspect', { mode: 'open', directory: path.join(app.base, 'missing') }), /没有 FengZai·Y/);
+  await assert.rejects(app.service.call('storageInspect', { mode: 'open', directory: path.join(app.base, 'missing') }), /没有 FengZaiY/);
   assert.equal(fs.existsSync(path.join(app.base, 'missing')), false);
   app.service.store.local('workspace', { tabs: [{ dirty: true, draft: { content: 'keep me' } }] });
   await assert.rejects(app.service.call('storageSchedule', { mode: 'migrate', directory: path.join(app.base, 'empty') }), /未保存/);
@@ -154,7 +154,7 @@ test('target changes, copy failure and incomplete snapshots leave original usabl
   try { await app.restart(); } finally { fs.promises.copyFile = original; }
   assert.equal(app.service.store.get(note.id).data.title, '保留');
   assert.match(app.location.status().error, /disk full/);
-  assert.ok(fs.existsSync(path.join(failed, '.studyself-incomplete.json')));
+  assert.ok(fs.existsSync(path.join(failed, '.fengzaiy-incomplete.json')));
   await assert.rejects(app.service.call('storageInspect', { mode: 'open', directory: failed }), /未完成迁移/);
 });
 
@@ -183,13 +183,13 @@ test('missing selected database is an error, never a silently initialized blank 
   await app.service.call('storageSchedule', { mode: 'migrate', directory: target });
   await app.restart(); app.close();
   fs.renameSync(path.join(target, 'knowledge.sqlite'), path.join(target, 'held.sqlite'));
-  await assert.rejects(new StorageLocation(app.anchor).open(), /没有 FengZai·Y/);
+  await assert.rejects(new StorageLocation(app.anchor).open(), /没有 FengZaiY/);
   assert.equal(fs.existsSync(path.join(target, 'knowledge.sqlite')), false);
 });
 
 test('first launch rejects incomplete, corrupt and differently encrypted existing workspaces', async t => {
   const app = await setup(t), other = path.join(app.base, 'other');
-  fs.mkdirSync(other); fs.writeFileSync(path.join(other, '.studyself-incomplete.json'), '{}');
+  fs.mkdirSync(other); fs.writeFileSync(path.join(other, '.fengzaiy-incomplete.json'), '{}');
   await assert.rejects(new StorageLocation(other).open(), /未完成迁移/);
   assert.equal(fs.existsSync(path.join(other, 'knowledge.sqlite')), false);
   const corrupt = path.join(app.base, 'corrupt'); fs.mkdirSync(corrupt);
@@ -249,7 +249,7 @@ test('local HTTP exposes storage controls only to authorized UI, not external Ag
   const body = JSON.stringify({ method: 'storageStatus' });
   const denied = await fetch(`${app.url}/api`, { method: 'POST', body });
   assert.equal(denied.status, 403);
-  const response = await fetch(`${app.url}/api`, { method: 'POST', headers: { 'X-StudySelf-Token': app.token }, body });
+  const response = await fetch(`${app.url}/api`, { method: 'POST', headers: { 'X-FengZaiY-Token': app.token }, body });
   assert.equal((await response.json()).value.directory, anchor);
   const library = app.service.store.saveLibrary({ title: '接口权限测试' });
   const grant = app.service.agents.createGrant({ name: '测试', domains: [library.id] });
@@ -259,5 +259,5 @@ test('local HTTP exposes storage controls only to authorized UI, not external Ag
   assert.notEqual(external.status, 200);
   assert.ok(!(await external.text()).includes(anchor));
   await assert.rejects(mcpCall('storageStatus', {}, undefined,
-    { STUDYSELF_AGENT_URL: app.service.agents.status().mcpUrl, STUDYSELF_AGENT_TOKEN: grant.token }), /FORBIDDEN/);
+    { FENGZAIY_AGENT_URL: app.service.agents.status().mcpUrl, FENGZAIY_AGENT_TOKEN: grant.token }), /FORBIDDEN/);
 });

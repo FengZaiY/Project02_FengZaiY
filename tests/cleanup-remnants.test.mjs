@@ -8,7 +8,7 @@ import { Service } from '../src/core/service.mjs';
 import { previewEmptyDirectories, cleanEmptyDirectories } from '../src/core/empty-library-directories.mjs';
 
 async function fixture(t) {
-  const service = new Service(fs.mkdtempSync(path.join(os.tmpdir(), 'studyself-remnants-')));
+  const service = new Service(fs.mkdtempSync(path.join(os.tmpdir(), 'fengzaiy-remnants-')));
   await service.ready; t.after(() => service.close());
   const store = service.store;
   const orphan = title => {
@@ -60,7 +60,7 @@ test('new files and changed markers invalidate confirmation; unknown directories
   assert.throws(() => cleanEmptyDirectories(store, { token: plan.token, confirmed: true }), { code: 'CONFLICT' });
   assert.equal(fs.readFileSync(extra, 'utf8'), 'keep');
   const other = orphan('marker');
-  fs.writeFileSync(path.join(other.directory, '.studyself-library.json'), '{}');
+  fs.writeFileSync(path.join(other.directory, '.fengzaiy-library.json'), '{}');
   assert.ok(previewEmptyDirectories(store).blocked.some(item => item.id === other.id && /归属/.test(item.reason)));
   const unknown = path.join(store.directory, 'untracked'); fs.mkdirSync(unknown);
   assert.equal(previewEmptyDirectories(store).eligible.length, 0);
@@ -95,7 +95,7 @@ test('directory removal failure preserves a newly arrived file and restores the 
 
 test('missing orphan directories can drop stale mappings and active operations prevent cleanup', async t => {
   const { service, store, orphan, clean } = await fixture(t), target = orphan('missing');
-  fs.unlinkSync(path.join(target.directory, '.studyself-library.json')); fs.rmdirSync(target.directory);
+  fs.unlinkSync(path.join(target.directory, '.fengzaiy-library.json')); fs.rmdirSync(target.directory);
   service.transport.running = true;
   await assert.rejects(service.call('emptyDirectoriesPreview'), { code: 'BUSY' });
   service.transport.running = false;
@@ -108,9 +108,9 @@ test('a new note invalidates an empty-directory preview and directory junctions 
   const preview = previewEmptyDirectories(store);
   store.write({ type: 'note', data: { title: 'new', domain: target.id, content: 'keep' } });
   assert.throws(() => cleanEmptyDirectories(store, { token: preview.token, confirmed: true }), { code: 'CONFLICT' });
-  const linked = orphan('junction'), external = fs.mkdtempSync(path.join(os.tmpdir(), 'studyself-external-'));
+  const linked = orphan('junction'), external = fs.mkdtempSync(path.join(os.tmpdir(), 'fengzaiy-external-'));
   fs.writeFileSync(path.join(external, 'source.txt'), 'keep external');
-  fs.unlinkSync(path.join(linked.directory, '.studyself-library.json')); fs.rmdirSync(linked.directory);
+  fs.unlinkSync(path.join(linked.directory, '.fengzaiy-library.json')); fs.rmdirSync(linked.directory);
   fs.symlinkSync(external, linked.directory, process.platform === 'win32' ? 'junction' : 'dir');
   assert.ok(previewEmptyDirectories(store).blocked.some(item => item.id === linked.id));
   assert.equal(fs.readFileSync(path.join(external, 'source.txt'), 'utf8'), 'keep external');

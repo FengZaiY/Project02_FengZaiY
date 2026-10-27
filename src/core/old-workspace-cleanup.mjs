@@ -1,3 +1,4 @@
+import { libraryMarkerPath, legacyNames } from './legacy-names.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -56,7 +57,7 @@ async function inventory(storage, root) {
     }
     for (const [id, name] of Object.entries(local('libraryDirectories') || {})) {
       check(typeof name === 'string' && path.basename(name) === name, '旧知识库目录映射无效');
-      const marker = inside(root, path.join(name, '.studyself-library.json')); noSymlink(marker);
+      const marker = libraryMarkerPath(inside(root, name)); noSymlink(marker);
       if (fs.existsSync(marker)) {
         const value = JSON.parse(fs.readFileSync(marker, 'utf8'));
         check(value.format === 1 && value.libraryId === id, '旧目录归属已变化');
@@ -116,6 +117,6 @@ export async function cleanPrevious(storage, { token, confirmed } = {}) {
       }
     }
     storage.write({ ...storage.config, previousCleanup: null, lastChange: { ...storage.config.lastChange, cleaned: true } });
-    return { cleaned: true, extraFilesRetained: fs.readdirSync(root).filter(name => name !== '.studyself-lock.json').length > 0 };
+    return { cleaned: true, extraFilesRetained: fs.readdirSync(root).filter(name => !['.fengzaiy-lock.json', legacyNames.workspaceLock].includes(name)).length > 0 };
   } finally { release(); }
 }

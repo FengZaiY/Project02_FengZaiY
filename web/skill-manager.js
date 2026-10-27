@@ -32,7 +32,7 @@ export function createSkillManager({ api, esc, icon, safeHtml, formatTime, toast
     stash(); host = element; bundle = next;
     const prefs = bundle.preferences;
     if (!dirty()) pending = { content: prefs.content, saved: prefs.content, heads: [...prefs.heads] };
-    host.innerHTML = `<div class="skill-heading"><div><h2>SKILL 管理</h2><strong>studyself-organize</strong><span class="pill">系统内置</span></div><button class="secondary" data-action="agent-export" ${prefs.conflict ? 'disabled' : ''}>${icon('download')}导出 Skill</button></div>
+    host.innerHTML = `<div class="skill-heading"><div><h2>SKILL 管理</h2><strong>FengZaiY</strong><span class="pill">系统内置</span></div><button class="secondary" data-action="agent-export" ${prefs.conflict ? 'disabled' : ''}>${icon('download')}导出 Skill</button></div>
       <div class="skill-summary"><span>知识整理与方案提交</span><span>${Object.keys(bundle.files).length} 个文件</span><span>协议 1</span><span id="skill-install-attention" role="status"></span></div>
       <dl class="skill-versions"><div><dt>内置版本</dt><dd title="${esc(bundle.skillVersion)}">${esc(bundle.skillVersion.slice(0, 12))}</dd></div><div><dt>偏好版本</dt><dd title="${esc(prefs.version)}">${esc(prefs.version.slice(0, 12))}</dd></div><div><dt>最近生成导出</dt><dd>${bundle.lastGenerated ? `${formatTime(bundle.lastGenerated.at)} · ${bundle.lastGenerated.version === bundle.exportVersion ? '与当前一致' : '内容已更新，需重新导出'}` : '尚未导出'}</dd></div></dl>
       <p class="skill-export-note">导出包是文件快照。已关联安装可自动检查及更新；未关联副本需自行替换。</p>

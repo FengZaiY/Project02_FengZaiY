@@ -8,11 +8,11 @@
 
 ## 当前发布仓库
 
-用户提供并选择共用现有公开仓库 `FengZaiY/Project02_StudySelf`。默认来源已写入 `package.json` 的 `studyselfUpdateSource`；源码仍按原方式管理，安装包放在 `https://github.com/FengZaiY/Project02_StudySelf/releases`。本轮只读取公开页面确认仓库属性，不修改远端 Git 配置、不推送、不发布。
+用户提供并选择共用现有公开仓库 `FengZaiY/Project02_StudySelf`。默认来源已写入 `package.json` 的 `fengzaiyUpdateSource`；源码仍按原方式管理，安装包放在 `https://github.com/FengZaiY/Project02_StudySelf/releases`。本轮只读取公开页面确认仓库属性，不修改远端 Git 配置、不推送、不发布。
 
 如以后需要将分发与源码分开：
 
-在 GitHub 新建公开仓库，例如 `studyself-releases`，可勾选创建 README。地址形式为 `https://github.com/<owner>/studyself-releases`，发布页面为该地址后的 `/releases`。公开仓库只需要放发布说明、安装包及更新描述文件；无需上传源码、知识库、密钥或本机配置。新建空仓库还不等于已有可下载版本。
+在 GitHub 新建公开仓库，例如 `fengzaiy-releases`，可勾选创建 README。地址形式为 `https://github.com/<owner>/fengzaiy-releases`，发布页面为该地址后的 `/releases`。公开仓库只需要放发布说明、安装包及更新描述文件；无需上传源码、知识库、密钥或本机配置。新建空仓库还不等于已有可下载版本。
 
 本项目不代替用户创建仓库、上传文件或保管 GitHub 发布令牌。首次带更新功能的安装包仍须手动安装；原先的旧安装包不会因为源码更新而自动获得升级入口。
 
@@ -21,9 +21,9 @@
 以下配置和命令只在用户明确要求的打包发布任务执行，日常开发不要运行。
 
 1. 确定源码、版本号、更新说明和兼容范围；检查现有未提交改动，不自动提交或推送。
-2. 默认使用当前仓库的 Releases。需要覆盖时，公开 GitHub 仓库使用 `STUDYSELF_UPDATE_GITHUB=owner/repo`；HTTPS 静态目录使用 `STUDYSELF_UPDATE_URL=https://example.com/studyself/`。两者不可同时配置，禁止凭据、查询参数、HTTP 和直接安装包 URL。
+2. 默认使用当前仓库的 Releases。需要覆盖时，公开 GitHub 仓库使用 `FENGZAIY_UPDATE_GITHUB=owner/repo`；HTTPS 静态目录使用 `FENGZAIY_UPDATE_URL=https://example.com/fengzaiy/`。两者不可同时配置，禁止凭据、查询参数、HTTP 和直接安装包 URL。
 3. 运行 `npm run dist`。配置加载器把同一个来源写入 electron-builder 发布配置及打包后的 package metadata，同时由 builder 生成 `app-update.yml`。命令含 `--publish never`，不会上传或创建远端 Release。
-4. 核对实际生成的 `StudySelf-<version>-Setup.exe`、对应 `.blockmap` 和 `latest.yml`，保持文件名及哈希一致。GitHub 创建对应版本标签的正式 Release，上传这组发布成果后再发布；不要把测试版标成稳定版。静态目录先上传版本文件，最后更新 `latest.yml`，避免描述文件指向未上传完成的安装包。
+4. 核对实际生成的 `FengZaiY-<version>-Setup.exe`、对应 `.blockmap` 和 `latest.yml`，保持文件名及哈希一致。GitHub 创建对应版本标签的正式 Release，上传这组发布成果后再发布；不要把测试版标成稳定版。静态目录先上传版本文件，最后更新 `latest.yml`，避免描述文件指向未上传完成的安装包。
 5. 用隔离工作区验证从上一已发布版本检查、下载、取消、安装、重启和数据保留后，再将该版本推荐给其他电脑。实际测试记录版本、Windows/权限环境和签名状态。
 
 更新源固定在应用文件内，不由共享偏好、网页参数或 Agent API 控制。不能把测试中的 example.test 当成发布地址。更换发布来源须保留旧地址的过渡发布能力；已有安装包不会自动得知新域名。

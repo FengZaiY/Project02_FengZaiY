@@ -1,12 +1,12 @@
 {
-  "name": "studyself",
-  "version": "0.1.12",
+  "name": "fengzaiy",
+  "version": "0.1.13",
   "private": true,
   "license": "UNLICENSED",
-  "description": "FengZai·Y personal management system with local encrypted synchronization",
+  "description": "FengZaiY personal management system with local encrypted synchronization",
   "type": "module",
   "main": "src/desktop/main.mjs",
-  "studyselfUpdateSource": {
+  "fengzaiyUpdateSource": {
     "provider": "github",
     "owner": "FengZaiY",
     "repo": "Project02_StudySelf",
@@ -86,15 +86,15 @@
     }
   },
   "build": {
-    "appId": "cn.studyself.desktop",
-    "productName": "FengZai·Y",
+    "appId": "cn.fengzaiy.desktop",
+    "productName": "FengZaiY",
     "directories": {
       "output": "release"
     },
     "files": [
       "src/core/**/*",
       "src/desktop/**/*",
-      "skills/studyself-organize/**/*",
+      "skills/fengzaiy/**/*",
       "dist/**/*",
       "package.json"
     ],
@@ -108,7 +108,8 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "deleteAppDataOnUninstall": false,
-      "artifactName": "FengZaiY-${version}-Setup.${ext}"
+      "artifactName": "FengZaiY-${version}-Setup.${ext}",
+      "guid": "7457b9bb-d48d-5e54-9394-6a2683571810"
     }
   },
   "dependencies": {

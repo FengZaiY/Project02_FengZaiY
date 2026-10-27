@@ -1,3 +1,4 @@
+import { libraryMarkerPath } from './legacy-names.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { atomicWrite, canonical, check, hashFile, inside, noSymlink, now, outside, sha, uuid } from './util.mjs';
@@ -32,7 +33,7 @@ export class LocalHierarchy {
     return false;
   }
   pruneEmpty(directory) {
-    while (this.projectionFile(directory) && !fs.existsSync(path.join(directory, '.studyself-library.json'))) {
+    while (this.projectionFile(directory) && !fs.existsSync(libraryMarkerPath(directory))) {
       noSymlink(directory);
       if (!fs.existsSync(directory) || fs.readdirSync(directory).length) return;
       fs.rmdirSync(directory);

@@ -1,3 +1,4 @@
+import { legacyNames } from './core/legacy-names.mjs';
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -35,7 +36,7 @@ export async function createServer({ directory = path.join(project, '.local', 'p
         return;
       }
       if (url.pathname === '/api' || url.pathname === '/upload') {
-        check(req.method === 'POST' && req.headers['x-studyself-token'] === token, 'Local request authorization failed', 'UNAUTHORIZED');
+        check(req.method === 'POST' && (req.headers['x-fengzaiy-token'] ?? req.headers[legacyNames.header]) === token, 'Local request authorization failed', 'UNAUTHORIZED');
         let size = 0; const chunks = [];
         for await (const chunk of req) {
           size += chunk.length;
@@ -95,8 +96,8 @@ export async function createServer({ directory = path.join(project, '.local', 'p
     close: async () => { picker.close(); await new Promise(resolve => server.close(resolve)); await service.close(); storage.close(); } };
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const app = await createServer({ port: Number(process.env.PORT || 4317), directory: process.env.STUDYSELF_DATA || undefined });
-  console.log(`FengZai·Y preview: ${app.url}`);
+  const app = await createServer({ port: Number(process.env.PORT || 4317), directory: process.env.FENGZAIY_DATA || process.env[legacyNames.dataEnvironment] || undefined });
+  console.log(`FengZaiY preview: ${app.url}`);
   console.log(`Local data: ${app.service.store.directory}`);
   const stop = async () => { await app.close(); process.exit(0); };
   process.on('SIGTERM', stop); process.on('SIGINT', stop);

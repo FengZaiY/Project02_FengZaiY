@@ -1,6 +1,6 @@
 import { encodeBlock } from '../src/core/rich-schema.mjs';
 
-const dragType = 'application/x-studyself-attachment';
+const dragType = 'application/x-fengzaiy-attachment';
 let activeDrag;
 
 export function attachmentContent(asset, label = asset.data.title) {
@@ -8,7 +8,7 @@ export function attachmentContent(asset, label = asset.data.title) {
     : ['video/mp4', 'video/webm', 'video/quicktime'].includes(asset.data.mime) ? 'video' : null;
   return kind ? { type: 'richBlock', attrs: { payload: encodeBlock({ v: 1, kind, assetId: asset.id, label: label.slice(0, 200) }) } }
     : { type: 'paragraph', content: [{ type: 'text', text: label,
-      marks: [{ type: 'link', attrs: { href: `studyself://asset/${asset.id}` } }] }] };
+      marks: [{ type: 'link', attrs: { href: `fengzaiy://asset/${asset.id}` } }] }] };
 }
 
 function clearDrag() {

@@ -1,3 +1,4 @@
+import { legacyNames } from './legacy-names.mjs';
 import { canonical, check, sha } from './util.mjs';
 import { compareNoteOrder } from './note-order.mjs';
 
@@ -116,7 +117,7 @@ export function validateProposalHierarchy(store, items) {
 }
 
 const derivedId = value => {
-  const hex = sha(`studyself-note-tree-v1:${value}`).slice(0, 32);
+  const hex = sha(`${legacyNames.treeSeed}${value}`).slice(0, 32);
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 };
 export const legacyNoteId = id => derivedId(`folder:${id}`);

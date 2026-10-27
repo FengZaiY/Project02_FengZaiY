@@ -7,7 +7,7 @@ import { Service } from '../src/core/service.mjs';
 import { mediaResponse } from '../src/core/media.mjs';
 
 async function fixture(t, name = 'document.txt', bytes = Buffer.from('original content')) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'studyself-reader-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fengzaiy-reader-'));
   const service = new Service(path.join(root, 'workspace')); t.after(() => service.close());
   const source = path.join(root, name); fs.writeFileSync(source, bytes);
   const asset = await service.call('assetImport', { path: source, domain: 'Reader test' });

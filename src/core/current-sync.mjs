@@ -1,3 +1,5 @@
+import { syncRootPath } from './legacy-names.mjs';
+import { requiresNamingFormat, assertNamingFormat } from './naming-format.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { DirectoryChannel, assetObjects, assetAAD, localAsset, sealBinary, validateAssets } from './sync-objects.mjs';
@@ -108,7 +110,7 @@ export class CurrentSync {
   }
   channel() {
     const config = this.config(); check(config.configured, '请先配置同步目录与配对密钥');
-    return new DirectoryChannel(path.join(config.folder, 'StudySelfSync', 'v3', config.channel), Buffer.from(this.store.secret('pairing'), 'hex'));
+    return new DirectoryChannel(path.join(syncRootPath(config.folder), 'v3', config.channel), Buffer.from(this.store.secret('pairing'), 'hex'));
   }
   async exclusive(fn) {
     check(!this.running, '同步操作正在进行', 'BUSY'); this.running = true; this.pauseRequested = false;
@@ -191,12 +193,12 @@ export class CurrentSync {
         descriptor.chunks.forEach((chunk, index) => objects.push({ kind: 'asset', ...chunk, assetIndex, index }));
       }
       const erasures = this.store.erasures();
-      const format = events.some(requiresPersonalFormat) || erasures.some(requiresPersonalFormat) ? 7 : events.some(event => event.retiredPresentation) ? 6 : this.control().management?.length ? 5 : erasures.length ? 4 : 3;
+      const format = events.some(requiresNamingFormat) ? 8 : events.some(requiresPersonalFormat) || erasures.some(requiresPersonalFormat) ? 7 : events.some(event => event.retiredPresentation) ? 6 : this.control().management?.length ? 5 : erasures.length ? 4 : 3;
       const manifest = { format, ...(format >= 4 ? { erasures } : {}), id: uuid(), deviceId: this.store.deviceId, deviceName: this.store.getMeta('deviceName'),
         at: now(), parts, assets, control: mergeControl(EMPTY_CONTROL, this.control()) };
       manifest.digest = manifestDigest(manifest);
       for (const object of objects) object.reusable = proofs[object.name] === `${object.hash}:${object.size}`;
-      if (this.value('latest')?.digest === manifest.digest
+      if (this.value('latest')?.digest === manifest.digest && this.value('latest')?.format === manifest.format
         && fs.existsSync(channel.file(`current-${this.store.deviceId}.sscurrent`))
         && objects.every(object => object.reusable || fs.existsSync(channel.file(object.name)))) return { ...this.status(), unchanged: true };
       const latestBytes = Buffer.byteLength(canonical(manifest)) + 36;
@@ -241,6 +243,7 @@ export class CurrentSync {
       this.guardEditing();
       this.guardParticipation();
       const plan = this.value('plan'), channel = this.channel(), progress = { ...this.progress(), state: 'running', phase: 'objects', reason: '' };
+      assertNamingFormat(plan.manifest.format, Object.values(plan.metadata).flat());
       check(canonical(plan.manifest.control.management || []) === canonical(this.control().management || [])
         && canonical(plan.manifest.control.roles) === canonical(this.control().roles), '设备管理或主力角色已变化，请取消旧发布任务后重新发布', 'CONFLICT');
       this.saveProgress(progress);
@@ -302,7 +305,7 @@ export class CurrentSync {
     });
   }
   validateManifest(manifest, deviceId) {
-    check([3, 4, 5, 6, 7].includes(manifest?.format) && isId(manifest.id) && manifest.deviceId === deviceId && isId(deviceId)
+    check([3, 4, 5, 6, 7, 8].includes(manifest?.format) && isId(manifest.id) && manifest.deviceId === deviceId && isId(deviceId)
       && typeof manifest.deviceName === 'string' && manifest.deviceName.length <= 100 && Number.isFinite(Date.parse(manifest.at)), '无效的最新内容清单');
     check(Object.keys(manifest).sort().join() === (manifest.format >= 4
       ? 'assets,at,control,deviceId,deviceName,digest,erasures,format,id,parts' : 'assets,at,control,deviceId,deviceName,digest,format,id,parts'), '清单含未知字段');
@@ -373,6 +376,7 @@ export class CurrentSync {
       const erasedIds = new Set(erasures.map(item => item.entityId));
       for (const manifest of incoming) {
         const original = histories.get(manifest.id);
+        assertNamingFormat(manifest.format, original);
         check(manifest.format >= 7 || ![...original, ...(manifest.erasures || [])].some(requiresPersonalFormat), '个人管理记录需要 format 7，请升级所有同步客户端');
         const events = [...filterErased(original, erasures), ...replacementWorkspaces(original, erasures)];
         orderedEvents(events, this.store);

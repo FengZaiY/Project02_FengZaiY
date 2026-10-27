@@ -8,7 +8,7 @@ import { Store } from '../src/core/store.mjs';
 import { FolderTransport, makePairingKey } from '../src/core/transport.mjs';
 import { BackupManager } from '../src/core/backup.mjs';
 import { uuid, sha } from '../src/core/util.mjs';
-import { call as client } from '../skills/studyself-organize/scripts/client.mjs';
+import { call as client } from '../skills/fengzaiy/scripts/client.mjs';
 import { skillZip, skillExportFiles } from '../web/skill-export.js';
 import JSZip from 'jszip';
 
@@ -21,7 +21,7 @@ async function setup(t, permissions = {}) {
   const a = service.store.saveLibrary({ title: '研究' }), b = service.store.saveLibrary({ title: '独立资料' });
   const grant = service.agents.createGrant({ name: '测试 Agent', domains: [a.data.domain], ...permissions });
   await service.agents.configure(true);
-  const env = { STUDYSELF_AGENT_URL: service.agents.status().url, STUDYSELF_AGENT_TOKEN: grant.token };
+  const env = { FENGZAIY_AGENT_URL: service.agents.status().url, FENGZAIY_AGENT_TOKEN: grant.token };
   const rpc = (method, input = {}, requestId) => client(method, input, requestId, env);
   const version = service.agents.preferences().version;
   const write = (method, input, requestId = uuid()) => rpc(method, { ...input, preferencesVersion: version }, requestId);
@@ -39,7 +39,7 @@ test('Agent endpoint defaults off; credentials cover all libraries, remain hashe
   const later = service.store.saveLibrary({ title: '后续新建' });
   assert.ok((await rpc('libraries')).some(item => item.id === later.id));
   assert.equal((await rpc('bootstrap')).access.scope, 'all');
-  await assert.rejects(client('bootstrap', {}, undefined, { ...env, STUDYSELF_AGENT_TOKEN: '0'.repeat(64) }), /UNAUTHORIZED/);
+  await assert.rejects(client('bootstrap', {}, undefined, { ...env, FENGZAIY_AGENT_TOKEN: '0'.repeat(64) }), /UNAUTHORIZED/);
   service.agents.revoke(grant.id);
   assert.equal(service.agents.grants().length, 0);
   assert.equal(service.agents.status().audit.length, 0);
@@ -52,10 +52,10 @@ test('Agent endpoint defaults off; credentials cover all libraries, remain hashe
 
 test('Agent server rejects browser origins, bad hosts, arbitrary RPC and system control', async t => {
   const { env, rpc } = await setup(t);
-  const url = `${env.STUDYSELF_AGENT_URL}/mcp`;
+  const url = `${env.FENGZAIY_AGENT_URL}/mcp`;
   for (const headers of [{ Origin: 'https://example.com' }, { Host: 'evil.example' }]) {
     const status = await new Promise((resolve, reject) => {
-      const request = http.request(url, { method: 'POST', headers: { ...headers, 'Content-Type': 'application/json', Authorization: `Bearer ${env.STUDYSELF_AGENT_TOKEN}` } }, response => { response.resume(); response.on('end', () => resolve(response.statusCode)); });
+      const request = http.request(url, { method: 'POST', headers: { ...headers, 'Content-Type': 'application/json', Authorization: `Bearer ${env.FENGZAIY_AGENT_TOKEN}` } }, response => { response.resume(); response.on('end', () => resolve(response.statusCode)); });
       request.on('error', reject); request.end(JSON.stringify({ method: 'bootstrap' }));
     });
     assert.equal(status, 403);
@@ -297,7 +297,7 @@ test('receipts survive restart and revocation/expiry is checked before replay', 
   // setup cleanup must not close a second time.
   service.close = () => {};
   await next.agents.resume();
-  const newEnv = { ...env, STUDYSELF_AGENT_URL: next.agents.status().url };
+  const newEnv = { ...env, FENGZAIY_AGENT_URL: next.agents.status().url };
   assert.equal((await client('draftCreate', input, requestId, newEnv)).id, record.id);
   next.store.local('agentGrants', next.agents.grants().map(item => ({ ...item, expiresAt: '2000-01-01T00:00:00.000Z' })));
   await assert.rejects(client('draftCreate', input, requestId, newEnv), /UNAUTHORIZED/);
@@ -314,7 +314,7 @@ test('workspace publication strips retired chat payloads and portable skill ZIP 
   assert.equal(zip.readUInt32LE(0), 0x04034b50);
   assert.equal(zip.readUInt32LE(zip.length - 22), 0x06054b50);
   assert.equal(zip.readUInt16LE(zip.length - 12), 4);
-  fs.writeFileSync(path.join(root, 'studyself-organize.zip'), zip);
+  fs.writeFileSync(path.join(root, 'FengZaiY.zip'), zip);
 });
 
 test('built-in skill export versions match bootstrap and preserve an exact portable snapshot', async t => {
@@ -331,7 +331,7 @@ test('built-in skill export versions match bootstrap and preserve an exact porta
   assert.equal(store.history(prefs.id).length, historyCount, 'export is not a knowledge revision');
   assert.equal(generated.lastGenerated.version, generated.exportVersion);
   const files = skillExportFiles(generated), zip = await JSZip.loadAsync(await skillZip(files).arrayBuffer());
-  for (const [name, text] of Object.entries(files)) assert.equal(await zip.file(`studyself-organize/${name}`).async('string'), text);
+  for (const [name, text] of Object.entries(files)) assert.equal(await zip.file(`fengzaiy/${name}`).async('string'), text);
   assert.match(files['references/preferences.md'], /保留出处 <script>/);
   assert.equal(JSON.parse(files['manifest.json']).preferencesVersion, prefs.version);
   const serialized = JSON.stringify(files);

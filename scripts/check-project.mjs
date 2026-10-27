@@ -28,7 +28,7 @@ const required = [
   'src/core/asset-management.mjs', 'web/asset-manager.js', 'web/assets.css', 'tests/asset-management.test.mjs', 'scripts/test-assets-ui.mjs',
   'src/core/asset-merge.mjs', 'tests/asset-merge.test.mjs', 'scripts/test-asset-dedup.mjs',
   'web/asset-storage.js', 'scripts/test-asset-storage.mjs',
-  'src/core/agent-access.mjs', 'src/core/agent-mcp.mjs', 'web/agent-mcp.js', 'web/agent-mcp.css', 'tests/agent-mcp.test.mjs', 'docs/agent-mcp.md', 'skills/studyself-organize/SKILL.md', 'src/desktop/main.mjs',
+  'src/core/agent-access.mjs', 'src/core/agent-mcp.mjs', 'web/agent-mcp.js', 'web/agent-mcp.css', 'tests/agent-mcp.test.mjs', 'docs/agent-mcp.md', 'skills/fengzaiy/SKILL.md', 'src/desktop/main.mjs',
   'src/desktop/preload.cjs', 'src/server.mjs', 'web/app.js', 'tests/core.test.mjs',
   'src/core/rich-schema.mjs', 'src/core/rich-content.mjs', 'src/core/media.mjs',
   'src/core/retired-presentation.mjs', 'tests/retired-presentation.test.mjs', 'scripts/test-retired-reading.mjs',

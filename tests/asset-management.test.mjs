@@ -116,7 +116,7 @@ test('catalog filters names, original filenames, tags, kinds, duplicates, missin
 
 test('reference protection covers inline links, recycled records, proposals and local drafts', async t => {
   const f = await fixture(t), asset = await f.asset('原文.txt');
-  let note = f.store.write({ type: 'note', data: { title: '引用正文', domain: f.library.id, content: `[原文](studyself://asset/${asset.id})` } });
+  let note = f.store.write({ type: 'note', data: { title: '引用正文', domain: f.library.id, content: `[原文](fengzaiy://asset/${asset.id})` } });
   assert.equal((await f.call('assetDetail', { id: asset.id })).references[0].id, note.id);
   await assert.rejects(f.call('assetBatch', { items: [entry(asset)], action: 'trash' }), { code: 'ASSET_REFERENCED' });
   await assert.rejects(f.call('assetUpdate', { ...entry(asset), changes: { domain: f.other.id } }), { code: 'ASSET_REFERENCED' });
@@ -125,7 +125,7 @@ test('reference protection covers inline links, recycled records, proposals and 
   assert.equal((await f.call('assetDetail', { id: asset.id })).references[0].deleted, true);
   await assert.rejects(f.call('delete', entry(asset)), { code: 'ASSET_REFERENCED' });
   const free = await f.asset('独立.txt');
-  f.store.local('workspace', { tabs: [{ id: uuid(), recordId: note.id, dirty: true, draft: { title: '未保存', domain: f.library.id, content: `[未保存引用](studyself://asset/${free.id})` } }] });
+  f.store.local('workspace', { tabs: [{ id: uuid(), recordId: note.id, dirty: true, draft: { title: '未保存', domain: f.library.id, content: `[未保存引用](fengzaiy://asset/${free.id})` } }] });
   assert.equal((await f.call('assetDetail', { id: free.id })).references[0].pending, true);
   await assert.rejects(f.call('delete', entry(free)), { code: 'ASSET_REFERENCED' });
   f.store.local('workspace', { tabs: [] });
@@ -179,7 +179,7 @@ test('references on any concurrent branch block recycling, including rich media 
   const detail = await f.call('assetDetail', { id: a.id });
   assert.equal(detail.references[0].conflict, true);
   await assert.rejects(f.call('assetBatch', { items: [entry(a)], action: 'trash' }), { code: 'ASSET_REFERENCED' });
-  f.store.write({ type: 'source', data: { title: '内部来源', domain: f.library.id, url: `studyself://asset/${b.id}` } });
+  f.store.write({ type: 'source', data: { title: '内部来源', domain: f.library.id, url: `fengzaiy://asset/${b.id}` } });
   await assert.rejects(f.call('assetBatch', { items: [entry(b)], action: 'move', domain: f.other.id }), { code: 'ASSET_REFERENCED' });
   const free = await f.asset('无引用.txt');
   f.store.local('workspace', { tabs: [{ recordId: uuid(), dirty: true, draft: { title: '损坏的未保存块', domain: f.library.id, format: 'html', content: '<figure data-ss-block="broken"></figure>' } }] });

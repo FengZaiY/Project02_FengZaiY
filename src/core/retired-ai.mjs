@@ -1,3 +1,4 @@
+import { legacyNames } from './legacy-names.mjs';
 import { RETIRED_AI_TYPES } from './catalog.mjs';
 import { mergeErasures } from './erasures.mjs';
 import { deletionFiles, scheduleDeletion } from './permanent-files.mjs';
@@ -55,7 +56,7 @@ export function cleanRetiredTabs(workspace, ids = new Set()) {
 }
 
 const replacementId = id => {
-  const hash = sha(`studyself-retired-ai-workspace:${id}`);
+  const hash = sha(`${legacyNames.retiredWorkspaceSeed}${id}`);
   return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-4${hash.slice(13, 16)}-a${hash.slice(17, 20)}-${hash.slice(20, 32)}`;
 };
 

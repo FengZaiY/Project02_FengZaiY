@@ -1,8 +1,9 @@
+import { libraryMarkerPath } from './legacy-names.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { canonical, check, noSymlink, now, outside, sha } from './util.mjs';
 
-const markerName = '.studyself-library.json';
+
 
 export function previewEmptyDirectories(store) {
   const events = store.allEvents(), mappings = store.local('libraryDirectories') || {};
@@ -21,7 +22,7 @@ export function previewEmptyDirectories(store) {
       let domain = id;
       if (exists) {
         check(store.directories.owns(directory, id), '目录标识缺失或归属不明');
-        const marker = fs.readFileSync(path.join(directory, markerName));
+        const marker = fs.readFileSync(libraryMarkerPath(directory));
         domain = JSON.parse(marker).domain;
         item.markerHash = sha(marker);
         const stat = fs.statSync(directory);
@@ -35,7 +36,7 @@ export function previewEmptyDirectories(store) {
       check(!(store.local('workspace')?.tabs || []).some(tab => tab.domain === domain || tab.draft?.domain === domain), '仍有相关工作标签，请先关闭');
       check(![...bindings, ...links, ...tracked.map(relative => path.resolve(store.directory, relative))]
         .some(file => !outside(directory, file)), '仍有资料绑定或待处理文件');
-      check(!exists || fs.readdirSync(directory).every(name => name === markerName), '目录中仍有文件或子目录，保留不动');
+      check(!exists || fs.readdirSync(directory).every(name => name === path.basename(libraryMarkerPath(directory))), '目录中仍有文件或子目录，保留不动');
     } catch (error) { item.reason = error.message; }
     return item;
   }).sort((a, b) => a.id.localeCompare(b.id));
@@ -54,7 +55,7 @@ export function cleanEmptyDirectories(store, { confirmed, token } = {}) {
       check(current && canonical(current) === canonical(item), '目录或引用已变化，保留等待重新检查');
       const directory = store.directories.location(item.name);
       if (!item.missing) {
-        markerPath = path.join(directory, markerName); noSymlink(markerPath);
+        markerPath = libraryMarkerPath(directory); noSymlink(markerPath);
         marker = fs.readFileSync(markerPath);
         check(sha(marker) === item.markerHash, '目录标识已变化');
         fs.unlinkSync(markerPath);

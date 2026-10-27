@@ -9,12 +9,12 @@ import { lockFile } from '../src/core/workspace-lock.mjs';
 import { sha } from '../src/core/util.mjs';
 
 function setup(t) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'studyself-skill-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fengzaiy-skill-'));
   const service = new Service(path.join(root, 'workspace'));
   t.after(async () => { await service.close(); fs.rmSync(root, { recursive: true, force: true }); });
   const manager = service.skillInstallations;
   function install(name = 'agent') {
-    const directory = path.join(root, name, 'studyself-organize'); fs.mkdirSync(directory, { recursive: true });
+    const directory = path.join(root, name, 'fengzaiy'); fs.mkdirSync(directory, { recursive: true });
     for (const [name, content] of Object.entries(skillExportFiles(service.agents.skillPackage()))) {
       fs.mkdirSync(path.dirname(path.join(directory, name)), { recursive: true }); fs.writeFileSync(path.join(directory, name), content);
     }
@@ -24,6 +24,27 @@ function setup(t) {
   function preference(content) { service.agents.savePreferences({ content, parents: service.agents.preferences().heads }); }
   return { root, service, manager, install, confirm, preference };
 }
+
+test('legacy installation names retain ownership and pause updates until the renamed Skill is installed', t => {
+  const { manager, install, confirm } = setup(t);
+  const fresh = install(), directory = path.join(path.dirname(fresh), 'studyself-organize');
+  fs.renameSync(fresh, directory);
+  const entry = path.join(directory, 'SKILL.md');
+  fs.writeFileSync(entry, fs.readFileSync(entry, 'utf8').replace('name: fengzaiy', 'name: studyself-organize'));
+  fs.writeFileSync(path.join(directory, 'extra.txt'), 'keep');
+  const linked = confirm({ directory });
+  fs.renameSync(path.join(directory, '.fengzaiy-install.json'), path.join(directory, '.studyself-install.json'));
+  assert.equal(manager.check()[0].status, 'rename-required');
+  assert.throws(() => confirm({ id: linked.id, action: 'update' }), { code: 'RETIRED' });
+  assert.throws(() => manager.configure({ id: linked.id, mode: 'auto', confirmed: true }), { code: 'RETIRED' });
+  manager.check({ automatic: true });
+  assert.match(fs.readFileSync(entry, 'utf8'), /name: studyself-organize/);
+  assert.equal(fs.readFileSync(path.join(directory, 'extra.txt'), 'utf8'), 'keep');
+  manager.unlink({ id: linked.id, confirmed: true });
+  assert.ok(!fs.existsSync(path.join(directory, '.studyself-install.json')));
+  const renamed = install('renamed');
+  assert.equal(confirm({ directory: renamed }).status, 'current');
+});
 
 test('existing installations are explicit, local and update exactly the export package while preserving other files', t => {
   const { manager, install, confirm, preference, service } = setup(t);
@@ -43,7 +64,7 @@ test('existing installations are explicit, local and update exactly the export p
   assert.throws(() => manager.confirm({ token: preview.token, confirmed: true }), /预览已失效/);
   manager.unlink({ id: linked.id, confirmed: true });
   assert.equal(manager.list().length, 0); assert.ok(fs.existsSync(path.join(directory, 'SKILL.md')));
-  assert.ok(!fs.existsSync(path.join(directory, '.studyself-install.json')));
+  assert.ok(!fs.existsSync(path.join(directory, '.fengzaiy-install.json')));
 });
 
 test('automatic mode updates only opted-in unchanged installations, pauses hand edits and supports explicit restore', t => {
@@ -75,7 +96,7 @@ test('stale previews, missing confirmation, other workspaces and concurrent writ
   assert.throws(() => manager.confirm({ token: changed.token, confirmed: true }), /已变化/);
   const settings = manager.preview(input); manager.configure({ id: linked.id, mode: 'auto', confirmed: true });
   assert.throws(() => manager.confirm({ token: settings.token, confirmed: true }), /设置已变化/);
-  const release = lockFile(path.join(directory, '.studyself-update.lock'));
+  const release = lockFile(path.join(directory, '.fengzaiy-update.lock'));
   try { assert.throws(() => confirm(input), /另一个实例/); } finally { release(); }
   const other = new Service(path.join(root, 'other'));
   try { assert.throws(() => other.skillInstallations.preview({ directory }), /另一个工作区/); } finally { other.close(); }
@@ -89,10 +110,10 @@ test('unknown folders, source workspace, oversized files, symlinks and hardlinks
   const directory = install();
   fs.writeFileSync(path.join(directory, 'SKILL.md'), 'not a skill'); assert.throws(() => manager.preview({ directory }), /不是/);
   fs.writeFileSync(path.join(directory, 'SKILL.md'), 'x'.repeat(1024 * 1024 + 1)); assert.throws(() => manager.preview({ directory }), /大小/);
-  assert.throws(() => manager.preview({ directory: 'relative/studyself-organize' }), /完整目录/);
-  const nested = path.join(service.store.directory, 'studyself-organize'); fs.mkdirSync(nested);
+  assert.throws(() => manager.preview({ directory: 'relative/FengZaiY' }), /完整目录/);
+  const nested = path.join(service.store.directory, 'fengzaiy'); fs.mkdirSync(nested);
   assert.throws(() => manager.preview({ directory: nested }), /工作区/);
-  const actual = install('actual'), linked = path.join(root, 'linked', 'studyself-organize'); fs.mkdirSync(path.dirname(linked));
+  const actual = install('actual'), linked = path.join(root, 'linked', 'fengzaiy'); fs.mkdirSync(path.dirname(linked));
   fs.symlinkSync(actual, linked, 'junction');
   assert.throws(() => manager.preview({ directory: linked }), /链接/);
   const hard = path.join(actual, 'references/api.md'); fs.unlinkSync(hard); fs.linkSync(path.join(actual, 'SKILL.md'), hard);
@@ -199,7 +220,7 @@ test('repair requires existing ownership and rejects changed previews or a diffe
   assert.equal(manager.check()[0].status, 'error');
   fs.unlinkSync(path.join(directory, 'SKILL.md'));
   const changedMarker = manager.preview({ id: linked.id, action: 'repair' });
-  fs.writeFileSync(path.join(directory, '.studyself-install.json'), '{}');
+  fs.writeFileSync(path.join(directory, '.fengzaiy-install.json'), '{}');
   assert.throws(() => manager.confirm({ token: changedMarker.token, confirmed: true }), /归属已变化/);
   assert.throws(() => manager.preview({ id: linked.id, action: 'repair' }), /归属已变化/);
   assert.equal(manager.check({ automatic: true })[0].status, 'error');

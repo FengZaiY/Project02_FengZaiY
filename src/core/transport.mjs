@@ -1,3 +1,4 @@
+import { syncRootPath } from './legacy-names.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
@@ -38,7 +39,7 @@ export class FolderTransport {
   root() {
     const config = this.config();
     check(config.configured && config.folder, 'Synchronization has not been configured');
-    const root = path.join(config.folder, 'StudySelfSync', 'v1', config.channel);
+    const root = path.join(syncRootPath(config.folder), 'v1', config.channel);
     noSymlink(root);
     fs.mkdirSync(root, { recursive: true });
     return root;

@@ -9,7 +9,7 @@ import { runDeletionFiles, scheduleDeletion } from '../src/core/permanent-files.
 import { filterErased } from '../src/core/erasures.mjs';
 
 function setup(t) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'studyself-erasure-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fengzaiy-erasure-'));
   const a = new Service(path.join(root, 'A')), b = new Service(path.join(root, 'B'));
   t.after(async () => { await a.close(); await b.close(); });
   const library = a.store.saveLibrary({ title: '隔离测试' });

@@ -1,3 +1,4 @@
+import { desktopProfilePath, legacyNames } from '../core/legacy-names.mjs';
 import { app, BrowserWindow, ipcMain, dialog, safeStorage, shell, Menu, powerMonitor, protocol, clipboard } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -12,14 +13,14 @@ import { ExitCheck, exitActivity } from './exit-check.mjs';
 import { SecretClipboard } from './secret-clipboard.mjs';
 import { userExportPath } from '../core/material-center.mjs';
 
-protocol.registerSchemesAsPrivileged([{ scheme: 'studyself-media', privileges: { standard: true, secure: true, stream: true } }]);
+protocol.registerSchemesAsPrivileged([{ scheme: 'fengzaiy-media', privileges: { standard: true, secure: true, stream: true } }]);
 
 const base = path.resolve(fileURLToPath(new URL('../../', import.meta.url)));
 const profileArg = process.argv.find(arg => arg.startsWith('--data-dir='));
 const smokeTest = process.argv.includes('--smoke-test');
 // The installed product name changes, but existing workspace/profile identity stays stable.
-app.setPath('userData', path.join(app.getPath('appData'), 'studyself'));
-app.setName('FengZai·Y');
+app.setPath('userData', desktopProfilePath(app.getPath('appData')));
+app.setName('FengZaiY');
 if (smokeTest) {
   app.disableHardwareAcceleration();
   // Keep smoke-test Chromium state and its single-instance lock away from the user's app.
@@ -40,7 +41,7 @@ else {
   storage = new StorageLocation(anchor, { environment: 'desktop' });
   service = await storage.open({ vault, idleCheck: () => powerMonitor.getSystemIdleTime() });
   const directory = service.store.directory;
-  protocol.handle('studyself-media', async request => {
+  protocol.handle('fengzaiy-media', async request => {
     try {
       check(!allowClose, '正在退出，请稍候');
       const url = new URL(request.url);
@@ -50,14 +51,13 @@ else {
   });
   await service.agents.resume();
   const entry = path.join(base, 'dist', 'index.html');
-  // The display name contains a middle dot; Chromium custom-protocol requests require an ASCII User-Agent.
-  app.userAgentFallback = app.userAgentFallback.replaceAll('FengZai·Y', 'FengZaiY');
+  // Keep the product identifier ASCII for Chromium custom-protocol media requests.
   window = new BrowserWindow({ width: 1480, height: 940, minWidth: 800, minHeight: 660, backgroundColor: '#f7f8fa', show: !smokeTest,
-    title: 'FengZai·Y · 个人管理系统', autoHideMenuBar: true,
+    title: 'FengZaiY · 个人管理系统', autoHideMenuBar: true,
     webPreferences: { preload: path.join(base, 'src', 'desktop', 'preload.cjs'), contextIsolation: true, nodeIntegration: false,
       sandbox: true, offscreen: smokeTest, backgroundThrottling: !smokeTest } });
   Menu.setApplicationMenu(null);
-  service.passwordVault.onLock = () => { secretClipboard.clear(); if (!window.isDestroyed()) window.webContents.send('studyself:vault-locked'); };
+  service.passwordVault.onLock = () => { secretClipboard.clear(); if (!window.isDestroyed()) window.webContents.send('fengzaiy:vault-locked'); };
   for (const event of ['lock-screen', 'suspend']) powerMonitor.on(event, () => service.passwordVault.lock());
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   window.webContents.on('will-navigate', (event, url) => {
@@ -76,7 +76,7 @@ else {
   let updateSettings = {};
   try { updateSettings = JSON.parse(fs.readFileSync(updateSettingsFile, 'utf8')); } catch {}
   const metadata = JSON.parse(fs.readFileSync(path.join(base, 'package.json'), 'utf8'));
-  updates = new UpdateManager({ version: app.getVersion(), packaged: app.isPackaged, source: metadata.studyselfUpdateSource,
+  updates = new UpdateManager({ version: app.getVersion(), packaged: app.isPackaged, source: metadata.fengzaiyUpdateSource ?? metadata[legacyNames.updateSource],
     autoCheck: updateSettings.autoCheck !== false,
     saveAutoCheck: autoCheck => atomicWrite(updateSettingsFile, JSON.stringify({ autoCheck })),
     createUpdater: source => new updaterPackage.NsisUpdater(source),
@@ -85,10 +85,10 @@ else {
         installingUpdate = false; allowClose = false;
         service.startTimer(); void service.agents.resume();
       }
-      if (!window.isDestroyed()) window.webContents.send('studyself:update-status', status);
+      if (!window.isDestroyed()) window.webContents.send('fengzaiy:update-status', status);
     } });
   const exitCheck = new ExitCheck({
-    send: request => window.webContents.send('studyself:exit-request', request),
+    send: request => window.webContents.send('fengzaiy:exit-request', request),
     unavailable: () => { if (!window.isDestroyed()) void dialog.showMessageBox(window, { type: 'warning', title: '暂时无法退出',
       message: '尚未取得笔记保存状态，窗口已保留。', detail: '请等待页面恢复后再次关闭，避免丢失未保存的编辑。', buttons: ['继续使用'] }); },
     inspect: () => {
@@ -111,7 +111,7 @@ else {
   });
   window.webContents.on('did-start-loading', () => exitCheck.dispose());
   window.on('closed', () => exitCheck.dispose());
-  ipcMain.handle('studyself:call', async (event, { method, input = {} }) => {
+  ipcMain.handle('fengzaiy:call', async (event, { method, input = {} }) => {
     let counted = false;
     try {
       check(event.sender === window.webContents && event.senderFrame === window.webContents.mainFrame, 'Untrusted request');
@@ -135,7 +135,7 @@ else {
         check(input.rendererReady === true, '请在系统设置中确认并关闭未保存内容后更新');
         assertUpdateIdle(service, storage, activeCalls, !!profileArg);
         const answer = dialog.showMessageBoxSync(window, { type: 'question', title: '重启并更新',
-          message: `安装 FengZai·Y ${updates.status().latestVersion}？`,
+          message: `安装 FengZaiY ${updates.status().latestVersion}？`,
           detail: '应用将退出并打开安装程序。未发布的修改保留在本机，不会自动同步。',
           buttons: ['稍后更新', '重启并更新'], defaultId: 0, cancelId: 0 });
         if (answer !== 1) value = updates.status();
@@ -232,7 +232,7 @@ else {
   app.on('window-all-closed', () => app.quit());
   app.on('will-quit', () => { service?.close(); storage?.close(); });
   }).catch(error => {
-    console.error('FengZai·Y startup failed:', error);
+    console.error('FengZaiY startup failed:', error);
     app.exit(1);
   });
 }

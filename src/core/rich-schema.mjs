@@ -15,7 +15,7 @@ export function encodeBlock(block) {
 export function parseNoteLink(value) {
   try {
     const url = new URL(value);
-    if (url.protocol !== 'studyself:' || !['note', 'asset', 'local'].includes(url.hostname)
+    if (!['fengzaiy:', 'studyself:'].includes(url.protocol) || !['note', 'asset', 'local'].includes(url.hostname)
       || !idPattern.test(url.pathname.slice(1)) || url.search || url.hash || url.username || url.password || url.port) return null;
     return { kind: url.hostname, id: url.pathname.slice(1) };
   } catch { return null; }

@@ -11,7 +11,7 @@ import { migrateRetiredAI } from '../src/core/retired-ai.mjs';
 import { RETIRED_AI_TYPES } from '../src/core/catalog.mjs';
 import { uuid } from '../src/core/util.mjs';
 
-const temp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'studyself-retired-ai-'));
+const temp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'fengzaiy-retired-ai-'));
 function seed(directory) {
   const store = new Store(directory), library = store.saveLibrary({ title: '保留的知识库' });
   const common = { title: 'retired-ai-sentinel-847232', domain: library.id };

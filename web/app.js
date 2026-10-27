@@ -42,12 +42,12 @@ markdownConverter.use(gfm);
 addRichMarkdownRules(markdownConverter);
 const token = $('meta[name=local-token]').content;
 const native = !!window.desktop;
-const mediaUrl = id => native ? `studyself-media://asset/${id}` : `/media/${encodeURIComponent(id)}?token=${encodeURIComponent(token)}`;
+const mediaUrl = id => native ? `fengzaiy-media://asset/${id}` : `/media/${encodeURIComponent(id)}?token=${encodeURIComponent(token)}`;
 const api = async (method, input = {}) => {
   if (native && !window.desktop.callResult) return window.desktop.call(method, input);
   // Preserve structured error codes across the context bridge; thrown Errors lose custom fields.
   const result = native ? await window.desktop.callResult(method, input) : await (await fetch('/api', {
-    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-StudySelf-Token': token }, body: JSON.stringify({ method, input }) })).json();
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-FengZaiY-Token': token }, body: JSON.stringify({ method, input }) })).json();
   if (result.error) throw Object.assign(new Error(result.error.message), { code: result.error.code });
   return result.value;
 };
@@ -204,7 +204,7 @@ function requireLibrary() {
   return library;
 }
 function rememberListSummary() {
-  try { localStorage.setItem('studyself-list-summary', String(state.listSummary)); } catch {}
+  try { localStorage.setItem('fengzaiy-list-summary', String(state.listSummary)); } catch {}
 }
 function toggleNavigation() {
   const main = $('#main');
@@ -308,7 +308,7 @@ function shell() {
   const newLabel = state.view === 'drafts' ? '新建草稿' : '新建笔记';
   $('#app').innerHTML = `
     <aside class="sidebar">
-      <a class="brand" href="#" data-action="home"><span class="brand-mark">${icon('notebook-pen')}</span><span>FengZai·Y<small>个人管理系统</small></span></a>
+      <a class="brand" href="#" data-action="home"><span class="brand-mark">${icon('notebook-pen')}</span><span>FengZaiY<small>个人管理系统</small></span></a>
       <nav>${navs.slice(0, 11).map(([id, i, text]) => `${id === 'sync' ? '<div class="nav-tools"></div>' : ''}<button class="nav-item ${primaryView === id ? 'active' : ''}" data-nav="${id}" title="${esc(text)}" aria-label="${esc(text)}">${icon(i)}<span>${text}</span>${countFor(id) ? `<b>${countFor(id)}</b>` : ''}</button>`).join('')}</nav>
       <div class="device"><span class="device-icon">${icon('monitor')}</span><div><strong>${esc(state.snapshot.deviceName)}</strong><small>本地工作区 · v${state.snapshot.version}</small></div>${button('settings-2', 'device-name', '设备名称')}</div>
       <button class="sidebar-status" data-nav="sync"><span class="status-dot ${state.snapshot.sync.configured ? '' : 'amber'}"></span>${state.snapshot.sync.configured ? '同步目录已配置' : '同步尚未配置'}${icon('chevron-right')}</button>
@@ -451,7 +451,7 @@ async function renderDocument(record) {
   }
   if (editable) {
     state.editor = new Editor({
-      element: $('#editor-content'), extensions: [StarterKit.configure({ codeBlock: false, link: { openOnClick: false, protocols: ['studyself'], isAllowedUri: safeNoteLink } }), experienceCodeBlock, editorMarkers, TableKit.configure({ table: { resizable: true } }), ...richExtensions({ mediaUrl, edit: editBlock })],
+      element: $('#editor-content'), extensions: [StarterKit.configure({ codeBlock: false, link: { openOnClick: false, protocols: ['fengzaiy', 'studyself'], isAllowedUri: safeNoteLink } }), experienceCodeBlock, editorMarkers, TableKit.configure({ table: { resizable: true } }), ...richExtensions({ mediaUrl, edit: editBlock })],
       content: safeHtml(data.content || '', data.format), editorProps: {
         attributes: { 'aria-label': '笔记正文', role: 'textbox', 'aria-multiline': 'true' },
         transformPastedHTML: cleanNoteHtml
@@ -555,7 +555,7 @@ async function renderBacklinks(record) {
       if (!details.isConnected || state.selected?.id !== record.id || editor?.isDestroyed) return;
       const matches = notes.filter(note => note.id !== record.id && note.versions.some(version => {
         const template = document.createElement('template'); template.innerHTML = safeHtml(version.data.content, version.data.format);
-        return [...template.content.querySelectorAll('a')].some(a => a.getAttribute('href') === `studyself://note/${record.id}`);
+        return [...template.content.querySelectorAll('a')].some(a => parseNoteLink(a.getAttribute('href'))?.kind === 'note' && parseNoteLink(a.getAttribute('href'))?.id === record.id);
       }));
       host.replaceChildren();
       for (const note of matches) {
@@ -807,7 +807,7 @@ async function renderAgents() {
         const values = new FormData(form);
         const grant = await api('agentGrant', { name: values.get('name'), days: Number(values.get('days')) });
         await render();
-        openModal('访问凭证（仅显示一次）', `<div class="notice amber">此凭证可读写全部知识库、非秘密个人业务及敏感资料，密码库不开放。请勿放入笔记、同步目录或公开聊天。</div><label class="settings-form">STUDYSELF_AGENT_TOKEN<input id="agent-token" type="password" readonly value="${esc(grant.token)}" autocomplete="off"></label><label class="check-row"><input id="agent-token-visible" type="checkbox">显示凭证</label><button class="secondary" id="agent-token-copy">${icon('copy')}复制凭证</button>`);
+        openModal('访问凭证（仅显示一次）', `<div class="notice amber">此凭证可读写全部知识库、非秘密个人业务及敏感资料，密码库不开放。请勿放入笔记、同步目录或公开聊天。</div><label class="settings-form">FENGZAIY_AGENT_TOKEN<input id="agent-token" type="password" readonly value="${esc(grant.token)}" autocomplete="off"></label><label class="check-row"><input id="agent-token-visible" type="checkbox">显示凭证</label><button class="secondary" id="agent-token-copy">${icon('copy')}复制凭证</button>`);
         $('#agent-token-visible').onchange = e => { $('#agent-token').type = e.target.checked ? 'text' : 'password'; };
         $('#agent-token-copy').onclick = () => run(async () => {
           const input = $('#agent-token'), copied = await copyVisibleText(grant.token, input);
@@ -868,7 +868,7 @@ async function changeStorage(mode) {
   requireStorageSaved();
   const title = mode === 'select' ? '选择或修改系统根目录' : mode === 'migrate' ? '迁移当前工作区' : '打开已有工作区';
   const dialog = openModal(title, `<form id="storage-form" class="settings-form"><label>目标文件夹<div class="input-with-action"><input id="storage-target" readonly value="${esc(directory)}">${button('folder-open', 'storage-pick', '选择目标文件夹', 'type="button"')}</div></label>
-    <div class="notice amber">${mode === 'select' ? '选择空目录将迁移当前资料；选择已有工作区将切换资料。检查后须再次确认，不会直接清空或覆盖当前知识库。' : mode === 'migrate' ? '迁移全部知识库、笔记、历史与附件。目标必须为空，校验成功后切换，原目录不删除。' : '选择已有的 FengZai·Y（兼容 StudySelf）工作区，不会合并或搬走当前资料。'}<br>本地工作区不得放入网盘同步目录。请关闭使用这些目录的其他应用实例，包括旧版本。</div><div id="storage-form-error" class="notice danger" role="alert" hidden></div><button type="submit" class="primary">${icon('search-check')}检查目录</button></form>`);
+    <div class="notice amber">${mode === 'select' ? '选择空目录将迁移当前资料；选择已有工作区将切换资料。检查后须再次确认，不会直接清空或覆盖当前知识库。' : mode === 'migrate' ? '迁移全部知识库、笔记、历史与附件。目标必须为空，校验成功后切换，原目录不删除。' : '选择已有的 FengZaiY工作区，不会合并或搬走当前资料。'}<br>本地工作区不得放入网盘同步目录。请关闭使用这些目录的其他应用实例，包括旧版本。</div><div id="storage-form-error" class="notice danger" role="alert" hidden></div><button type="submit" class="primary">${icon('search-check')}检查目录</button></form>`);
   $('#storage-form').onsubmit = async event => {
     event.preventDefault();
     const submit = $('button[type=submit]', event.target), errorBox = $('#storage-form-error');
@@ -951,7 +951,7 @@ async function pickAttachment(expectedId, duplicateMode = 'reuse') {
         const file = input.files[0]; if (!file) { resolve(null); return; }
         const params = new URLSearchParams({ domain, duplicateMode });
         if (expectedId) params.set('expectedId', expectedId);
-        const response = await fetch(`/upload?${params}`, { method: 'POST', headers: { 'X-StudySelf-Token': token, 'X-Filename': encodeURIComponent(file.name) }, body: file });
+        const response = await fetch(`/upload?${params}`, { method: 'POST', headers: { 'X-FengZaiY-Token': token, 'X-Filename': encodeURIComponent(file.name) }, body: file });
         const result = await response.json(); if (result.error) throw new Error(result.error.message); resolve(result.value);
       } catch (error) { reject(error); }
     };
@@ -964,7 +964,7 @@ async function importDroppedFile(file, domain) {
   }
   if (file.size > 128 * 1024 * 1024) throw new Error('浏览器预览单个文件上限为 128 MiB；更大的文件请使用桌面版导入');
   const response = await fetch(`/upload?${new URLSearchParams({ domain })}`, { method: 'POST',
-    headers: { 'X-StudySelf-Token': token, 'X-Filename': encodeURIComponent(file.name) }, body: file });
+    headers: { 'X-FengZaiY-Token': token, 'X-Filename': encodeURIComponent(file.name) }, body: file });
   const result = await response.json();
   if (result.error) throw new Error(result.error.message);
   return result.value;
@@ -1390,7 +1390,7 @@ async function editNoteLink() {
   $('#unlink-note').onclick = () => { editor.chain().focus().setTextSelection(selection).extendMarkRange('link').unsetLink().run(); dialog.close(); };
   form.onsubmit = event => { event.preventDefault(); run(() => {
     const values = Object.fromEntries(new FormData(form));
-    const href = values.kind === 'external' ? values.url.trim() : `studyself://${values.kind}/${values.kind === 'local' ? localId || '' : values.target}`;
+    const href = values.kind === 'external' ? values.url.trim() : `fengzaiy://${values.kind}/${values.kind === 'local' ? localId || '' : values.target}`;
     if (!safeNoteLink(href)) throw new Error('请选择目标，或填写完整的 http / https 网址');
     const text = values.label.trim() || (values.kind === 'external' ? href : form.elements.target.selectedOptions[0]?.textContent) || '本地文件';
     const chain = editor.chain().focus().setTextSelection(selection);
@@ -1761,7 +1761,7 @@ for (const type of ['dragover', 'drop']) document.addEventListener(type, event =
 async function init() {
   await loadState();
   await personalUI.init();
-  try { state.listSummary = localStorage.getItem('studyself-list-summary') === 'true'; } catch {}
+  try { state.listSummary = (localStorage.getItem('fengzaiy-list-summary') ?? localStorage.getItem('studyself-list-summary')) === 'true'; } catch {}
   state.domain = state.snapshot.workspace.domain || '';
   state.collapsedNotes = state.snapshot.workspace.collapsedNotes || [];
   state.noteView = state.snapshot.workspace.noteView === 'list' ? 'list' : 'tree';

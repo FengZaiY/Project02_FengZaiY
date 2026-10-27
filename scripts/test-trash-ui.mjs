@@ -14,7 +14,7 @@ const make = (title, domain = a.id) => {
   return store.remove(note.id, note.heads);
 };
 const removable = make('可以清空的笔记'), protectedNote = make('仍被引用的笔记'), other = make('其他范围保留', b.id);
-store.write({ type: 'note', data: { title: '引用者', domain: b.id, content: `[原文](studyself://note/${protectedNote.id})` } });
+store.write({ type: 'note', data: { title: '引用者', domain: b.id, content: `[原文](fengzaiy://note/${protectedNote.id})` } });
 let browser, page;
 try {
   try { browser = await chromium.launch({ headless: true }); }

@@ -58,8 +58,8 @@ test('preview picker requires trusted UI authorization and never changes storage
   const invoke = (headers = {}, method = 'POST') => fetch(`${app.url}/api`, { method,
     headers: { 'Content-Type': 'application/json', ...headers }, ...(method === 'POST' ? { body: JSON.stringify({ method: 'chooseDirectory', input: { command: 'ignored' } }) } : {}) });
   assert.equal((await invoke()).status, 403);
-  assert.equal((await invoke({ 'X-StudySelf-Token': 'wrong' })).status, 403);
-  const authorized = { 'X-StudySelf-Token': app.token };
+  assert.equal((await invoke({ 'X-FengZaiY-Token': 'wrong' })).status, 403);
+  const authorized = { 'X-FengZaiY-Token': app.token };
   assert.equal((await invoke(authorized, 'GET')).status, 403);
   assert.equal((await invoke({ ...authorized, Origin: 'https://example.com' })).status, 400);
   const invalidHost = await new Promise((resolve, reject) => {
@@ -89,7 +89,7 @@ test('preview closes native picker on client disconnect and server shutdown', as
     }) });
   let closed = false; t.after(async () => { if (!closed) await app.close(); });
   const invoke = signal => fetch(`${app.url}/api`, { method: 'POST', signal,
-    headers: { 'Content-Type': 'application/json', 'X-StudySelf-Token': app.token }, body: JSON.stringify({ method: 'chooseDirectory' }) });
+    headers: { 'Content-Type': 'application/json', 'X-FengZaiY-Token': app.token }, body: JSON.stringify({ method: 'chooseDirectory' }) });
   const controller = new AbortController(), begun = begin(), ended = end();
   const first = invoke(controller.signal), rejected = assert.rejects(first, { name: 'AbortError' });
   await begun;
