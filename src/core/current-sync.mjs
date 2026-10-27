@@ -11,6 +11,7 @@ import { readErasureReceipts, readHistoryPart, cleanErasedTransport } from './er
 import { prepareRemoteErasure } from './trash.mjs';
 import { scheduleDeletion, runDeletionFiles } from './permanent-files.mjs';
 import { retirementReceipts, replacementWorkspaces } from './retired-ai.mjs';
+import { sameRevision } from './retired-presentation.mjs';
 import { canonical, check, hashFile, isHash, isId, noSymlink, now, outside, sha, uuid } from './util.mjs';
 
 const PART_BYTES = 2 * 1024 * 1024;
@@ -31,7 +32,7 @@ export class CurrentSync {
   }
   config() {
     const key = this.store.secret('pairing');
-    return { protocol: this.control().management?.length ? 5 : this.store.erasures().length ? 4 : 3, configured: !!key && !!this.store.local('syncFolder'), enabled: false, manual: true,
+    return { protocol: this.store.getMeta('presentationRetired') === '1' ? 6 : this.control().management?.length ? 5 : this.store.erasures().length ? 4 : 3, configured: !!key && !!this.store.local('syncFolder'), enabled: false, manual: true,
       folder: this.store.local('syncFolder') || '', channel: key ? sha(Buffer.from(key, 'hex')).slice(0, 16) : null,
       attachmentMode: 'all-files', lastReport: this.store.local('v3LastReport'), cloudUploadVerified: false };
   }
@@ -71,8 +72,37 @@ export class CurrentSync {
     const root = path.resolve(folder);
     check(outside(this.store.directory, root) && outside(root, this.store.directory), '同步目录和工作目录不能互相包含');
     noSymlink(root); fs.mkdirSync(root, { recursive: true });
-    this.store.local('syncFolder', root); this.store.setSecret('pairing', key.toLowerCase());
-    this.store.local('syncEnabled', false); return this.config();
+    this.store.transaction(() => {
+      this.store.local('syncFolder', root); this.store.setSecret('pairing', key.toLowerCase());
+      this.store.local('syncBindingRevision', uuid());
+      this.store.local('syncEnabled', false);
+    });
+    return this.config();
+  }
+  disconnectPreview() {
+    check(!this.running, '请先暂停同步并等待当前操作结束，再解除绑定', 'BUSY');
+    const status = this.status(), devices = this.devices();
+    const preview = { configured: status.config.configured, folder: status.config.folder, channel: status.config.channel,
+      pendingChanges: status.pendingChanges, pendingControl: status.pendingControl, unconfirmed: status.unconfirmed,
+      primary: devices.primary === this.store.deviceId, roleConflict: devices.conflict,
+      transferPending: !!devices.transfer || devices.transferConflict,
+      cancelTask: !!status.job && !['complete', 'cancelled'].includes(status.job.state) };
+    return { ...preview, token: sha(canonical({ ...preview, binding: this.store.local('syncBindingRevision'),
+      control: devices.revision, job: status.job, latest: status.latest })) };
+  }
+  disconnect({ confirmed, token } = {}) {
+    check(confirmed === true, '请明确确认解除本机同步绑定');
+    const preview = this.disconnectPreview();
+    if (!preview.configured && !this.store.secret('pairing') && !this.store.local('syncFolder')) return this.config();
+    check(typeof token === 'string' && token === preview.token, '同步配置或任务已变化，请重新确认解除绑定', 'CONFLICT');
+    this.store.transaction(() => {
+      // Cancel in the old channel before removing its key; keep files and recovery metadata.
+      if (preview.cancelTask) this.saveProgress({ ...this.progress(), state: 'cancelled', reason: '已解除本机同步绑定；交接文件保留' });
+      const remove = this.store.db.prepare('DELETE FROM local_config WHERE key=?');
+      for (const name of ['secret:pairing', 'syncFolder', 'syncEnabled', 'syncBindingRevision', 'v3LastReport', 'syncLastReport']) remove.run(name);
+    });
+    this.pauseRequested = false;
+    return this.config();
   }
   channel() {
     const config = this.config(); check(config.configured, '请先配置同步目录与配对密钥');
@@ -158,7 +188,7 @@ export class CurrentSync {
         descriptor.chunks.forEach((chunk, index) => objects.push({ kind: 'asset', ...chunk, assetIndex, index }));
       }
       const erasures = this.store.erasures();
-      const format = this.control().management?.length ? 5 : erasures.length ? 4 : 3;
+      const format = events.some(event => event.retiredPresentation) ? 6 : this.control().management?.length ? 5 : erasures.length ? 4 : 3;
       const manifest = { format, ...(format >= 4 ? { erasures } : {}), id: uuid(), deviceId: this.store.deviceId, deviceName: this.store.getMeta('deviceName'),
         at: now(), parts, assets, control: mergeControl(EMPTY_CONTROL, this.control()) };
       manifest.digest = manifestDigest(manifest);
@@ -269,12 +299,12 @@ export class CurrentSync {
     });
   }
   validateManifest(manifest, deviceId) {
-    check([3, 4, 5].includes(manifest?.format) && isId(manifest.id) && manifest.deviceId === deviceId && isId(deviceId)
+    check([3, 4, 5, 6].includes(manifest?.format) && isId(manifest.id) && manifest.deviceId === deviceId && isId(deviceId)
       && typeof manifest.deviceName === 'string' && manifest.deviceName.length <= 100 && Number.isFinite(Date.parse(manifest.at)), '无效的最新内容清单');
     check(Object.keys(manifest).sort().join() === (manifest.format >= 4
       ? 'assets,at,control,deviceId,deviceName,digest,erasures,format,id,parts' : 'assets,at,control,deviceId,deviceName,digest,format,id,parts'), '清单含未知字段');
     if (manifest.format >= 4) mergeErasures(manifest.erasures);
-    check(manifest.format === 5 || !manifest.control?.management?.length, '设备管理需要 format 5，请升级所有同步电脑');
+    check(manifest.format >= 5 || !manifest.control?.management?.length, '设备管理需要 format 5，请升级所有同步电脑');
     check(Array.isArray(manifest.parts) && manifest.parts.length <= 100000, 'Invalid history parts');
     const names = new Set();
     for (const part of manifest.parts) {
@@ -345,7 +375,7 @@ export class CurrentSync {
         const assets = manifest.assets.map(asset => ({ ...asset, ids: asset.ids.filter(id => !erasedIds.has(id)) })).filter(asset => asset.ids.length);
         check(canonical(assetObjects(events)) === canonical(assets.map(({ hash, size, ids }) => ({ hash, size, ids }))), '原件索引与修改记录不一致');
         for (const event of events) {
-          check(!union.has(event.id) || union.get(event.id).hash === event.hash, '同步记录身份冲突'); union.set(event.id, event);
+          check(!union.has(event.id) || sameRevision(union.get(event.id), event), '同步记录身份冲突'); union.set(event.id, event);
         }
         for (const asset of assets) {
           const previous = descriptors.get(asset.hash);
@@ -383,7 +413,7 @@ export class CurrentSync {
         this.value('remotes', remotes); this.value('seen', seen); this.value('receivedAt', now());
       });
       const cleanup = erasures.length ? await runDeletionFiles(this.store) : null;
-      if (erasures.length) cleanErasedTransport(this);
+      if (erasures.length || this.store.getMeta('presentationRetired') === '1') cleanErasedTransport(this);
       let receiptWarning;
       try { await this.verifyPrimary(); } catch (error) { receiptWarning = error.message; }
       return { imported: count, unchanged: !count, metadataOnly, devices: incoming.length,

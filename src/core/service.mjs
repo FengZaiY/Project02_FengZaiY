@@ -19,11 +19,12 @@ import { previewAssetMerge, mergeAssets } from './asset-merge.mjs';
 import { archiveDraft, draftWorkflows, cleanupProposal } from './draft-workflow.mjs';
 import { receivedObjectsStatus } from './received-objects.mjs';
 import { readAssetContent } from './asset-reader.mjs';
+import { withoutPresentation } from './retired-presentation.mjs';
 
 const sharedTab = tab => Object.fromEntries(['id', 'recordId', 'title', 'domain', 'scroll']
   .filter(key => Object.hasOwn(tab, key)).map(key => [key, tab[key]]));
-const cleanWorkspace = (store, value) => cleanRetiredTabs(value,
-  new Set(store.erasures().filter(item => retiredAI(item.type)).map(item => item.entityId)));
+const cleanWorkspace = (store, value) => withoutPresentation('workspace', cleanRetiredTabs(value,
+  new Set(store.erasures().filter(item => retiredAI(item.type)).map(item => item.entityId))));
 
 export class Service {
   constructor(directory, options = {}) {
@@ -45,7 +46,7 @@ export class Service {
       this.store.retiredAI = true;
       const cleanupNeeded = migrateRetiredAI(this.store, validateEvent);
       this.store.importEvents([]);
-      this.ready = cleanupNeeded ? this.finishDeletion() : Promise.resolve();
+      this.ready = cleanupNeeded || this.store.local('presentationRetirement')?.pending ? this.finishDeletion() : Promise.resolve();
     } catch (error) { this.store?.close(); this.releaseLock(); throw error; }
   }
   startTimer() {
@@ -84,7 +85,7 @@ export class Service {
     summary.trash -= legacy.filter(item => item.deleted).length;
     return { ...summary, libraries: this.store.directories.describe(this.store.libraries()), sync: this.transport.config(),
       workspace: this.store.local('workspace') || { tabs: [], selectedTab: null },
-      version: '0.1.10', localDataDirectory: this.store.directory, localHierarchy: this.localHierarchy.status(), deletion: deletionStatus(this.store),
+      version: '0.1.11', localDataDirectory: this.store.directory, localHierarchy: this.localHierarchy.status(), deletion: deletionStatus(this.store),
       skillInstallations: this.skillInstallations.summary() };
   }
   async finishDeletion() {
@@ -96,6 +97,9 @@ export class Service {
         || this.store.local('permanentDeletionDatabase')?.state !== 'done' });
       try { this.store.local('permanentDeletionTransport', cleanErasedTransport(this.transport)); }
       catch (error) { this.store.local('permanentDeletionTransport', { state: 'blocked', errors: [{ message: error.message }], cloudVerified: false }); }
+      const retiredReading = this.store.local('presentationRetirement');
+      if (retiredReading) this.store.local('presentationRetirement', { ...retiredReading,
+        pending: this.store.local('permanentDeletionDatabase')?.state !== 'done' });
       return deletionStatus(this.store);
     })();
     this.imports.add(task);
@@ -217,6 +221,10 @@ export class Service {
             status: 'pending' })) } });
       }
       case 'syncConfigure': return this.transport.configure(input.folder, input.key);
+      case 'syncDisconnectPreview':
+      case 'syncDisconnect':
+        check(!this.localTask && !this.imports.size, '请等待导入或目录整理完成后解除绑定', 'BUSY');
+        return method === 'syncDisconnectPreview' ? this.transport.disconnectPreview() : this.transport.disconnect(input);
       case 'pairingKey': return { key: this.store.secret('pairing') || makePairingKey() };
       case 'sync':
       case 'syncScan': return this.transport.scan();

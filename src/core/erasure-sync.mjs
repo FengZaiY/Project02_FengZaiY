@@ -1,9 +1,10 @@
 import fs from 'node:fs';
 import { sealBinary, assetAAD } from './sync-objects.mjs';
 import { filterErased, mergeErasures, validateErasure } from './erasures.mjs';
-import { atomicWrite, canonical, check, now, sha } from './util.mjs';
+import { atomicWrite, canonical, check, isHash, isId, now, sha } from './util.mjs';
 import { validateEvent } from './store.mjs';
 import { retirementReceipts, replacementWorkspaces } from './retired-ai.mjs';
+import { retirePresentation } from './retired-presentation.mjs';
 
 const LIMIT = 2 * 1024 * 1024;
 const replacementName = part => `replace-${part.hash}.ssreplacement`;
@@ -17,16 +18,22 @@ export function readErasureReceipts(channel) {
 }
 
 export function readHistoryPart(channel, part, visited = new Set()) {
-  check(!visited.has(part.name), '删除替换索引循环'); visited.add(part.name);
+  check(part && isHash(part.hash) && part.name === `history-${part.hash}.ssobj`
+    && Number.isSafeInteger(part.size) && part.size > 0 && part.size <= LIMIT
+    && Number.isSafeInteger(part.count) && part.count > 0 && part.count <= 100000, '修改记录分块索引无效');
+  check(!visited.has(part.name) && visited.size < 1000, '删除替换索引循环或层数过多'); visited.add(part.name);
   const name = replacementName(part);
   if (fs.existsSync(channel.file(name))) {
     const replacement = channel.json(name, `v4:replace:${part.hash}`);
-    check(replacement.format === 1 && replacement.source === part.name && Array.isArray(replacement.receipts)
-      && replacement.receipts.length > 0, '删除替换索引无效');
+    check((replacement.format === 1 || replacement.format === 2 && replacement.retirement === 'presentation')
+      && replacement.source === part.name && Array.isArray(replacement.receipts) && replacement.receipts.every(isId)
+      && (replacement.receipts.length > 0 || replacement.format === 2), '删除替换索引无效');
     const known = new Set(readErasureReceipts(channel).map(receipt => receipt.id));
     check(replacement.receipts.every(id => known.has(id)), '删除凭据尚未下载完整');
-    if (replacement.part === null) return [];
-    check(replacement.part.name === `history-${replacement.part.hash}.ssobj`, '替换对象名称无效');
+    if (replacement.part === null) {
+      check(replacement.receipts.length > 0, '清空修改记录需要删除凭据');
+      return [];
+    }
     return readHistoryPart(channel, replacement.part, visited);
   }
   const data = channel.read(part.name, `v3:history:${part.hash}`, LIMIT);
@@ -34,7 +41,7 @@ export function readHistoryPart(channel, part, visited = new Set()) {
   const events = JSON.parse(data.toString());
   check(Array.isArray(events) && events.length === part.count, '修改记录数量不符');
   events.forEach(validateEvent);
-  return events;
+  return events.map(retirePresentation);
 }
 
 // Publish replacements before removing mixed objects. Other devices can follow the chain
@@ -45,7 +52,7 @@ export function cleanErasedTransport(sync) {
   const local = sync.devices().devices.find(device => device.local);
   if (local?.suspended || local?.statusConflict) return { ...report, state: 'blocked', errors: [{ message: '本机已停用，暂停发布同步删除凭据及清理传输文件' }] };
   const channel = sync.channel(); let receipts = mergeErasures(store.erasures());
-  if (!receipts.length && !store.retiredAI) return report;
+  if (!receipts.length && !store.retiredAI && store.getMeta('presentationRetired') !== '1') return report;
   for (const value of store.erasures()) channel.writeJson(`erase-${value.id}.sserasure`, value, `v4:erase:${value.id}`);
   const removedHashes = new Set(store.local('permanentDeletionAssetHashes') || []);
   const retainedHashes = new Set(store.allEvents().filter(event => event.type === 'asset').map(event => event.data.sha256));
@@ -63,9 +70,10 @@ export function cleanErasedTransport(sync) {
         for (const value of retirement) channel.writeJson(`erase-${value.id}.sserasure`, value, `v4:erase:${value.id}`);
       }
       const remaining = filterErased(events, receipts);
-      const kept = [...remaining, ...replacementWorkspaces(events, receipts)];
+      const kept = [...remaining, ...replacementWorkspaces(events, receipts)].map(retirePresentation);
+      const presentationChanged = remaining.some(event => retirePresentation(event) !== event);
       for (const event of kept) if (event.type === 'asset') retainedHashes.add(event.data.sha256);
-      if (remaining.length === events.length) continue;
+      if (remaining.length === events.length && !presentationChanged) continue;
       for (const event of events) if (event.type === 'asset' && !kept.includes(event)) removedHashes.add(event.data.sha256);
       let part = null;
       if (kept.length) {
@@ -73,7 +81,7 @@ export function cleanErasedTransport(sync) {
         part = { name: `history-${digest}.ssobj`, hash: digest, size: Buffer.byteLength(text), count: kept.length };
         channel.write(part.name, Buffer.from(text), `v3:history:${digest}`);
       }
-      changes.push({ name, hash, part });
+      changes.push({ name, hash, part, presentationChanged });
     } catch (error) { report.errors.push({ file: name, message: error.message }); }
   }
   // Missing placeholders and partial manifests prohibit deletion of asset objects.
@@ -90,7 +98,8 @@ export function cleanErasedTransport(sync) {
   }
   for (const change of changes) {
     try {
-      const replacement = { format: 1, source: change.name, part: change.part, receipts: receipts.map(value => value.id) };
+      const replacement = { format: change.presentationChanged ? 2 : 1, ...(change.presentationChanged ? { retirement: 'presentation' } : {}),
+        source: change.name, part: change.part, receipts: receipts.map(value => value.id) };
       atomicWrite(channel.file(`replace-${change.hash}.ssreplacement`), sealBinary(Buffer.from(canonical(replacement)), channel.key, `v4:replace:${change.hash}`));
       fs.unlinkSync(channel.file(change.name)); report.deleted++;
     } catch (error) { report.errors.push({ file: change.name, message: error.message }); }

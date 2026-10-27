@@ -7,8 +7,7 @@ import { filterErased, mergeErasures } from './erasures.mjs';
 import { retirementReceipts, retiredAI, replacementWorkspaces } from './retired-ai.mjs';
 import { TYPES, CONTENT_TYPES } from './catalog.mjs';
 import { richReferences } from './rich-content.mjs';
-import { validatePresentation } from './presentation-schema.mjs';
-import { preservePresentation, samePresentation, validatePageBasis } from './presentation.mjs';
+import { withoutPresentation, retirePresentation, migratePresentation, sameRevision } from './retired-presentation.mjs';
 import { cleanDraftRefs, requireSaved, validateDraftRefs } from './draft-workflow.mjs';
 import { validateAssetChange } from './asset-management.mjs';
 import { LibraryDirectories, legacyLibraryId } from './library-directories.mjs';
@@ -21,8 +20,8 @@ const GLOBAL_SCOPE = '__all_libraries__';
 
 const COMMON = ['title', 'domain', 'tags', 'sensitive'];
 const FIELDS = {
-  note: [...COMMON, 'content', 'format', 'sourceIds', 'assetIds', 'parentNoteId', 'noteOrder', 'draftOrigin', 'presentation'],
-  draft: [...COMMON, 'content', 'format', 'sourceIds', 'assetIds', 'presentation'],
+  note: [...COMMON, 'content', 'format', 'sourceIds', 'assetIds', 'parentNoteId', 'noteOrder', 'draftOrigin'],
+  draft: [...COMMON, 'content', 'format', 'sourceIds', 'assetIds'],
   conversation: [...COMMON, 'messages', 'modelId', 'assetIds'],
   source: [...COMMON, 'content', 'format', 'url', 'assetIds'],
   annotation: [...COMMON, 'content', 'noteId', 'quote'],
@@ -41,9 +40,15 @@ const FIELDS = {
 
 for (const type of placedTypes) FIELDS[type].push('folderId');
 
-export function cleanData(type, data) {
+export function cleanData(type, data, { legacyPresentation = false } = {}) {
   check(data && typeof data === 'object' && !Array.isArray(data), 'Invalid record content');
+  if (type === 'workspace' && !legacyPresentation) check(canonical(withoutPresentation(type, data)) === canonical(data),
+    '交互阅读已移除，请刷新工作区', 'RETIRED');
   const result = Object.fromEntries(Object.entries(data).filter(([k]) => FIELDS[type]?.includes(k)));
+  if (['note', 'draft'].includes(type) && Object.hasOwn(data, 'presentation')) {
+    check(legacyPresentation, '交互阅读已移除，请仅提交笔记正文', 'RETIRED');
+    result.presentation = data.presentation;
+  }
   check(typeof result.title === 'string' && result.title.length <= 500, 'A title of at most 500 characters is required');
   result.domain = String(result.domain || '通用').slice(0, 100);
   result.tags = Array.isArray(result.tags) ? [...new Set(result.tags.map(String))].slice(0, 100) : [];
@@ -53,7 +58,6 @@ export function cleanData(type, data) {
   }
   if (Object.hasOwn(result, 'noteOrder')) check(validNoteOrder(result.noteOrder), '笔记顺序无效或过长');
   if (Object.hasOwn(result, 'draftOrigin')) result.draftOrigin = cleanDraftRefs([result.draftOrigin])[0];
-  if (Object.hasOwn(result, 'presentation')) validatePresentation(result.presentation);
   check(Buffer.byteLength(canonical(result)) <= 1024 * 1024, 'A single revision must be smaller than 1 MB');
   if (type === 'library') {
     check(result.title.trim().length > 0 && result.title.length <= 100, '知识库名称须为 1 至 100 个字符');
@@ -116,7 +120,7 @@ export function cleanData(type, data) {
     result.items = result.items.map(item => {
       check(isId(item.id) && isId(item.targetId) && !ids.has(item.id), 'Invalid or duplicate proposal item');
       ids.add(item.id);
-      const body = cleanData('note', item.data);
+      const body = cleanData('note', item.data, { legacyPresentation });
       check(Array.isArray(item.parents) && item.parents.every(isId), 'Invalid proposal base versions');
       check(item.reason === undefined || typeof item.reason === 'string' && item.reason.length <= 4000, '方案理由最多 4000 字');
       check(item.acceptedVersionId === undefined || item.status === 'accepted' && isId(item.acceptedVersionId), '方案确认版本无效');
@@ -136,10 +140,14 @@ export function validateEvent(event) {
   check(Number.isSafeInteger(event.sequence) && event.sequence > 0 && typeof event.createdAt === 'string' && Number.isFinite(Date.parse(event.createdAt)), 'Invalid revision metadata');
   check(Array.isArray(event.parents) && event.parents.length <= 100 && event.parents.every(isId)
     && new Set(event.parents).size === event.parents.length && !event.parents.includes(event.id), 'Invalid parent versions');
-  const data = cleanData(event.type, event.data);
+  const data = cleanData(event.type, event.data, { legacyPresentation: true });
+  if (Object.hasOwn(event, 'retiredPresentation')) {
+    check(['note', 'draft', 'proposal', 'workspace'].includes(event.type) && isHash(event.retiredPresentation)
+      && canonical(withoutPresentation(event.type, event.data)) === canonical(event.data), '交互阅读退役标记无效');
+  }
   check(canonical(data) === canonical(event.data), 'Unexpected or private fields in shared record');
   const { hash, ...content } = event;
-  check(Object.keys(content).sort().join() === ['schema', 'id', 'entityId', 'type', 'deviceId', 'sequence', 'createdAt', 'parents', 'deleted', 'data', ...(event.purged ? ['purged'] : [])].sort().join(), 'Unexpected revision fields');
+  check(Object.keys(content).sort().join() === ['schema', 'id', 'entityId', 'type', 'deviceId', 'sequence', 'createdAt', 'parents', 'deleted', 'data', ...(event.purged ? ['purged'] : []), ...(event.retiredPresentation ? ['retiredPresentation'] : [])].sort().join(), 'Unexpected revision fields');
   check(isHash(hash) && revisionChecksum(event).kind !== 'invalid',
     `修改记录校验失败（Revision checksum mismatch）。类型：${event.type}；记录：${event.entityId}；版本：${event.id}。未能核实为旧版空字段问题，已停止处理并保留数据。`, 'CHECKSUM_MISMATCH');
   return event;
@@ -186,6 +194,7 @@ export class Store {
         open: value => decrypt(JSON.parse(value), key, 'local-device-vault').toString()
       };
     }
+    try { migratePresentation(this, validateEvent); } catch (error) { this.db.close(); throw error; }
   }
   close() { this.db.close(); }
   getMeta(key) { return this.db.prepare('SELECT value FROM meta WHERE key=?').get(key)?.value; }
@@ -254,10 +263,12 @@ export class Store {
     // Validate what SQLite will actually retain, including legacy checksum evidence.
     event = JSON.parse(JSON.stringify(event));
     validateEvent(event);
+    event = retirePresentation(event);
+    validateEvent(event);
     check(!this.retiredAI || !retiredAI(event.type), '内置 AI 历史已退役，不再入库', 'RETIRED');
     if (!filterErased([event], this.erasures()).length) return false;
     const existing = this.event(event.id);
-    if (existing) { check(existing.hash === event.hash, 'Revision ID collision'); return false; }
+    if (existing) { check(sameRevision(existing, event), 'Revision ID collision'); return false; }
     const entity = this.db.prepare('SELECT type,json FROM events WHERE entity_id=? LIMIT 1').get(event.entityId);
     if (entity) {
       check(entity.type === event.type, 'Record type cannot change');
@@ -284,6 +295,7 @@ export class Store {
       .run(event.id, event.entityId, event.type, event.deviceId, event.createdAt, JSON.stringify(event), exported ? 1 : 0, exported ? 1 : 0);
     for (const parent of event.parents) this.db.prepare('DELETE FROM heads WHERE entity_id=? AND event_id=?').run(event.entityId, parent);
     this.db.prepare('INSERT INTO heads VALUES(?,?)').run(event.entityId, event.id);
+    if (event.retiredPresentation) this.setMeta('presentationRetired', 1);
     this.local('hierarchyDirty', true);
     return true;
   }
@@ -292,12 +304,6 @@ export class Store {
     check(!this.permanentDeleting, '永久删除正在处理，请稍后操作', 'BUSY');
     check(!this.local('v2Journal'), '版本操作尚未恢复，请重启恢复后再编辑', 'RECOVERY_REQUIRED');
     data = persistentRevisionData(data);
-    if (['note', 'draft'].includes(type) && !Object.hasOwn(data, 'presentation')) {
-      const bases = parents.map(parent => this.event(parent)?.data);
-      const pages = new Set(bases.map(base => canonical(base?.presentation ?? null)));
-      check(pages.size <= 1, '并发页面不同，请明确选择保留的交互页面', 'CONFLICT');
-      data = preservePresentation(data, bases[0]);
-    }
     if (['note', 'draft', 'source'].includes(type)) {
       const { assets } = richReferences(data);
       if (assets.length) data = { ...data, assetIds: [...new Set([...(data.assetIds || []), ...assets])] };
@@ -485,9 +491,7 @@ export class Store {
     check(!this.isPurged(id), '此内容已永久清空，不能恢复', 'PURGED');
     const event = this.event(revision);
     check(event?.entityId === id, 'Version not found');
-    const data = ['note', 'draft'].includes(event.type) && this.get(id)?.versions.some(version => version.data.presentation) && !Object.hasOwn(event.data, 'presentation')
-      ? { ...event.data, presentation: null } : event.data;
-    return this.write({ id, type: event.type, data, parents, deleted: false });
+    return this.write({ id, type: event.type, data: event.data, parents, deleted: false });
   }
   history(id) {
     if (this.isPurged(id)) return [];
@@ -496,6 +500,7 @@ export class Store {
   importEvents(events) {
     check(Array.isArray(events) && events.length <= 10000, 'Invalid revision batch');
     events.forEach(validateEvent);
+    events = events.map(retirePresentation);
     return this.transaction(() => {
       const retirement = retirementReceipts(this, events);
       if (retirement.length) this.eraseRaw(retirement);
@@ -510,9 +515,9 @@ export class Store {
       }
       for (const event of events) {
         const existing = this.event(event.id);
-        if (existing) check(existing.hash === event.hash, 'Revision ID collision');
+        if (existing) check(sameRevision(existing, event), 'Revision ID collision');
         const pending = this.db.prepare('SELECT json FROM pending WHERE id=?').get(event.id);
-        if (pending) check(JSON.parse(pending.json).hash === event.hash, 'Pending revision ID collision');
+        if (pending) check(sameRevision(JSON.parse(pending.json), event), 'Pending revision ID collision');
         if (!existing) this.db.prepare('INSERT OR IGNORE INTO pending VALUES(?,?)').run(event.id, JSON.stringify(event));
       }
       let count = 0, changed;
@@ -590,7 +595,6 @@ export class Store {
       for (const item of selected) {
         validateDraftRefs(this, item.draftRefs);
         requireSaved(this, [item.targetId]);
-        if (!samePresentation(item.data.presentation, this.get(item.targetId)?.data.presentation)) validatePageBasis(this, item.data, { originals: true });
         check(item.data.domain !== GLOBAL_SCOPE, '请先为方案选择目标知识库');
         const library = this.libraries().find(entry => entry.data.domain === item.data.domain);
         check(!library || (!library.deleted && !library.conflict), '方案目标知识库已删除或存在冲突');

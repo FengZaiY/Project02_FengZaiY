@@ -2,6 +2,7 @@ import { RETIRED_AI_TYPES } from './catalog.mjs';
 import { mergeErasures } from './erasures.mjs';
 import { deletionFiles, scheduleDeletion } from './permanent-files.mjs';
 import { canonical, check, now, sha, uuid } from './util.mjs';
+import { sameRevision, sourceRevisionHash, withoutPresentation } from './retired-presentation.mjs';
 
 export const retiredAI = type => RETIRED_AI_TYPES.includes(type);
 
@@ -18,26 +19,26 @@ export function retirementReceipts(store, events, existing = store.erasures()) {
   const identities = new Map();
   for (const event of events) {
     const prior = identities.get(event.id) || store.event(event.id);
-    check(!prior || prior.hash === event.hash && prior.entityId === event.entityId && prior.type === event.type, '同步记录身份冲突');
+    check(!prior || sameRevision(prior, event) && prior.entityId === event.entityId && prior.type === event.type, '同步记录身份冲突');
     identities.set(event.id, event);
   }
   const groups = new Map();
   for (const event of events.filter(event => retiredAI(event.type) || workspaces.has(event.entityId))) {
     const prior = known.get(event.id);
     if (prior) {
-      check(prior.hash === event.hash && prior.entityId === event.entityId && prior.type === event.type, '退役记录身份校验失败');
+      check(prior.hash === sourceRevisionHash(event) && prior.entityId === event.entityId && prior.type === event.type, '退役记录身份校验失败');
       continue;
     }
     if (!groups.has(event.entityId)) groups.set(event.entityId, new Map());
     const group = groups.get(event.entityId), duplicate = group.get(event.id);
-    check(!duplicate || duplicate.hash === event.hash, '退役记录身份冲突');
+    check(!duplicate || sameRevision(duplicate, event), '退役记录身份冲突');
     group.set(event.id, event);
   }
   return [...groups].map(([entityId, group]) => {
     const revisions = [...group.values()], type = revisions[0].type;
     check(revisions.every(event => event.type === type), '退役实体类型冲突');
     const body = { format: 1, id: uuid(), entityId, type, deviceId: store.deviceId, at: now(), purpose: 'retired-ai',
-      versions: revisions.map(({ id, hash }) => ({ id, hash })).sort((a, b) => a.id.localeCompare(b.id)) };
+      versions: revisions.map(event => ({ id: event.id, hash: sourceRevisionHash(event) })).sort((a, b) => a.id.localeCompare(b.id)) };
     return { ...body, hash: sha(canonical(body)) };
   });
 }
@@ -61,9 +62,9 @@ const replacementId = id => {
 export function replacementWorkspaces(events, receipts) {
   const workspaces = new Set(receipts.filter(receipt => receipt.type === 'workspace' && receipt.purpose === 'retired-ai').map(receipt => receipt.entityId));
   return events.filter(event => workspaces.has(event.entityId) && event.type === 'workspace').map(event => {
-    const { hash, ...source } = event;
+    const { hash, retiredPresentation, ...source } = event;
     const body = { ...source, id: replacementId(event.id), entityId: replacementId(event.entityId),
-      parents: event.parents.map(replacementId), data: cleanRetiredTabs(event.data) };
+      parents: event.parents.map(replacementId), data: withoutPresentation('workspace', cleanRetiredTabs(event.data)) };
     return { ...body, hash: sha(canonical(body)) };
   });
 }

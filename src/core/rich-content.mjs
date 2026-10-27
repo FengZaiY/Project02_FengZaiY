@@ -1,11 +1,9 @@
 import { parseFragment } from 'parse5';
 import { marked } from 'marked';
 import { validateBlock, validateLayout, parseNoteLink } from './rich-schema.mjs';
-import { presentationReferences } from './presentation-schema.mjs';
 
 export function richReferences(data) {
-  const page = presentationReferences(data);
-  const refs = new Set(page.refs), assets = new Set(page.assets);
+  const refs = new Set(), assets = new Set();
   const sourceLink = parseNoteLink(data.url);
   if (sourceLink && sourceLink.kind !== 'local') { refs.add(sourceLink.id); if (sourceLink.kind === 'asset') assets.add(sourceLink.id); }
   if (typeof data.content !== 'string') return { refs: [...refs], assets: [...assets] };

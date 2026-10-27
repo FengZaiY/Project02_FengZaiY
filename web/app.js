@@ -25,8 +25,6 @@ import './asset-preview.css';
 import './draft-workflow.css';
 import { recordRows } from './record-navigation.js';
 import './record-navigation.css';
-import { mountPageMode } from './presentation-mode.js';
-import { mountPresentation } from './presentation-view.js';
 import { copyText, copyVisibleText } from './editor-text.js';
 import { mountReceivedObjects } from './received-objects.js';
 
@@ -66,7 +64,6 @@ const GLOBAL_SCOPE = '__all_libraries__';
 const state = { view: 'notes', domain: '', query: '', snapshot: null, rows: [], tabs: [], selectedTab: null,
   selected: null, editor: null, sourceVisible: false, listLimit: 150, knowledgeTree: [], collapsedNotes: [], noteView: 'tree', draftFilter: 'active', listSummary: false, navigationHidden: false };
 let persistTimer, queryTimer, refreshTimer, modalCleanup, sourcePreviewUrl, editorExperience;
-let pageMode;
 let sourceLoadSerial = 0;
 let previewSerial = 0, pendingPreview, sourcePreviewController;
 let persistQueue = Promise.resolve(), importingFiles = 0;
@@ -99,7 +96,6 @@ const noteSaver = createNoteAutosave({
     tab.domain = saved.data.domain;
     if (unchanged) { tab.dirty = false; delete tab.draft; delete tab.baseHeads; }
     else { tab.baseHeads = [...saved.heads]; }
-    void pageMode?.refresh();
     if (state.selected?.id === saved.id && $('#source-pane')?.dataset.ready === 'true') void renderSources(saved);
     void persist().catch(error => toast(`正文已保存，工作区位置保存失败：${error.message}`, true));
     const row = state.rows.find(item => item.id === saved.id);
@@ -130,7 +126,7 @@ const noteSaver = createNoteAutosave({
     if (error) toast(value === 'conflict' ? '出现新版本，自动保存已暂停；当前编辑仍保留，请点击保存处理' : `自动保存未完成：${error.message}。当前编辑已保留，可点击保存重试`, true);
   }
 });
-const syncUI = createSyncUI({ api, esc, icon, formatTime, bytes, render, toast, confirmBox, inputBox, persist });
+const syncUI = createSyncUI({ api, esc, icon, formatTime, bytes, render, toast, confirmBox, inputBox, persist, refreshIcons: redrawIcons });
 const hierarchyUI = createHierarchyUI({ state, api, esc, icon, button, render: renderRecordList, persist, saveNote, openModal, confirmBox, toast, run, openRecord, libraryName });
 const draftUI = createDraftUI({ state, api, esc, icon, openModal, saveNote, persist, openRecord, hierarchyUI, libraries, run, toast, redrawIcons });
 const skillUI = createSkillManager({ api, esc, icon, safeHtml, formatTime, toast, confirmBox, redrawIcons, run, pickDirectory });
@@ -264,7 +260,6 @@ function changed() {
     $('#draft-workflow .pill').classList.remove('green');
   }
   stash();
-  void pageMode?.refresh();
   noteSaver.changed(tab.id);
   clearTimeout(persistTimer); persistTimer = setTimeout(() => persist().catch(error => toast(error.message, true)), 500);
 }
@@ -339,7 +334,6 @@ async function renderView() {
   if (importingFiles) return;
   previewSerial++; pendingPreview?.abort();
   assetUI.dispose();
-  pageMode?.destroy(); pageMode = null;
   if (sourcePreviewUrl) { URL.revokeObjectURL(sourcePreviewUrl); sourcePreviewUrl = null; }
   stash(); state.editor?.destroy(); state.editor = null;
   if (libraryViews.includes(state.view)) await renderLibrary();
@@ -399,7 +393,6 @@ function renderRecordList() {
   redrawIcons();
 }
 async function renderDocument(record) {
-  pageMode?.destroy(); pageMode = null;
   const tab = currentTab();
   const data = tab?.recordId === record.id && tab.draft ? tab.draft : record.data;
   const editable = ['note', 'draft', 'source', 'annotation'].includes(record.type) && !record.deleted && !record.conflict;
@@ -448,7 +441,6 @@ async function renderDocument(record) {
     });
     editorExperience = experience;
     mountedEditor.on('destroy', () => { experience.destroy(); if (editorExperience === experience) editorExperience = null; });
-    mountedEditor.on('destroy', () => { pageMode?.destroy(); pageMode = null; });
     updateSaveStatus();
     $('#note-title').addEventListener('input', changed);
     $('#heading-level').onchange = event => { const chain = state.editor.chain().focus(); const level = Number(event.target.value); if (level) chain.setHeading({ level }).run(); else chain.setParagraph().run(); };
@@ -468,10 +460,6 @@ async function renderDocument(record) {
     $('#editor-content').innerHTML = `${data.content ? `<section class="proposal-summary prose">${safeHtml(data.content)}</section>` : ''}<div class="proposal-items">${data.items.map(item => `<section class="proposal-item"><label class="check-row"><input type="checkbox" data-proposal-item="${item.id}" ${item.status === 'accepted' ? 'disabled checked' : actionable ? '' : 'disabled'}><strong>${esc(item.data.title)}</strong><span class="pill ${item.status === 'accepted' ? 'green' : ''}">${item.status === 'accepted' ? '已确认' : '待确认'}</span></label><div class="proposal-destination">${icon('folder')}目标：${esc(libraryName(item.data.domain))}<span>出处 ${item.data.sourceIds?.length || 0} · 附件 ${item.data.assetIds?.length || 0}</span></div><div class="prose">${safeHtml(item.data.content, item.data.format)}</div></section>`).join('')}</div>${proposalActions}`;
     $$('.proposal-item').forEach((element, index) => {
       const item = data.items[index];
-      if (item.data.presentation) {
-        const preview = document.createElement('button'); preview.className = 'secondary'; preview.textContent = '预览交互页面';
-        preview.onclick = () => previewPresentation(item.data); element.append(preview);
-      }
       $('.proposal-destination', element).insertAdjacentHTML('afterend', `<div class="proposal-operation">上级笔记：${esc(hierarchyUI.proposalPath(data.items, item))}</div>${item.reason ? `<div class="proposal-reason">${esc(item.reason)}</div>` : ''}`);
       $('.proposal-destination', element).insertAdjacentHTML('afterend', item.status === 'accepted'
         ? `<div class="proposal-operation"><button class="text-button" data-record="${esc(item.targetId)}">${icon('file-check')}查看入库笔记</button></div>` : item.parents?.length
@@ -495,21 +483,6 @@ async function renderDocument(record) {
       }
     }
   } else $('#editor-content').innerHTML = safeHtml(data.content || '', data.format);
-  if (['note', 'draft'].includes(record.type)) pageMode = mountPageMode($('.editor-panel'), {
-    getData: () => currentTab()?.draft || state.selected?.data || data, mediaUrl,
-    openNote: id => run(() => openRecord(id)), editable: !!state.editor,
-    requestDesign: () => run(async () => {
-      const ready = () => state.selected?.id === record.id && !state.editor?.view.composing
-        && !state.tabs.some(tab => tab.recordId === record.id && (tab.dirty || noteSaver.state(tab.id) === 'saving'));
-      if (!ready()) throw new Error('请先保存当前笔记，再复制设计请求');
-      const latest = await api('record', { id: record.id });
-      if (!ready()) throw new Error('当前笔记已变化，请保存后重新复制设计请求');
-      if (!latest || latest.deleted || latest.conflict) throw new Error('笔记不可用或存在冲突，请先处理后再设计页面');
-      const target = JSON.stringify({ id: latest.id, type: latest.type, title: latest.data.title, domain: latest.data.domain, heads: latest.heads });
-      await copyText(`请通过 StudySelf 连接读取 bootstrap、最新 Skill 与整理偏好。目标笔记标识及当前所见版本：${target}。先读取最新正文、已有 presentation、已授权的相关新增资料及其版本，再为这篇笔记设计或调整交互阅读页面（presentation v1）。保留人工修改、完整正文、出处、附件和不同观点，根据内容选择合适的编排、视图、图表或计算交互，不编造资料。提交整理方案，说明内容、编排、交互变化及理由，等待我预览确认，不直接发布页面；涉及草稿时保留 draftRefs 及具体版本。连接不可用时先告知，不绕过授权。`);
-      toast('设计请求已复制，请交给已连接的外部 Agent');
-    })
-  });
   if (['note', 'draft', 'source'].includes(record.type)) {
     if (record.type === 'draft') void draftUI.refresh(record).catch(error => toast(error.message, true));
     await renderAnnotations(record);
@@ -757,20 +730,25 @@ async function editLibrary(id) {
 }
 async function renderSync() {
   const { sync } = state.snapshot;
-  const { completeness } = await api('deviceStatus');
-  $('#main').className = 'settings-view';
-  $('#main').innerHTML = `<div class="page-heading"><h1>多电脑同步</h1><button class="secondary" data-action="sync-scan">${icon('search')}检查已下载更新</button></div>
-    <div class="definition-list" id="sync-content-policy"><div><span>同步范围</span><strong>笔记、修改历史、信息、资料、素材及已导入文件</strong></div><div><span>原文件传输</span><strong>大文件分块 · 组装断点续传 · 校验后本地保存</strong></div><div><span>本机原文件完整性</span><strong id="sync-file-completeness">${completeness ? `${completeness.available} / ${completeness.total} 已就绪${completeness.missing ? ` · ${completeness.missing} 个缺失或待接收` : ''} · 截至 ${formatTime(completeness.at)}` : '尚未检查'}</strong></div><div><span>传输目录清理</span><strong>不自动删除；仅释放本地副本须在客户端操作</strong></div></div>
-    <section class="settings-section"><h2>传输目录与配对</h2><form id="sync-form" class="settings-form"><label>百度网盘专用同步目录<div class="input-with-action"><input id="sync-folder" value="${esc(sync.folder)}" placeholder="选择同步空间中的专用文件夹" required>${button('folder-open', 'choose-sync-folder', '选择同步文件夹')}</div></label>
+  const devices = await api('deviceStatus');
+  $('#main').className = 'settings-view sync-view';
+  $('#main').innerHTML = `<div class="page-heading"><div><h1>多电脑同步</h1><p>全部知识库、笔记与资料</p></div><button class="secondary" data-action="sync-scan">${icon('refresh-cw')}检查同步目录</button></div>
+    <div class="sync-context"><strong id="sync-config-state">${sync.configured ? '已配对' : '未配置'}</strong><span>云端上传状态：无法直接核验，由百度客户端与用户确认</span></div>
+    <details id="sync-settings" ${sync.configured ? '' : 'open'}><summary>同步目录与设备配对 <span>${sync.configured ? '已配置，可修改' : '首次使用'}</span></summary>
+    <p id="sync-config-lock" class="sync-meta" hidden>同步任务进行中；完成或取消任务后可修改配对。</p>
+    <form id="sync-form" class="settings-form"><label>百度网盘专用同步目录<div class="input-with-action"><input id="sync-folder" value="${esc(sync.folder)}" placeholder="选择同步空间中的专用文件夹" required>${button('folder-open', 'choose-sync-folder', '选择同步文件夹')}</div></label>
       <label>设备配对密钥<div class="input-with-action"><input id="sync-key" type="password" autocomplete="off" placeholder="${sync.configured ? '保持为空则沿用当前密钥' : '两台电脑填写同一配对密钥'}">${button('key-round', 'pairing-key', '生成或查看配对密钥')}</div></label>
-      <div class="form-actions"><span class="muted">配对指纹：${esc(sync.channel || '尚未配置')}<br>配对密钥不随知识库同步，请单独妥善保存。</span><button class="primary" type="submit">保存配置</button></div></form></section>
-    <section class="settings-section"><h2>最近一次本地同步检查</h2>${sync.lastReport ? `<div class="definition-list"><div><span>检查时间</span><strong>${formatTime(sync.lastReport.finishedAt)}</strong></div><div><span>本地发现发布清单</span><strong>${sync.lastReport.availablePublications || 0}</strong></div><div><span>云端上传状态</span><strong>无法直接核验</strong></div></div>${(sync.lastReport.errors || []).map(error => `<div class="notice danger">${icon('triangle-alert')}<div>${esc(error.file || '')}<br>${esc(error.message)}</div></div>`).join('')}` : '<div class="section-empty">尚未执行同步检查</div>'}</section>`;
+      <div class="form-actions"><span class="muted">配对指纹：${esc(sync.channel || '尚未配置')}<br>两台电脑使用同一配对密钥；密钥不随知识库同步。</span><button class="primary" type="submit">保存配置</button></div></form>
+      ${sync.configured ? `<div class="sync-disconnect"><button class="secondary" data-action="sync-disconnect">${icon('unlink')}解除本机同步绑定</button><span class="muted">保留本机资料与共享目录文件</span></div>` : ''}</details>
+    <details id="sync-diagnostics"><summary>原件完整性与检查 <span>同步范围 · 修改记录</span></summary><section class="settings-section">
+    <div class="definition-list" id="sync-content-policy"><div><span>同步范围</span><strong>笔记、修改历史、信息、资料、素材及已导入文件</strong></div><div><span>原文件传输</span><strong>大文件分块 · 组装断点续传 · 校验后本地保存</strong></div><div><span>本机原文件完整性</span><strong id="sync-file-completeness">尚未检查</strong></div><div><span>传输目录清理</span><strong>不自动删除；仅释放本地副本须在客户端操作</strong></div></div>
+    <button class="secondary" data-action="sync-integrity">${icon('shield-check')}检查本机修改记录</button><div id="sync-integrity-slot"></div></section></details>`;
   $('#sync-form').addEventListener('submit', event => { event.preventDefault(); run(async () => {
     let key = $('#sync-key').value.trim();
     if (!key && sync.configured) key = (await api('pairingKey')).key;
     await api('syncConfigure', { folder: $('#sync-folder').value.trim(), key }); await render(); toast('同步配置已保存');
   }); });
-  await syncUI.renderPanel();
+  await syncUI.renderPanel(devices, state.snapshot.conflicts);
 }
 async function renderAgents() {
   const access = await api('agentStatus');
@@ -879,17 +857,10 @@ async function changeStorage(mode) {
     } finally { submit.disabled = false; }
   };
 }
-function previewPresentation(data) {
-  const dialog = openModal(`交互页面 · ${data.title}`, '<div class="presentation-host"></div>');
-  dialog.classList.add('presentation-dialog');
-  const host = $('.presentation-host', dialog);
-  mountPresentation(host, data, { mediaUrl, openNote: id => run(async () => { dialog.close(); await openRecord(id); }) });
-  modalCleanup = () => { host._presentation?.destroy(); dialog.classList.remove('presentation-dialog'); };
-}
 function openModal(title, body, footer = '') {
   const dialog = $('#modal');
   if (dialog.open) { dialog.close(); modalCleanup?.(); modalCleanup = null; }
-  dialog.classList.remove('material-dialog', 'asset-preview-dialog', 'presentation-dialog');
+  dialog.classList.remove('material-dialog', 'asset-preview-dialog');
   dialog.innerHTML = `<div class="modal-heading"><h2>${esc(title)}</h2><button class="icon-button" data-modal-close aria-label="关闭">${icon('x')}</button></div><div class="modal-body">${body}</div>${footer ? `<div class="modal-footer">${footer}</div>` : ''}`;
   dialog.showModal(); redrawIcons();
   hydrateRich(dialog, mediaUrl);
@@ -1143,7 +1114,6 @@ async function showHistory() {
   if (state.selected?.id !== requestedId) return;
   const record = state.selected, heads = [...record.heads];
   showHistoryBrowser({ history, current: record, editor: state.editor, openModal, safeHtml, esc, formatTime,
-    previewPresentation,
     hydrate: host => hydrateRich(host, mediaUrl), toast, restore: event => run(async () => {
     const accepted = await confirmBox('恢复历史版本', '<p>将创建一个新版本，当前内容和已有历史不会删除。</p>', '恢复');
     if (!accepted) return;
@@ -1195,26 +1165,17 @@ async function resolveConflict() {
     const version = record.versions.find(v => v.id === button.dataset.useVersion);
     const accepted = await confirmBox('确认处理冲突', '<p>选择的内容将成为新版本，其他版本仍保留在历史中。</p>');
     if (!accepted) return;
-    const data = ['note', 'draft'].includes(record.type) ? { ...version.data, presentation: version.data.presentation ?? null } : version.data;
+    const data = version.data;
     state.selected = await api('save', { id: record.id, type: record.type, data, parents: record.heads, deleted: version.deleted });
     const tab = currentTab(); if (tab) { tab.dirty = false; delete tab.draft; }
     if (tab) await noteSaver.forget(tab.id);
     await render();
   }));
   const merge = $('[data-manual-merge]', dialog);
-  let pageChoice;
-  if (merge && record.versions.some(version => version.data.presentation)) {
-    const label = document.createElement('label'); label.textContent = '融合后保留的页面';
-    pageChoice = document.createElement('select'); pageChoice.setAttribute('aria-label', '融合后保留的页面');
-    pageChoice.innerHTML = '<option value="">请选择页面版本</option>' + record.versions.map((version, index) => `<option value="${version.id}">版本 ${index + 1}${version.data.presentation ? '的页面（正文变化后待更新）' : '（无页面）'}</option>`).join('');
-    label.append(pageChoice); merge.before(label);
-  }
   if (merge) merge.onclick = () => run(async () => {
-    if (pageChoice && !pageChoice.value) throw new Error('请先选择融合后保留的页面版本；其他页面仍保留在历史中');
     const text = await inputBox('手动融合', '融合后的正文（Markdown）', record.versions.filter(v => !v.deleted).map(v => markdownConverter.turndown(safeHtml(v.data.content, v.data.format))).join('\n\n---\n\n'), true);
     if (text === null) return;
     const data = { ...record.data, content: text, format: 'markdown' };
-    if (pageChoice) data.presentation = record.versions.find(version => version.id === pageChoice.value).data.presentation ?? null;
     state.selected = await api('save', { id: record.id, type: record.type, data, parents: record.heads });
     const tab = currentTab(); if (tab) { tab.dirty = false; delete tab.draft; }
     if (tab) await noteSaver.forget(tab.id);
@@ -1520,8 +1481,13 @@ const actions = {
   'device-name': async () => { const name = await inputBox('设备名称', '当前电脑', state.snapshot.deviceName); if (name?.trim()) { await api('deviceName', { name }); await render(); } },
   'sync-now': async () => {
     await persist(); state.view = 'sync';
-    if (!state.snapshot.sync.configured) { await render(); return; }
+    await render();
+    if (!state.snapshot.sync.configured) return;
     await syncUI.actions['sync-scan']();
+  },
+  'sync-conflicts': async () => {
+    await persist(); state.domain = ''; state.view = 'conflicts'; state.selected = null; state.selectedTab = null; state.query = '';
+    await render();
   },
   'choose-sync-folder': async () => pickDirectory($('#sync-folder')),
   'pairing-key': async () => { const { key } = await api('pairingKey'); $('#sync-key').value = key; $('#sync-key').type = 'text'; toast('请通过独立安全方式在另一台设备填写此密钥'); },
@@ -1593,13 +1559,12 @@ const actions = {
     if (state.selected.conflict) throw new Error('请先处理并发版本，再导出正文');
     if (currentTab()?.dirty) await saveNote();
     const record = state.selected, markdown = markdownConverter.turndown(safeHtml(record.data.content, record.data.format));
-    const text = `# ${record.data.title}\n\n${markdown}\n\n---\n知识库：${libraryName(record.data.domain)}\n标签：${record.data.tags.join(', ')}\n${record.data.presentation ? '\n本文件为知识正文，不包含可运行交互页面。\n' : ''}`;
+    const text = `# ${record.data.title}\n\n${markdown}\n\n---\n知识库：${libraryName(record.data.domain)}\n标签：${record.data.tags.join(', ')}\n`;
     const url = URL.createObjectURL(new Blob([text], { type: 'text/markdown;charset=utf-8' }));
     const a = document.createElement('a'); a.href = url; a.download = `${record.data.title.replace(/[<>:"/\\|?*]/g, '_')}.md`; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
   },
   pdf: async () => {
     if (state.selected?.conflict) throw new Error('请先处理并发版本，再导出正文');
-    if (state.selected?.data.presentation) toast('PDF 导出知识正文，不包含可运行交互');
     if (native) await api('printPdf'); else window.print();
   },
   'proposal-new': async () => {

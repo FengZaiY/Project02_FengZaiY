@@ -9,7 +9,7 @@ import { LocalHierarchy } from '../src/core/local-hierarchy.mjs';
 import { CHUNK_BYTES, sealBinary } from '../src/core/sync-objects.mjs';
 import { importAttachment, makePairingKey } from '../src/core/transport.mjs';
 import { canonical, hashFile, uuid } from '../src/core/util.mjs';
-import { presentationFixture } from '../scripts/fixtures/presentation.mjs';
+import { legacyReadingEvent, retiredPage } from '../scripts/fixtures/retired-reading.mjs';
 
 const root = path.resolve('artifacts/current-sync-tests'); fs.mkdirSync(root, { recursive: true });
 function fixture(t) {
@@ -127,27 +127,29 @@ test('current sync preserves row layout, bounded dimensions and nested original-
   assert.equal(f.b.store.history(note.id).length, history);
 });
 
-test('interactive pages and their original resources survive encrypted sync, repeat import and concurrent page changes', async t => {
+test('retired pages stay removed through sync while originals, histories and concurrent text changes survive', async t => {
   const f = fixture(t), asset = await f.file(f.a, 100, 'page.png');
   const source = f.a.store.write({ type: 'draft', data: { title: '设计依据', domain: f.domain, content: '资料' } });
   const data = { title: '交互笔记', domain: f.domain, content: '<p>正文</p>', format: 'html' };
-  const presentation = presentationFixture(data, { assetIds: [asset.id], html: `<img data-asset-id="${asset.id}">` });
+  const presentation = retiredPage(data);
   presentation.basis.sources = [{ id: source.id, versionId: source.heads[0] }];
-  const note = f.a.store.write({ type: 'note', data: { ...data, presentation } });
+  const legacy = legacyReadingEvent(f.a.store, { data: { ...data, assetIds: [asset.id], sourceIds: [source.id], presentation } });
+  f.a.store.importEvents([legacy]);
+  const note = f.a.store.get(legacy.entityId);
   await f.publish(f.a); f.deliver(f.a, f.b); await f.b.sync.importLatest();
-  assert.deepEqual(f.b.store.get(note.id).data.presentation, presentation);
+  assert.equal(f.b.store.get(note.id).data.presentation, undefined);
   assert.equal(await hashFile(f.b.store.assetLocation(asset.id).path), asset.data.sha256);
   assert.equal((await f.b.sync.importLatest()).imported, 0);
-  f.a.store.write({ id: note.id, type: 'note', parents: note.heads, data: { ...data, presentation: null } });
-  f.b.store.write({ id: note.id, type: 'note', parents: note.heads, data: { ...data, presentation: { ...presentation, css: 'p{color:green}' } } });
+  f.a.store.write({ id: note.id, type: 'note', parents: note.heads, data: { ...note.data, content: 'A修改' } });
+  f.b.store.write({ id: note.id, type: 'note', parents: note.heads, data: { ...note.data, content: 'B修改' } });
   await f.publish(f.a); f.deliver(f.a, f.b); await f.b.sync.importLatest();
   const conflict = f.b.store.get(note.id);
   assert.equal(conflict.conflict, true);
-  assert.equal(conflict.versions.filter(version => version.data.presentation === null).length, 1);
-  assert.throws(() => f.b.store.write({ id: note.id, type: 'note', parents: conflict.heads, data }), /页面/);
-  const resolved = f.b.store.write({ id: note.id, type: 'note', parents: conflict.heads, data: { ...data, presentation: null } });
-  assert.equal(resolved.data.presentation, null);
-  assert.deepEqual(f.b.store.event(note.heads[0]).data.presentation, presentation);
+  assert.deepEqual(new Set(conflict.versions.map(version => version.data.content)), new Set(['A修改', 'B修改']));
+  const resolved = f.b.store.write({ id: note.id, type: 'note', parents: conflict.heads, data: { ...note.data, content: '合并正文' } });
+  assert.equal(resolved.data.presentation, undefined);
+  assert.equal(f.b.store.event(note.heads[0]).data.presentation, undefined);
+  assert.equal(f.b.store.event(note.heads[0]).retiredPresentation, legacy.hash);
 });
 
 test('space estimate, bounded batches and restart continue a frozen publication', async t => {

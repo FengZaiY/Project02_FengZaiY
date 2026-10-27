@@ -1,5 +1,6 @@
 import { canonical, check, isHash, isId, now, sha, uuid } from './util.mjs';
 import { TYPES, RETIRED_AI_TYPES } from './catalog.mjs';
+import { sourceRevisionHash } from './retired-presentation.mjs';
 
 // Independent receipts allow us to remove payloads without rewriting old event hashes.
 export function validateErasure(value) {
@@ -50,7 +51,7 @@ export function filterErased(events, receipts) {
     if (!versions) return true;
     const known = versions.get(event.id);
     check(known, '永久删除与另一台电脑的新修改冲突；同步已暂停，请在保有新修改的电脑将内容另存为新笔记后再处理', 'ERASURE_CONFLICT');
-    check(known.hash === event.hash && known.type === event.type, '永久删除版本校验不匹配');
+    check(known.hash === sourceRevisionHash(event) && known.type === event.type, '永久删除版本校验不匹配');
     return false;
   });
 }
@@ -59,6 +60,6 @@ export function createErasure(store, id) {
   const events = store.allEvents().filter(event => event.entityId === id);
   check(events.length > 0, '待清空内容已变化', 'CONFLICT');
   const body = { format: 1, id: uuid(), entityId: id, type: events[0].type, deviceId: store.deviceId, at: now(),
-    versions: events.map(({ id, hash }) => ({ id, hash })).sort((a, b) => a.id.localeCompare(b.id)) };
+    versions: events.map(event => ({ id: event.id, hash: sourceRevisionHash(event) })).sort((a, b) => a.id.localeCompare(b.id)) };
   return { ...body, hash: sha(canonical(body)) };
 }

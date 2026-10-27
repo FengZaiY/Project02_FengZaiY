@@ -24,6 +24,7 @@ try {
   page.on('pageerror', error => errors.push(error.message));
   await page.goto(app.url);
   await page.getByRole('button', { name: '多电脑同步', exact: true }).click();
+  await page.locator('#sync-diagnostics > summary').click();
   await page.locator('[data-action="sync-integrity"]').click();
   const result = page.locator('#sync-integrity-result');
   await result.getByText('本机修改记录校验通过', { exact: true }).waitFor();

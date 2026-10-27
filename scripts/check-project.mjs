@@ -31,7 +31,7 @@ const required = [
   'src/core/agent-access.mjs', 'src/core/agent-mcp.mjs', 'web/agent-mcp.js', 'web/agent-mcp.css', 'tests/agent-mcp.test.mjs', 'docs/agent-mcp.md', 'skills/studyself-organize/SKILL.md', 'src/desktop/main.mjs',
   'src/desktop/preload.cjs', 'src/server.mjs', 'web/app.js', 'tests/core.test.mjs',
   'src/core/rich-schema.mjs', 'src/core/rich-content.mjs', 'src/core/media.mjs',
-  'src/core/presentation-schema.mjs', 'src/core/presentation.mjs', 'web/presentation-view.js', 'web/presentation-worker.js', 'web/presentation-mode.js', 'tests/presentation.test.mjs', 'scripts/test-presentation.mjs',
+  'src/core/retired-presentation.mjs', 'tests/retired-presentation.test.mjs', 'scripts/test-retired-reading.mjs',
   'web/rich-editor.js', 'web/rich-canvas.js', 'web/rich.css', 'tests/rich.test.mjs', 'scripts/test-rich-ui.mjs',
   'web/mindmap-editor.js', 'web/mindmap-model.js', 'web/mindmap.css', 'tests/mindmap.test.mjs', 'scripts/test-mindmap-ui.mjs'
 ];
@@ -63,7 +63,7 @@ const scripts = {
   'test:asset-previews': 'node scripts/test-asset-previews.mjs',
   'test:agents': 'node scripts/test-agents-ui.mjs',
   'test:rich': 'node scripts/test-rich-ui.mjs',
-  'test:presentation': 'node scripts/test-presentation.mjs',
+  'test:retired-reading': 'node scripts/test-retired-reading.mjs',
   'test:mindmap': 'node scripts/test-mindmap-ui.mjs',
   'test:document': 'node scripts/test-document-flow.mjs',
   'test:experience': 'node scripts/test-editor-experience.mjs',

@@ -31,13 +31,13 @@ export const mcpTools = [
     ...write, domain: id, filename: z.string().min(1).max(255), mime: z.string().max(200).optional(), data: z.string().max(Math.ceil(16 * 1024 * 1024 / 3) * 4),
     sha256: z.string().regex(/^[a-f0-9]{64}$/), sensitive: z.boolean().optional()
   }],
-  ['propose', 'propose', '提交待用户确认的内容、融合、笔记层级或交互页面方案。正式笔记不会自动入库。用 draftRefs 关联来源版本及覆盖程度。', {
+  ['propose', 'propose', '提交待用户确认的内容、融合或笔记层级方案。正式笔记不会自动入库。用 draftRefs 关联来源版本及覆盖程度。', {
     ...write, title: z.string().optional(), domain: id, content: z.string().optional(), items: z.array(item).min(1).max(100)
   }],
   ['proposalRevise', 'propose', '局部重做待确认项，保留已确认成果与来源关联。parents 为方案 heads，项 id 为方案项 ID。', {
     ...write, id, parents, items: z.array(z.object({ id, data, reason: z.string().max(4000).optional(), draftRefs }).strict()).min(1).max(100)
   }],
-  ['noteUpdate', 'edit', '直接改正式笔记，须完整保留内容和引用、校验 heads。调整层级或交互页面须改用 propose。', { ...write, id, parents, data }],
+  ['noteUpdate', 'edit', '直接改正式笔记，须完整保留内容和引用、校验 heads。调整层级须改用 propose。', { ...write, id, parents, data }],
   ['relationCreate', 'edit', '创建知识关联；data 须包含 from、to、description，引用必须存在于有效知识库。', { ...write, data }],
   ['trash', 'trash', '将记录移入可恢复回收站。不能清空回收站、删除原件或历史。', { ...write, id, parents }]
 ];

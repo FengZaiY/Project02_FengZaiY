@@ -1,6 +1,7 @@
 import { validateEvent } from './store.mjs';
 import { canonical, check, isId } from './util.mjs';
 import { validateManagement, transferDisputed } from './device-management.mjs';
+import { retirePresentation, sameRevision } from './retired-presentation.mjs';
 
 export const EMPTY_CONTROL = { devices: [], roles: [] };
 
@@ -76,9 +77,9 @@ export function orderedEvents(events, store) {
     validateEvent(event);
     check(!ids.has(event.id), 'Duplicate modification'); ids.set(event.id, event);
     const existing = store.event(event.id);
-    check(!existing || existing.hash === event.hash, 'Revision ID collision');
+    check(!existing || sameRevision(existing, event), 'Revision ID collision');
     const pending = store.db.prepare('SELECT json FROM pending WHERE id=?').get(event.id);
-    check(!pending || JSON.parse(pending.json).hash === event.hash, 'Pending revision ID collision');
+    check(!pending || sameRevision(JSON.parse(pending.json), event), 'Pending revision ID collision');
     const first = entities.get(event.entityId) || store.get(event.entityId);
     if (first) {
       check(first.type === event.type, 'Record type changed');
@@ -105,5 +106,5 @@ export function orderedEvents(events, store) {
     }
   }
   check(ready.length === events.length, 'Cyclic modification history');
-  return ready;
+  return ready.map(retirePresentation);
 }

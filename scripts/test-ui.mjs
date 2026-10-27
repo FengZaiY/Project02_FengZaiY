@@ -105,6 +105,7 @@ try {
   assert.match(await page.locator('.sidebar-status').innerText(), /同步目录已配置/);
   assert.doesNotMatch(await page.locator('#main').innerText(), /待双机验证|尚待验证|客户端隔离验证/);
   assert.match(await page.locator('#main').innerText(), /无法直接核验/);
+  await page.locator('#sync-diagnostics > summary').click();
   assert.match(await page.locator('#sync-content-policy').innerText(), /大文件分块/);
   assert.match(await page.locator('#sync-file-completeness').innerText(), /1 \/ 2 已就绪.*1 个缺失或待接收/);
   await page.screenshot({ path: path.join(root, 'desktop-sync.png'), fullPage: true });
@@ -128,6 +129,7 @@ try {
   await page.locator('[data-modal-close]').click();
   await app.service.call('assetImport', { path: missingFile, expectedId: missingAsset.id });
   await page.locator('[data-nav="sync"]').first().click();
+  await page.locator('[data-sync-detail="options"] > summary').click();
   await page.locator('[data-action="sync-plan"]').click();
   await page.waitForFunction(() => document.querySelector('#toast')?.textContent.includes('空间预估已生成'));
   assert.match(await page.locator('#sync-task').innerText(), /预计新增占用/);

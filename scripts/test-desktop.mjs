@@ -5,7 +5,6 @@ import fs from 'node:fs';
 import { call as mcpCall } from '../skills/studyself-organize/scripts/client.mjs';
 import assert from 'node:assert/strict';
 import { docxFixture } from './fixtures/docx.mjs';
-import { presentationFixture } from './fixtures/presentation.mjs';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { skillExportFiles } from '../web/skill-export.js';
@@ -110,19 +109,13 @@ try {
   fs.writeFileSync(imagePath, Buffer.from(imageData, 'base64'));
   const asset = await page.evaluate(file => window.desktop.call('assetImport', { path: file, domain: 'AI' }), imagePath);
   if (!packaged) {
-    const body = { title: '桌面交互页面', domain: 'AI', content: '<p>可编辑正文</p>', format: 'html' };
-    const presentation = presentationFixture(body, { assetIds: [asset.id] });
-    presentation.html += `<img data-asset-id="${asset.id}" alt="交互图片">`;
-    const interactive = await page.evaluate(data => window.desktop.call('save', { type: 'note', data }), { ...body, presentation });
-    await page.reload(); await page.locator(`[data-record="${interactive.id}"]`).click();
-    await page.locator('.page-runtime-bar [role=status]', { hasText: '交互运行中' }).waitFor();
-    const frame = page.frameLocator('iframe.interactive-page');
-    await frame.locator('#chart svg').waitFor();
-    await frame.locator('img').evaluate(el => new Promise((resolve, reject) => { if (el.naturalWidth === 240) resolve(); else { el.onload = resolve; el.onerror = reject; } }));
-    await page.screenshot({ path: path.join(root, 'interactive-page-native.png') });
-    await page.getByRole('button', { name: '正文编辑', exact: true }).click();
+    assert.equal(await page.getByRole('button', { name: '交互阅读', exact: true }).count(), 0);
+    assert.equal(await page.getByRole('button', { name: '复制设计请求', exact: true }).count(), 0);
+    assert.equal(await page.locator('iframe.interactive-page').count(), 0);
     await page.locator('.tiptap').waitFor({ state: 'visible' });
-    await page.locator(`[data-record="${data.note.id}"]`).click();
+    await assert.rejects(page.evaluate(() => window.desktop.call('save', {
+      type: 'note', data: { title: '已移除', domain: 'AI', presentation: null }
+    })), /交互阅读已移除/);
   }
   await page.evaluate(async ({ asset, note }) => {
     const block = { v: 1, kind: 'image', label: '原生媒体', assetId: asset.id };

@@ -1,6 +1,6 @@
 {
   "name": "studyself",
-  "version": "0.1.10",
+  "version": "0.1.11",
   "private": true,
   "license": "UNLICENSED",
   "description": "Local-first knowledge workspace with reviewed folder-based synchronization",
@@ -35,7 +35,7 @@
     "test:updates": "node scripts/test-updates-ui.mjs",
     "test:drafts": "node scripts/test-draft-workflow.mjs",
     "test:rich": "node scripts/test-rich-ui.mjs",
-    "test:presentation": "node scripts/test-presentation.mjs",
+    "test:retired-reading": "node scripts/test-retired-reading.mjs",
     "test:mindmap": "node scripts/test-mindmap-ui.mjs",
     "test:rich-layout": "node scripts/test-rich-layout.mjs",
     "test:line-drag": "node scripts/test-block-line-drag.mjs",
@@ -50,6 +50,7 @@
     "test:exit": "node scripts/test-exit-ui.mjs",
     "test:audit-fixes": "node scripts/test-audit-fixes-desktop.mjs",
     "test:sync-publication": "node scripts/test-sync-publication-ui.mjs",
+    "test:sync-ui": "node scripts/test-sync-ui.mjs",
     "test:packaged": "node scripts/test-desktop.mjs --packaged",
     "benchmark": "node scripts/benchmark.mjs",
     "dist": "npm run build && electron-builder --config scripts/release-config.mjs --win nsis --x64 --publish never"
@@ -63,7 +64,6 @@
     "@tiptap/starter-kit": "^3.31.4",
     "d3-hierarchy": "3.1.2",
     "dompurify": "^3.3.0",
-    "echarts": "6.1.0",
     "electron": "^42.0.0",
     "electron-builder": "^26.0.0",
     "esbuild": "^0.27.0",
@@ -74,7 +74,6 @@
     "mammoth": "1.13.0",
     "mermaid": "^12.1.0",
     "playwright": "^1.58.0",
-    "quickjs-emscripten": "0.32.0",
     "turndown": "^7.2.4",
     "turndown-plugin-gfm": "^1.0.2"
   },
@@ -111,7 +110,6 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.32.1",
-    "css-tree": "3.2.1",
     "electron-updater": "6.6.2",
     "marked": "^17.0.6",
     "parse5": "^8.0.1",

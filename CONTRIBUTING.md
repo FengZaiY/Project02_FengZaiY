@@ -46,10 +46,12 @@ MCP 适配使用生产依赖 `@modelcontextprotocol/sdk` 和 `zod`，是唯一�
 | `src/core/` | `npm test` |
 | 清空回收站、永久删除凭据 | 另运行 `node --test tests/permanent-deletion.test.mjs tests/trash.test.mjs tests/current-sync.test.mjs tests/storage.test.mjs`、`npm run test:trash`、`npm run test:libraries`、`npm run test:assets`、`npm run test:agents`、`npm run test:storage`；覆盖正文历史实际删除、原件/共用保护、可重试文件任务、数据库压缩失败、替换索引失败、旧副本确认、重复/乱序同步及未知并发版本阻断；不得用正式回收内容测试 |
 | 当前内容同步、批次与接收断点 | `node --test tests/current-sync.test.mjs tests/sync-publication.test.mjs`、全量核心、`npm run test:sync-publication` 及界面/桌面测试；覆盖缺块、重启、损坏前缀、空间不足、重复、并发及清单替换占用。Windows 专项用临时文件真实句柄验证锁释放后成功，不访问真实同步目录 |
+| 多电脑同步界面与操作流程 | `node --test tests/sync-ui-state.test.mjs`、`npm run test:sync-ui`，另运行通用界面、设备、修改记录检查与源码桌面回归；使用隔离双目录检查初次配对、配置输入保留、冻结与批次、上传确认取消、缺块、仅索引后完整接收、并发冲突入口、防重复点击及切页后编辑保留；检查 1464、1220、931、600 宽度和底部可达 |
+| 解除本机同步绑定 | `node --test tests/sync-disconnect.test.mjs`、`npm run test:sync-ui`、全量核心、通用界面、设备及源码桌面；验证显式确认、过期/重复/忙碌请求、事务失败回滚、未完成任务取消、知识与原件/共享文件/断点保留、重启重新配对及设备策略不绕过；不得对真实工作区执行解绑测试 |
 | 退役 AI 数据迁移 | `node --test tests/retired-ai.test.mjs`、全量核心、`test:ui`、`test:agents`、`test:skills`、`test:storage`；检查旧密钥和正文删除、正常笔记与草稿保护、旧同步重复/新分支拦截、工作区替换身份一致及失败回滚 |
 | 退役 Git/独立备份兼容模块 | 现有 `git-sync.test.mjs` 等仅维护旧格式读取证据，不恢复当前产品入口 |
 | `web/` 或跨端业务调用 | `npm run build`、`npm run test:ui`，必要时核心测试 |
-| 交互笔记契约、运行时或页面设计流程 | `npm test`、`npm run build`、`npm run test:presentation`、`test:ui`、`test:rich`、`test:experience`、`test:agents`、`test:skills`、`test:drafts`、`test:assets`、`test:libraries`、`test:desktop`；检查方案/局部重做/待更新/恢复、资源及历史授权、事务回滚、加密双目录同步、隔离逃逸/死循环/超量消息，以及 1220/931/600 实际截图。图表须实际可见，不能只凭存在 canvas 或内存像素断言成功 |
+| 交互阅读退役清理 | `npm test`、`npm run build`、`test:retired-reading`、`test:ui`、`test:rich`、`test:experience`、`test:agents`、`test:skills`、`test:drafts`、`test:trash`、`test:desktop`；检查旧数据事务迁移、损坏拒绝、正文/原件/草稿确认结果保留、重复与乱序同步、加密对象替换失败重试、历史恢复以及宽窄窗口无旧入口 |
 | 草稿直接归档、方案来源关联与处理状态 | `npm run test:drafts`、`node --test tests/draft-workflow.test.mjs`；另运行完整核心、知识库/层级/Agent 界面回归，核对来源版本、部分覆盖、未保存修改、取消、重复、失败回滚、双目录同步及授权 |
 | 草稿与正式笔记共用界面 | `npm run test:drafts`、`npm run test:experience`、`npm run test:attachments`；另以 `node scripts/test-editor-experience.mjs --draft` 和 `node scripts/test-note-attachments.mjs --draft` 验证草稿工具/附件，核对导航切换不重建编辑器、紧凑保存、重开草稿范围及窄窗口 |
 | 系统设置的内置 Skill 管理 | `npm run test:skills`、`npm run test:agents`、`npm test`；核对只读文件、导出版本清单、偏好快照、历史取回、保存期间输入、未保存内容保护与过期版本对照。导出生成记录不表示外部安装成功 |

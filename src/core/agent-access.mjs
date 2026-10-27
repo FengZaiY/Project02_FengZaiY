@@ -5,8 +5,6 @@ import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { check, uuid, now, sha, canonical, atomicWrite, noSymlink, prettyError } from './util.mjs';
 import { richReferences } from './rich-content.mjs';
-import { preservePresentation, samePresentation, validatePageBasis } from './presentation.mjs';
-import { presentationLimits } from './presentation-schema.mjs';
 import { cleanDraftRefs, validateDraftRefs } from './draft-workflow.mjs';
 import { handleMcp } from './agent-mcp.mjs';
 
@@ -120,11 +118,6 @@ export class AgentAccess {
       if (!seen.has(key)) { seen.add(key); this.checkData(grant, event.data, seen, virtual); }
     };
     if (data.draftOrigin) checkDraft(data.draftOrigin);
-    for (const ref of data.presentation?.basis?.sources || []) {
-      const event = this.store.event(ref.versionId), key = `version:${ref.versionId}`;
-      check(event?.entityId === ref.id && readableTypes.includes(event.type), '页面依据版本不可访问', 'FORBIDDEN');
-      if (!seen.has(key)) { seen.add(key); this.checkData(grant, event.data, seen, virtual); }
-    }
     if (data.parentNoteId) this.readable(grant, this.store.get(data.parentNoteId) || virtual.get(data.parentNoteId), seen, virtual);
     for (const item of data.items || []) {
       for (const ref of item.draftRefs || []) checkDraft(ref);
@@ -179,7 +172,7 @@ export class AgentAccess {
   read(grant, method, input) {
     if (method === 'bootstrap') {
       const files = this.skillFiles();
-      return { protocolVersion: 1, capabilities: { mcp: { transport: 'streamable-http', toolPrefix: 'studyself_' }, presentation: { version: 1, runtime: 'quickjs-page-v1', limits: presentationLimits } }, skillVersion: sha(canonical(files)), skill: files['SKILL.md'], apiReference: files['references/api.md'],
+      return { protocolVersion: 1, capabilities: { mcp: { transport: 'streamable-http', toolPrefix: 'studyself_' } }, skillVersion: sha(canonical(files)), skill: files['SKILL.md'], apiReference: files['references/api.md'],
         preferences: this.preferences(), access: { scope: 'all', domains: this.store.libraries().filter(item => !item.deleted && !item.conflict).map(item => item.data.domain),
           permissions: grant.permissions, sensitive: grant.sensitive, expiresAt: grant.expiresAt } };
     }
@@ -271,14 +264,12 @@ export class AgentAccess {
         check(item.draftRefs === undefined || (old.draftRefs || []).every(ref => item.draftRefs.some(next => next.id === ref.id)),
           '不能移除待确认项的来源草稿关联');
         const targetId = this.store.get(old.targetId) ? old.targetId : undefined;
-        updates.set(item.id, { ...this.proposalItem(grant, { ...item, data: preservePresentation(item.data, old.data), draftRefs: item.draftRefs ?? old.draftRefs,
+        updates.set(item.id, { ...this.proposalItem(grant, { ...item, data: item.data, draftRefs: item.draftRefs ?? old.draftRefs,
           reason: item.reason ?? old.reason, targetId, parents: old.parents }), id: old.id, targetId: old.targetId });
       }
       return write('proposal', { ...record.data, items: record.data.items.map(item => updates.get(item.id) || item) }, record.id, input.parents);
     }
     check(record.type === (method === 'noteUpdate' ? 'note' : 'draft'), '记录类型不符');
-    if (method === 'noteUpdate') check(!Object.hasOwn(input.data, 'presentation') || samePresentation(input.data.presentation, record.data.presentation), '交互页面替换或移除须提交方案，由用户确认', 'FORBIDDEN');
-    input = { ...input, data: preservePresentation(input.data, record.data) };
     check(input.data.domain === record.data.domain, '改换知识库请提交方案，不直接移动');
     check((input.data.folderId || null) === (record.data.folderId || null), '调整目录归属请提交整理方案，由用户确认');
     check((input.data.parentNoteId || null) === (record.data.parentNoteId || null), '调整知识体系请提交整理方案，由用户确认');
@@ -301,8 +292,6 @@ export class AgentAccess {
       validateDraftRefs(this.store, draftRefs);
       for (const ref of draftRefs) this.readable(grant, this.store.get(ref.id));
     }
-    item = { ...item, data: preservePresentation(item.data, target?.data) };
-    if (!samePresentation(item.data.presentation, target?.data.presentation)) validatePageBasis(this.store, item.data);
     const data = target ? { ...(target.data.folderId !== undefined ? { folderId: target.data.folderId } : {}),
       ...(target.data.parentNoteId !== undefined ? { parentNoteId: target.data.parentNoteId } : {}), ...item.data, sensitive: target.data.sensitive || item.data.sensitive === true,
       sourceIds: [...new Set([...(target.data.sourceIds || []), ...(item.data.sourceIds || [])])],
