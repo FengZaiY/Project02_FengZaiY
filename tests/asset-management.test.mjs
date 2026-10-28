@@ -33,7 +33,7 @@ test('central originals retain note, shared and recycled references without relo
   const before = snapshot();
   const result = await f.call('assetCatalog', { domain: f.library.id });
   assert.equal(result.storage.root, f.store.directory);
-  for (const [asset, kind] of [[own, 'central'], [shared, 'central'], [free, 'central']]) {
+  for (const [asset, kind] of [[own, 'organized'], [shared, 'organized'], [free, 'organized']]) {
     const row = result.rows.find(row => row.id === asset.id);
     assert.equal(row.storage.path, f.store.assetLocation(asset.id).path);
     assert.equal(row.storage.kind, kind);
@@ -42,12 +42,12 @@ test('central originals retain note, shared and recycled references without relo
     assert.equal(path.join(result.storage.root, row.storage.relativeDirectory, row.storage.filename), row.storage.path);
   }
   const owned = result.rows.find(row => row.id === own.id).storage;
-  assert.ok(owned.relativeDirectory.startsWith('.fengzai-y'));
+  assert.ok(owned.relativeDirectory.startsWith('资料'));
   assert.equal(result.rows.find(row => row.id === shared.id).referenceCount, 2);
-  const rootDirectory = path.join(f.store.directory, '.fengzai-y', 'materials');
+  const rootDirectory = path.join(f.store.directory, '资料');
   assert.equal((await f.call('assetCatalog', { domain: f.library.id, directory: rootDirectory })).total, 3);
-  assert.equal((await f.call('assetCatalog', { directory: owned.directory })).rows[0].id, own.id);
-  assert.equal((await f.call('assetDetail', { id: trash.id })).storage.kind, 'central');
+  assert.ok((await f.call('assetCatalog', { directory: owned.directory })).rows.some(row => row.id === own.id));
+  assert.equal((await f.call('assetDetail', { id: trash.id })).storage.kind, 'organized');
   assert.equal(snapshot(), before, 'Catalog and location reads must not reorganize files or write knowledge');
 });
 

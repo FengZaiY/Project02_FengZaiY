@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { Service } from '../src/core/service.mjs';
+import { UI_PROTOCOL } from '../src/core/ui-protocol.mjs';
 
 const root = path.resolve('artifacts/fengzaiy-naming'); fs.mkdirSync(root, { recursive: true });
 const directory = fs.mkdtempSync(path.join(root, 'startup-'));
@@ -32,7 +33,7 @@ try {
   assert.ok(token);
   const call = async (method, input = {}) => (await (await fetch(`${url}/api`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-FengZaiY-Token': token }, body: JSON.stringify({ method, input }) })).json()).value;
   const state = await call('state');
-  assert.equal(state.localDataDirectory, directory); assert.equal(state.uiProtocol, 2);
+  assert.equal(state.localDataDirectory, directory); assert.equal(state.uiProtocol, UI_PROTOCOL);
   assert.equal(state.counts.note, 1); assert.equal(state.libraries[0].id, library.id);
   assert.equal((await call('record', { id: note.id })).data.content, note.data.content);
   assert.ok(!fs.existsSync(wrong));

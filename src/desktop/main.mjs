@@ -1,12 +1,14 @@
 import { desktopProfilePath, legacyNames } from '../core/legacy-names.mjs';
-import { app, BrowserWindow, ipcMain, dialog, safeStorage, shell, Menu, powerMonitor, protocol, clipboard } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, safeStorage, shell, Menu, powerMonitor, protocol, clipboard, net } from 'electron';
 import fs from 'node:fs';
+import { workspaceInternalPath } from '../core/workspace-layout.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { StorageLocation } from '../core/storage-location.mjs';
 import { check, prettyError, uuid, isId, noSymlink, atomicWrite } from '../core/util.mjs';
 import updaterPackage from 'electron-updater';
 import { UpdateManager, assertUpdateIdle } from './updates.mjs';
+import { attachUpdateDownload } from './update-download.mjs';
 import { mediaResponse } from '../core/media.mjs';
 import { importClipboardImage } from './clipboard-import.mjs';
 import { ExitCheck, exitActivity } from './exit-check.mjs';
@@ -79,7 +81,9 @@ else {
   updates = new UpdateManager({ version: app.getVersion(), packaged: app.isPackaged, source: metadata.fengzaiyUpdateSource ?? metadata[legacyNames.updateSource],
     autoCheck: updateSettings.autoCheck !== false,
     saveAutoCheck: autoCheck => atomicWrite(updateSettingsFile, JSON.stringify({ autoCheck })),
-    createUpdater: source => new updaterPackage.NsisUpdater(source),
+    createUpdater: source => attachUpdateDownload(new updaterPackage.NsisUpdater(source), {
+      directory: path.join(app.getPath('userData'), 'update-downloads'), fetch: (url, options) => net.fetch(url, options)
+    }),
     notify: status => {
       if (installingUpdate && status.phase === 'error') {
         installingUpdate = false; allowClose = false;
@@ -130,6 +134,9 @@ else {
       else if (method === 'updateConfigure') value = updates.configure(input);
       else if (method === 'updateCheck') value = await updates.check();
       else if (method === 'updateDownload') value = await updates.download();
+      else if (method === 'updatePause') value = await updates.pause();
+      else if (method === 'updateResume') value = await updates.download();
+      else if (method === 'updateRestartDownload') value = await updates.restartDownload();
       else if (method === 'updateInstall') {
         updates.requireDownloaded();
         check(input.rendererReady === true, '请在系统设置中确认并关闭未保存内容后更新');
@@ -189,7 +196,7 @@ else {
         const record = service.store.get(input.id), local = service.store.assetLocation(input.id);
         check(record?.type === 'asset' && local, 'Attachment is not available');
         check(/\.(pdf|txt|md|png|jpg|jpeg|webp|mp4|mov|mp3|wav|docx|xlsx|pptx)$/i.test(record.data.filename), 'This file type is not opened automatically');
-        const viewDirectory = path.join(directory, 'opened-files', record.id);
+        const viewDirectory = workspaceInternalPath(directory, 'opened-files', record.id);
         fs.mkdirSync(viewDirectory, { recursive: true });
         const viewFile = path.join(viewDirectory, record.data.filename);
         service.store.activeAssetReads ||= new Map();

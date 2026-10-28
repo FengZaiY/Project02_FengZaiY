@@ -364,7 +364,7 @@ export function createPersonalUI({ api, esc, icon, toast, confirmBox, openModal,
       $('#change-undo', dialog).onclick = () => run(async () => { const control = $('#change-undo', dialog); control.disabled = true; try { await api('changeUndo', { id: detail.id }); dialog.close(); toast('整批操作已撤回，原历史保留'); await changes(); } finally { if (control.isConnected) control.disabled = false; } });
     })); redrawIcons();
   }
-  return { init, show, changes, select, create, flush, save, saveAll, snapshot, dirty: () => snapshot().length > 0 || secretBusy, clearSecret,
+  return { init, show, changes, select, create, flush, save, saveAll, snapshot, dirty: () => snapshot().length > 0 || secretBusy, clearSecret, openVault: vault,
     createCurrent: () => action('new'),
     leave: () => { capture(); activeForm = null; view = null; serial++; } };
 }

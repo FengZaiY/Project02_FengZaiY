@@ -41,13 +41,14 @@ try {
   await page.locator('.page-heading small', { hasText: library.data.title }).waitFor();
   assert.equal(await page.locator('#material-root-path').innerText(), store.directory);
   assert.equal(await page.locator('[data-material-row]').count(), 6);
+  await page.locator('#material-directories > summary').click();
   const tree = page.locator('.material-directory-tree');
-  assert.match(await tree.innerText(), /materials/);
+  assert.match(await tree.innerText(), /资料.*待整理/s);
   assert.match(await tree.innerText(), /工作区外/);
   assert.match(await tree.innerText(), /尚未下载到本机/);
   assert.ok(!(await tree.innerText()).includes('另一知识库'));
   const row = asset => page.locator(`[data-material-row="${asset.id}"]`);
-  assert.match(await row(own).innerText(), /materials/s);
+  assert.match(await row(own).innerText(), /资料.*待整理/s);
   assert.match(await row(missing).innerText(), /文件缺失/);
   assert.match(await row(unbound).innerText(), /尚未下载到本机/);
   await page.getByRole('button', { name: '复制工作区根目录', exact: true }).click();
@@ -93,7 +94,7 @@ try {
   await row(own).waitFor();
   await page.locator('[data-action=material-trash-view]').click();
   await row(trash).waitFor();
-  assert.match(await tree.innerText(), /materials/);
+  assert.match(await tree.innerText(), /资料.*待整理/s);
   await page.locator('[data-action=material-active]').click();
   await row(own).waitFor();
   for (const width of [1220, 931, 600]) {
@@ -120,7 +121,7 @@ try {
   assert.equal(JSON.stringify(store.db.prepare('SELECT id,json FROM events ORDER BY id').all()), before);
   assert.deepEqual(errors, []);
   fs.writeFileSync(path.join(root, 'report.json'), JSON.stringify({ passed: true, errors, checks: [
-    'content-addressed paths', 'shared and recycled originals', 'missing and unbound', 'external binding',
+    'readable material paths', 'shared and recycled originals', 'missing and unbound', 'external binding',
     'copy file and folder paths', 'directory filtering', 'library isolation', 'collapse', 'responsive layout', 'no knowledge writes'
   ] }, null, 2));
   console.log('PASS: real local hierarchy, current bindings, missing/unbound/external files, path copy, scoped filtering, unchanged records and responsive screenshots.');

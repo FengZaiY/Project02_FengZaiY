@@ -28,6 +28,10 @@ async function setup(t, permissions = {}) {
   return { directory, service, store: service.store, a, b, grant, env, rpc, write, version };
 }
 const data = (library, content = '正文') => ({ title: '测试知识', domain: library.data.domain, content, sourceIds: [], assetIds: [] });
+async function approve(service, request) {
+  const detail = await service.call('agentOperationDetail', { id: request.id });
+  return service.call('agentOperationDecide', { id: request.id, token: detail.token, approved: true });
+}
 
 test('Agent endpoint defaults off; credentials cover all libraries, remain hashed and can be deleted', async t => {
   const { service, rpc, env, grant, a } = await setup(t);
@@ -121,7 +125,7 @@ test('cleared records cannot be read through Agent search, direct reads, history
   const requestId = uuid();
   const input = { data: { ...data(a), title: '待清空的收集内容' } };
   const note = await write('draftCreate', input, requestId);
-  await write('trash', { id: note.id, parents: note.heads });
+  await approve(service, await write('trash', { id: note.id, parents: note.heads }));
   const preview = await service.call('trashPreview', { domain: a.id });
   assert.equal(preview.eligible.length, 1);
   await service.call('trashEmpty', { domain: a.id, token: preview.token, confirmed: true });
@@ -185,12 +189,12 @@ test('writes are atomic, idempotent and require current preferences; request ID 
 });
 
 test('all credentials can edit and recycle while stale edits never overwrite', async t => {
-  const { store, a, write } = await setup(t);
+  const { store, a, write, service } = await setup(t);
   const note = store.write({ type: 'note', data: data(a) });
   const exec = write;
   const edited = await exec('noteUpdate', { id: note.id, parents: note.heads, data: data(a, '已确认的修改') });
   await assert.rejects(exec('noteUpdate', { id: note.id, parents: note.heads, data: data(a, '过期') }), /CONFLICT/);
-  await exec('trash', { id: note.id, parents: edited.heads });
+  await approve(service, await exec('trash', { id: note.id, parents: edited.heads }));
   assert.equal(store.get(note.id).deleted, true);
   assert.equal(store.history(note.id).length, 3);
 });

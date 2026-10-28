@@ -84,7 +84,7 @@ test('automatic mode updates only opted-in unchanged installations, pauses hand 
   manager.check({ automatic: true }); assert.match(fs.readFileSync(file, 'utf8'), /manual change/);
 });
 
-test('stale previews, missing confirmation, other workspaces and concurrent writers cannot overwrite files', t => {
+test('stale previews, missing confirmation, other workspaces and concurrent writers cannot overwrite files', async t => {
   const { manager, install, confirm, preference, root } = setup(t);
   const directory = install(), linked = confirm({ directory }); preference('changed');
   const input = { id: linked.id, action: 'update' };
@@ -99,7 +99,7 @@ test('stale previews, missing confirmation, other workspaces and concurrent writ
   const release = lockFile(path.join(directory, '.fengzaiy-update.lock'));
   try { assert.throws(() => confirm(input), /另一个实例/); } finally { release(); }
   const other = new Service(path.join(root, 'other'));
-  try { assert.throws(() => other.skillInstallations.preview({ directory }), /另一个工作区/); } finally { other.close(); }
+  try { assert.throws(() => other.skillInstallations.preview({ directory }), /另一个工作区/); } finally { await other.close(); }
   fs.renameSync(directory, directory + '-moved');
   assert.equal(manager.check()[0].status, 'error');
   manager.unlink({ id: linked.id, confirmed: true }); assert.equal(manager.list().length, 0);

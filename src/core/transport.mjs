@@ -199,7 +199,8 @@ async function importAttachmentSerial(store, input, { expectedId, pinned = false
       return { ...record, reused: !!reused };
     }
   }
-  const owned = store.directories.assetPath(record?.data.domain || domain, hash);
+  const newId = record?.id || uuid();
+  const owned = store.directories.assetPath(record?.data.domain || domain, hash, record || { id: newId, data: { domain, filename: path.basename(file), sha256: hash } });
   fs.mkdirSync(path.dirname(owned), { recursive: true });
   if (!fs.existsSync(owned)) {
     const temp = `${owned}.${uuid()}.partial`;
@@ -211,7 +212,7 @@ async function importAttachmentSerial(store, input, { expectedId, pinned = false
   }
   check(fs.statSync(owned).size === stat.size && await hashFile(owned) === hash, '已有托管文件校验失败，未覆盖，请检查文件后重试');
   if (record) check(canonical(store.headIds(record.id)) === canonical(before), '资料已变化，请重新导入', 'CONFLICT');
-  const saveRecord = () => store.write({ type: 'asset', data: {
+  const saveRecord = () => store.write({ id: newId, type: 'asset', data: {
     title: path.basename(file), domain, ...(folderId ? { folderId } : {}), tags: [], sensitive: false, filename: path.basename(file),
     ...(store.personalSystem ? { centralized: true, collectionIds: [], libraryDomains: domain === '__materials__' ? [] : [domain] } : {}),
     size: stat.size, sha256: hash, mime, priority: stat.size > SMALL_ASSET_LIMIT ? 'large' : 'normal'

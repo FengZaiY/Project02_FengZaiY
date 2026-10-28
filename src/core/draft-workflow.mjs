@@ -32,7 +32,7 @@ export function cleanupProposal(store, { id, parents }) {
   return store.transaction(() => {
     const record = store.get(id);
     check(record?.type === 'proposal' && !record.conflict, '请选择无冲突的整理方案', 'CONFLICT');
-    check(record.data.items.length > 0 && record.data.items.every(item => item.status === 'accepted'),
+    check(record.data.items.length + (record.data.materialItems?.length || 0) > 0 && [...record.data.items, ...(record.data.materialItems || [])].every(item => item.status === 'accepted'),
       '方案尚有待确认内容，不能作为已确认方案清理');
     requireSaved(store, [id]);
     check(Array.isArray(parents), '请提供方案基础版本');

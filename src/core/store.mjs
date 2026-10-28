@@ -18,6 +18,8 @@ import { uuid, now, sha, canonical, check, isId, isHash, atomicWrite, encrypt, d
 import { persistentRevisionData, revisionChecksum } from './revision-integrity.mjs';
 import { PERSONAL_TYPES, MATERIAL_SCOPE, cleanPersonal } from './personal-schema.mjs';
 import { validatePersonalWrite } from './personal-records.mjs';
+import { cleanMaterialItems, validateManagedFilename, validateMaterialPlacement, approveMaterialItems } from './material-organization.mjs';
+import { databasePath, deviceKeyPath } from './workspace-layout.mjs';
 const GLOBAL_SCOPE = '__all_libraries__';
 
 const COMMON = ['title', 'domain', 'tags', 'sensitive'];
@@ -28,9 +30,9 @@ const FIELDS = {
   source: [...COMMON, 'content', 'format', 'url', 'assetIds'],
   annotation: [...COMMON, 'content', 'noteId', 'quote'],
   relation: [...COMMON, 'from', 'to', 'description'],
-  proposal: [...COMMON, 'items', 'content'],
+  proposal: [...COMMON, 'items', 'content', 'materialItems'],
   workspace: [...COMMON, 'tabs', 'selectedTab', 'originDevice'],
-  asset: [...COMMON, 'filename', 'size', 'sha256', 'mime', 'priority', 'collectionIds', 'libraryDomains', 'centralized'],
+  asset: [...COMMON, 'filename', 'size', 'sha256', 'mime', 'priority', 'collectionIds', 'libraryDomains', 'centralized', 'materialTopicId', 'managedFilename'],
   library: [...COMMON, 'description'],
   folder: [...COMMON, 'description', 'parentId'],
   agentPreferences: [...COMMON, 'content'],
@@ -77,6 +79,8 @@ export function cleanData(type, data, { legacyPresentation = false } = {}) {
     if (result[field]) check(Array.isArray(result[field]) && result[field].every(isId), 'Invalid attachment/source IDs');
   }
   if (type === 'asset') {
+    check(result.materialTopicId === undefined || result.materialTopicId === null || isId(result.materialTopicId), '资料主题无效');
+    validateManagedFilename(result.managedFilename, result.filename);
     check(result.collectionIds === undefined || Array.isArray(result.collectionIds) && result.collectionIds.length <= 200 && result.collectionIds.every(isId), '资料集合无效');
     check(result.libraryDomains === undefined || Array.isArray(result.libraryDomains) && result.libraryDomains.length <= 200 && result.libraryDomains.every(s => typeof s === 'string' && s.length <= 100), '资料知识库关联无效');
     check(result.centralized === undefined || result.centralized === true, '资料中心标识无效');
@@ -121,6 +125,7 @@ export function cleanData(type, data, { legacyPresentation = false } = {}) {
     }
   }
   if (type === 'proposal') {
+    if (result.materialItems !== undefined) result.materialItems = cleanMaterialItems(result.materialItems);
     check(Array.isArray(result.items) && result.items.length <= 100, 'Invalid proposal items');
     const ids = new Set();
     result.items = result.items.map(item => {
@@ -164,7 +169,7 @@ export class Store {
     this.directory = path.resolve(directory);
     this.directories = new LibraryDirectories(this);
     fs.mkdirSync(this.directory, { recursive: true });
-    this.db = new DatabaseSync(path.join(this.directory, 'knowledge.sqlite'));
+    this.db = new DatabaseSync(databasePath(this.directory));
     this.db.exec(`
       PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000; PRAGMA secure_delete=ON;
       CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -192,7 +197,7 @@ export class Store {
     }
     this.vault = options.vault;
     if (!this.vault) {
-      const keyPath = path.join(this.directory, 'device-vault.key');
+      const keyPath = deviceKeyPath(this.directory);
       if (!fs.existsSync(keyPath)) atomicWrite(keyPath, randomBytes(32));
       const key = fs.readFileSync(keyPath);
       this.vault = {
@@ -349,6 +354,7 @@ export class Store {
     if (deleted && type === 'note') check(!hasNoteChildren(this, id), '此笔记仍有下级笔记（含回收站/待确认方案），请先调整，不会连带删除');
     if (type === 'asset') validateAssetChange(this, id, content.data, deleted);
     validatePersonalWrite(this, type, content.data, id, deleted);
+    if (!deleted) validateMaterialPlacement(this, type, content.data);
     const event = { ...content, hash: sha(canonical(content)) };
     validateEvent(event);
     if (this.changeContext && type !== 'changeBatch') {
@@ -617,11 +623,14 @@ export class Store {
     return this.transaction(() => {
       const record = this.get(proposalId);
       check(record?.type === 'proposal' && !record.deleted && !record.conflict, 'Proposal must be unambiguous');
+      requireSaved(this, [proposalId]);
       check(canonical(record.heads) === canonical([...parents].sort()), 'Proposal has changed', 'CONFLICT');
-      check(Array.isArray(itemIds) && itemIds.length > 0 && itemIds.every(id => record.data.items.some(i => i.id === id)), 'Select valid proposal items');
+      check(Array.isArray(itemIds) && itemIds.length > 0 && itemIds.every(id => [...record.data.items, ...(record.data.materialItems || [])].some(i => i.id === id)), 'Select valid proposal items');
       const items = structuredClone(record.data.items);
+      const materialItems = structuredClone(record.data.materialItems || []);
+      approveMaterialItems(this, materialItems, itemIds);
       const selected = orderedProposalItems(this, items, itemIds);
-      if (!selected.length) return record;
+      if (!selected.length && canonical(materialItems) === canonical(record.data.materialItems || [])) return record;
       for (const item of selected) {
         validateDraftRefs(this, item.draftRefs);
         requireSaved(this, [item.targetId]);
@@ -636,7 +645,7 @@ export class Store {
         item.status = 'accepted';
         if (item.draftRefs?.length) item.acceptedVersionId = event.id;
       }
-      this.writeRaw({ id: proposalId, type: 'proposal', data: { ...record.data, items }, parents: record.heads });
+      this.writeRaw({ id: proposalId, type: 'proposal', data: { ...record.data, items, ...(record.data.materialItems ? { materialItems } : {}) }, parents: record.heads });
       return this.get(proposalId);
     });
   }

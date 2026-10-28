@@ -1,4 +1,5 @@
 import { updateSource, sourceLabel } from './update-source.mjs';
+import { CancellationToken } from 'builder-util-runtime';
 
 const requireState = (condition, message) => { if (!condition) throw new Error(message); };
 const releaseText = notes => (Array.isArray(notes) ? notes.map(note => `${note.version || ''}\n${note.note || ''}`).join('\n\n') : String(notes || '')).slice(0, 20000);
@@ -23,22 +24,24 @@ export class UpdateManager {
     this.updater.allowDowngrade = false;
     this.updater.disableWebInstaller = true;
     this.bindAvailability();
-    this.updater.on('error', error => this.fail(error));
+    this.updater.on('error', error => { if (!this.operation && this.state.phase === 'installing') this.fail(error); });
     this.updater.on('download-progress', progress => {
-      if (this.state.phase !== 'downloading') return;
+      if (this.state.phase !== 'downloading' || !this.downloadAttempt || this.downloadAttempt.token.cancelled) return;
       this.set({ progress: { percent: Math.min(100, Math.max(0, Number(progress.percent) || 0)),
         transferred: progress.transferred || 0, total: progress.total || 0, bytesPerSecond: progress.bytesPerSecond || 0 } });
     });
     this.updater.on('update-downloaded', info => {
-      if (this.state.phase === 'downloading' && info.version === this.state.latestVersion) this.set({ phase: 'downloaded', progress: null, error: '' });
+      if (this.state.phase === 'downloading' && this.downloadAttempt && !this.downloadAttempt.token.cancelled
+        && info.version === this.state.latestVersion) this.downloadAttempt.verified = true;
     });
   }
   status() { return structuredClone(this.state); }
   set(change) { Object.assign(this.state, change); this.notify(this.status()); return this.status(); }
-  fail(error) {
+  fail(error, failedOperation = '') {
     // Do not leak cache paths, request headers or raw remote responses into the renderer.
     const code = String(error?.code || 'NETWORK_OR_FILE_ERROR').replace(/[^A-Z0-9_]/g, '').slice(0, 80);
-    return this.set({ phase: 'error', error: `更新操作未完成（${code || 'UNKNOWN'}）。请检查网络、磁盘空间与发布文件后重试。`, progress: null });
+    return this.set({ phase: 'error', failedOperation, error: `更新操作未完成（${code || 'UNKNOWN'}）。请检查网络、磁盘空间与发布文件后重试。`,
+      progress: failedOperation === 'download' ? this.state.progress : null });
   }
   configure({ autoCheck }) {
     requireState(typeof autoCheck === 'boolean', '自动检查设置无效');
@@ -47,10 +50,10 @@ export class UpdateManager {
   }
   async check() {
     requireState(this.updater, this.state.supported ? '尚未配置有效的在线更新来源' : '请在已安装的 Windows 桌面版中检查更新');
-    requireState(!this.operation && !['downloaded', 'installing'].includes(this.state.phase), '更新正在处理或已下载，请先完成当前操作');
+    requireState(!this.operation && !['downloading', 'pausing', 'restarting', 'downloaded', 'installing'].includes(this.state.phase), '更新正在处理或已下载，请先完成当前操作');
     this.operation = true;
     this.available = false;
-    this.set({ phase: 'checking', error: '', latestVersion: '', releaseNotes: '', releaseDate: null, progress: null });
+    this.set({ phase: 'checking', error: '', failedOperation: '', latestVersion: '', releaseNotes: '', releaseDate: null, progress: null });
     try {
       const result = await this.updater.checkForUpdates();
       requireState(result?.updateInfo, '没有收到版本信息');
@@ -69,15 +72,48 @@ export class UpdateManager {
     return this;
   }
   async download() {
-    requireState(this.updater && !this.operation && this.state.phase === 'available', '请先检查并确认有新版本');
+    requireState(this.updater && !this.operation && (['available', 'paused'].includes(this.state.phase)
+      || this.state.phase === 'error' && this.state.failedOperation === 'download'), '请先检查并确认有新版本');
     this.operation = true;
-    this.set({ phase: 'downloading', error: '', progress: { percent: 0, transferred: 0, total: 0, bytesPerSecond: 0 } });
-    try {
-      await this.updater.downloadUpdate();
-      requireState(this.state.phase === 'downloaded', '下载尚未通过校验');
-      return this.status();
-    } catch (error) { return this.fail(error); }
+    const attempt = { token: new CancellationToken(), verified: false };
+    this.downloadAttempt = attempt;
+    this.set({ phase: 'downloading', error: '', failedOperation: '',
+      progress: this.state.progress || { percent: 0, transferred: 0, total: 0, bytesPerSecond: 0 } });
+    this.downloadTask = (async () => {
+      try {
+        await this.updater.downloadUpdate(attempt.token);
+        if (attempt.token.cancelled) return this.status();
+        requireState(attempt.verified, '下载尚未通过校验');
+        return this.set({ phase: 'downloaded', progress: null, error: '' });
+      } catch (error) { return attempt.token.cancelled ? this.status() : this.fail(error, 'download'); }
+      finally {
+        attempt.token.dispose(); this.downloadAttempt = null; this.operation = false;
+        if (this.state.phase === 'pausing') this.set({ phase: 'paused', progress: this.state.progress && { ...this.state.progress, bytesPerSecond: 0 } });
+      }
+    })();
+    await this.downloadTask;
+    return this.status();
+  }
+  async pause() {
+    if (this.state.phase === 'paused') return this.status();
+    requireState(this.downloadAttempt && ['downloading', 'pausing'].includes(this.state.phase), '当前没有可暂停的下载');
+    this.set({ phase: 'pausing', error: '' });
+    this.downloadAttempt.token.cancel();
+    await this.downloadTask;
+    return this.status();
+  }
+  async restartDownload() {
+    requireState(this.updater?.resetDownload && (['downloading', 'paused'].includes(this.state.phase)
+      || this.state.phase === 'error' && this.state.failedOperation === 'download'), '当前没有可重新下载的更新');
+    this.set({ phase: 'restarting', error: '' });
+    this.downloadAttempt?.token.cancel();
+    await this.downloadTask;
+    this.operation = true;
+    try { await this.updater.resetDownload(); }
+    catch (error) { return this.fail(error, 'download'); }
     finally { this.operation = false; }
+    this.set({ phase: 'available', progress: null });
+    return this.download();
   }
   requireDownloaded() { requireState(this.updater && !this.operation && this.state.phase === 'downloaded', '更新尚未下载并校验完成'); }
   install() {
@@ -92,7 +128,7 @@ export class UpdateManager {
 export function assertUpdateIdle(service, storage, activeCalls = 1, customStartup = false) {
   requireState(!customStartup, '当前使用自定义启动目录，请关闭后手动安装并沿用原启动入口，避免重启到其他工作区');
   requireState(!storage.status().restartRequired, '请先应用或取消待生效的存储位置变更');
-  requireState(!service.transport.running && !service.localTask && !service.imports.size && !service.agents.starting && activeCalls <= 1,
+  requireState(!service.transport.running && !service.localTask && !service.imports.size && !service.agentOperationTask && !service.agents.starting && activeCalls <= 1,
     '同步、导入或其他操作仍在进行，请稍后更新');
   requireState(![...(service.store.activeAssetReads?.values() || [])].some(count => count > 0), '原文件仍在读取，请关闭预览后更新');
   requireState(!(service.store.local('workspace')?.tabs || []).some(tab => tab.dirty), '请先保存或关闭未保存的笔记标签');

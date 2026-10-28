@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { UUID } from 'builder-util-runtime';
 import { Service } from '../src/core/service.mjs';
+import { UI_PROTOCOL } from '../src/core/ui-protocol.mjs';
 import { StorageLocation } from '../src/core/storage-location.mjs';
 import { createServer } from '../src/server.mjs';
 import { legacyLibraryId } from '../src/core/library-directories.mjs';
@@ -107,7 +108,7 @@ test('both trusted header names authenticate with the same token and protocol mi
   const app = await createServer({ directory: temp(), port: 0 }); t.after(() => app.close());
   for (const header of ['X-FengZaiY-Token', 'X-StudySelf-Token']) {
     const response = await fetch(`${app.url}/api`, { method: 'POST', headers: { [header]: app.token, 'Content-Type': 'application/json' }, body: JSON.stringify({ method: 'state' }) });
-    const result = await response.json(); assert.equal(result.value.uiProtocol, 2);
+    const result = await response.json(); assert.equal(result.value.uiProtocol, UI_PROTOCOL);
   }
   const denied = await fetch(`${app.url}/api`, { method: 'POST', headers: { 'X-FengZaiY-Token': 'wrong', 'X-StudySelf-Token': app.token }, body: '{}' });
   assert.equal(denied.status, 403);

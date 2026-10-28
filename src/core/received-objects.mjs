@@ -1,8 +1,9 @@
 import fs from 'node:fs';
+import { workspaceInternalPath } from './workspace-layout.mjs';
 import path from 'node:path';
 import { check, noSymlink, now } from './util.mjs';
 
-const rootOf = store => path.join(store.directory, 'received-objects');
+const rootOf = store => workspaceInternalPath(store, 'received-objects');
 const pathKey = file => process.platform === 'win32' ? path.resolve(file).toLowerCase() : path.resolve(file);
 const within = (root, file) => {
   const relative = path.relative(pathKey(root), pathKey(file));

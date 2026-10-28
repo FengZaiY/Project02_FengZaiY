@@ -119,3 +119,11 @@
 .source-link-option span{min-width:0;overflow-wrap:anywhere;font-size:13px}
 .source-link-option small{display:block;color:var(--muted);font-size:11px;margin-top:4px}
 @media(max-width:700px){.material-filters{grid-template-columns:repeat(2,minmax(0,1fr))}.material-tabs button{padding:8px 10px}}
+.material-organization { border-bottom: 1px solid var(--border, #ddd); padding: 12px 0; }
+.material-category-tree { display: flex; flex-wrap: wrap; gap: 8px 24px; max-height: 220px; overflow: auto; }
+.material-category-tree details { min-width: 160px; max-width: 100%; }
+.material-category-tree summary, .material-topic-row { display: flex; align-items: center; gap: 4px; }
+.material-topic-row { padding-left: 16px; }
+.material-topic-row .text-button, .material-category-tree summary .text-button { white-space: normal; overflow-wrap: anywhere; text-align: left; }
+.material-organization [aria-pressed="true"] { color: #126e51; background: #e7f5ed; }
+.path-value { overflow-wrap: anywhere; white-space: normal; display: block; }

@@ -85,7 +85,9 @@ try {
   assert.match(await page.locator('.knowledge-browser').innerText(), /实践案例/);
   await app.service.organizeLocal();
   assert.deepEqual(app.service.localHierarchy.status().errors, []);
-  assert.ok(Object.keys(app.service.store.local('hierarchyFiles')).some(file => file.includes(parent.id) && file.endsWith(`${child.id}.md`)));
+  const directories = app.service.store.local('readableDirectories');
+  assert.equal(path.dirname(directories[`note:${child.id}`]), directories[`note:${parent.id}`]);
+  assert.ok(fs.existsSync(path.join(app.service.store.directory, directories[`note:${child.id}`], '正文.md')));
   for (const [width, height] of [[1480, 940], [1165, 892], [600, 900]]) {
     await page.setViewportSize({ width, height });
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);

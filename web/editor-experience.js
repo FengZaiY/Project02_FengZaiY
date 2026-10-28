@@ -5,7 +5,9 @@ import { Decoration, DecorationSet } from '@tiptap/pm/view';
 import { TableMap } from '@tiptap/pm/tables';
 import { createElement, icons } from 'lucide';
 import { textMatches, parseClipboardTable, quoteTsv, copyText } from './editor-text.js';
+import { clipboardCodePaste } from './code-paste.js';
 import { parseNoteLink } from '../src/core/rich-schema.mjs';
+import { handleEditorShortcut, shortcutHelp } from './editor-shortcuts.js';
 import './editor-experience.css';
 
 const markKey = new PluginKey('fengzaiyFind');
@@ -41,6 +43,7 @@ export const experienceCodeBlock = CodeBlock.extend({
       let current = node;
       const dom = document.createElement('div'); dom.className = 'code-surface';
       const tools = document.createElement('div'); tools.className = 'code-tools'; tools.contentEditable = 'false';
+      const symbol = createElement(icons.Code); symbol.classList.add('code-language-icon'); symbol.setAttribute('aria-hidden', 'true');
       const language = document.createElement('select'); language.setAttribute('aria-label', '代码语言');
       for (const [value, label] of [['', '纯文本'], ['javascript', 'JavaScript'], ['typescript', 'TypeScript'], ['python', 'Python'], ['json', 'JSON'], ['html', 'HTML'], ['css', 'CSS'], ['bash', 'Shell'], ['sql', 'SQL'], ['markdown', 'Markdown']]) {
         language.add(new Option(label, value));
@@ -59,20 +62,25 @@ export const experienceCodeBlock = CodeBlock.extend({
         const wrapped = dom.classList.toggle('code-wrap'); wrap.setAttribute('aria-pressed', String(wrapped));
       });
       wrap.setAttribute('aria-pressed', 'false');
+      const status = document.createElement('span'); status.className = 'code-copy-status'; status.setAttribute('role', 'status');
+      let feedbackTimer;
       const copy = control('复制代码', 'Copy', async () => {
-        try { await copyText(current.textContent); copy.title = '已复制'; }
-        catch (error) { copy.title = error.message; }
+        clearTimeout(feedbackTimer);
+        try { await copyText(current.textContent); status.textContent = '已复制'; }
+        catch (error) { status.textContent = error.message; }
+        feedbackTimer = setTimeout(() => { status.textContent = ''; }, 2500);
       });
-      tools.append(language, wrap, copy);
+      tools.append(symbol, language, status, wrap, copy);
       const pre = document.createElement('pre'), code = document.createElement('code'); pre.append(code); dom.append(tools, pre);
       return { dom, contentDOM: code,
         update(next) { if (next.type !== current.type) return false; current = next; setLanguage(); return true; },
         stopEvent: event => tools.contains(event.target),
-        ignoreMutation: mutation => mutation.type !== 'selection' && !code.contains(mutation.target)
+        ignoreMutation: mutation => mutation.type !== 'selection' && !code.contains(mutation.target),
+        destroy() { clearTimeout(feedbackTimer); }
       };
     };
   }
-});
+}).configure({ enableTabIndentation: true, tabSize: 2 });
 
 export function mountEditorExperience({ editor, panel, insert, link, annotate, references, lookup, openRecord, libraryName, toast }) {
   const disposers = [], body = document.body, scroll = panel.querySelector('.editor-scroll');
@@ -242,6 +250,11 @@ export function mountEditorExperience({ editor, panel, insert, link, annotate, r
   font.onchange = () => { prefs.size = Number(font.value); applyReading(); };
   width.onchange = () => { prefs.width = width.value; applyReading(); };
   readBar.append(directoryButton, focusButton, reading, control('查找与替换', 'Search', () => { finder.hidden = !finder.hidden; if (!finder.hidden) findInput.focus(); }));
+  readBar.append(shortcutHelp());
+  for (const [action, keys] of [['undo', 'Ctrl+Z'], ['redo', 'Ctrl+Y / Ctrl+Shift+Z']]) {
+    const button = toolbar.querySelector(`[data-action="fmt-${action}"]`);
+    if (button) button.title = `${button.getAttribute('aria-label')} (${keys})`;
+  }
   toolbar.before(readBar); applyReading();
   const finder = document.createElement('div'); finder.className = 'editor-find'; finder.hidden = true;
   finder.innerHTML = '<input aria-label="文内查找" placeholder="查找"><input aria-label="替换为" placeholder="替换为"><output aria-live="polite"></output>';
@@ -311,6 +324,7 @@ export function mountEditorExperience({ editor, panel, insert, link, annotate, r
   listen(editor.view.dom, 'compositionend', () => { composing = false; queueMicrotask(() => { if (!stopped) { update(); void updateCommands(); } }); });
   listen(editor.view.dom, 'keydown', event => {
     if (event.isComposing || composing || editor.view.composing) return;
+    if (handleEditorShortcut(editor, event)) return;
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f') { event.preventDefault(); finder.hidden = false; findInput.focus(); return; }
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); link(); return; }
     if (!menu.hidden && ['ArrowDown', 'ArrowUp', 'Enter', 'Escape'].includes(event.key)) {
@@ -334,6 +348,12 @@ export function mountEditorExperience({ editor, panel, insert, link, annotate, r
     if (event.defaultPrevented || editor.isActive('codeBlock')) return;
     const clipboard = event.clipboardData; if (!clipboard || clipboard.files.length) return;
     const html = clipboard.getData('text/html'), text = clipboard.getData('text/plain');
+    const code = clipboardCodePaste(text, html);
+    if (code) {
+      event.preventDefault();
+      editor.view.pasteHTML(code);
+      return;
+    }
     if (!html && text.includes('\t') && !editor.isActive('table')) {
       const rows = parseClipboardTable(text); if (!rows) return;
       event.preventDefault();

@@ -5,7 +5,11 @@ import { atomicWrite, canonical, check, hashFile, inside, noSymlink, now, outsid
 import { placedTypes } from './hierarchy.mjs';
 import { legacyNoteId } from './note-hierarchy.mjs';
 import { pruneReceivedDirectory } from './received-objects.mjs';
-import { isCentralAsset } from './material-center.mjs';
+import { isCentralAsset, managedRoot } from './material-center.mjs';
+import { isReadableAsset, readableDirectory } from './readable-storage.mjs';
+import { readableMarkdown } from './readable-markdown.mjs';
+import { richReferences } from './rich-content.mjs';
+import { workspaceInternalPath } from './workspace-layout.mjs';
 
 const names = { note: '笔记', draft: '草稿', source: '来源', annotation: '备注', relation: '关联', proposal: '整理方案', asset: '资料' };
 const safeName = title => String(title).normalize('NFKC').replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').replace(/[. ]+$/g, '').slice(0, 24) || '未命名';
@@ -25,6 +29,8 @@ export class LocalHierarchy {
     const file = inside(this.store.directory, relative); noSymlink(file); return file;
   }
   projectionFile(file) {
+    const internal = path.join(this.store.directory, '.fengzai-y', 'metadata', 'records');
+    if (!outside(internal, file)) return true;
     for (const [id, name] of Object.entries(this.store.local('libraryDirectories') || {})) {
       const directory = this.store.directories.location(name);
       if (!this.store.directories.owns(directory, id)) continue;
@@ -35,6 +41,11 @@ export class LocalHierarchy {
   pruneEmpty(directory) {
     while (this.projectionFile(directory) && !fs.existsSync(libraryMarkerPath(directory))) {
       noSymlink(directory);
+      const marker = path.join(directory, '.fengzaiy-directory.json');
+      if (fs.existsSync(directory) && fs.readdirSync(directory).length === 1 && fs.existsSync(marker)
+        && Object.keys(this.store.local('readableDirectories') || {}).some(key => sha(key) === JSON.parse(fs.readFileSync(marker, 'utf8')).owner)) {
+        noSymlink(marker); fs.unlinkSync(marker);
+      }
       if (!fs.existsSync(directory) || fs.readdirSync(directory).length) return;
       fs.rmdirSync(directory);
       directory = path.dirname(directory);
@@ -54,10 +65,9 @@ export class LocalHierarchy {
     return relative;
   }
   managedOriginal(file) {
-    if (isCentralAsset(this.store, file)) return true;
+    if (isCentralAsset(this.store, file) || isReadableAsset(this.store, file)) return true;
     if (!outside(this.store.directory, file)) {
-      const received = path.join(this.store.directory, 'received-objects');
-      if (path.dirname(file) === received && /^[a-f0-9]{64}$/.test(path.basename(file))) return true;
+      if ([workspaceInternalPath(this.store, 'received-objects'), workspaceInternalPath(this.store, 'objects'), path.join(this.store.directory, 'received-objects'), path.join(this.store.directory, 'objects')].includes(path.dirname(file)) && /^[a-f0-9]{64}$/.test(path.basename(file))) return true;
       for (const [id, name] of Object.entries(this.store.local('libraryDirectories') || {})) {
         const directory = this.store.directories.location(name);
         if (!this.store.directories.owns(directory, id)) continue;
@@ -86,7 +96,7 @@ export class LocalHierarchy {
     const local = this.store.assetLocation(record.id);
     if (!local || !fs.existsSync(local.path)) return { available: false };
     const source = local.path; noSymlink(source);
-    if (record.data.centralized || isCentralAsset(this.store, source)) return { available: fs.statSync(source).size === record.data.size && (!verify || await hashFile(source) === record.data.sha256), assetId: record.id };
+    if (this.store.personalSystem || record.data.centralized || isCentralAsset(this.store, source) || isReadableAsset(this.store, source)) return { available: fs.statSync(source).size === record.data.size && (!verify || await hashFile(source) === record.data.sha256), assetId: record.id };
     const extension = path.extname(record.data.filename).replace(/[^.a-zA-Z0-9]/g, '').slice(0, 12);
     const file = path.join(directory, `${safeName(path.basename(record.data.filename, path.extname(record.data.filename)))}-${record.id}${extension}`);
     noSymlink(file);
@@ -142,7 +152,9 @@ export class LocalHierarchy {
         const noteDirectory = node => {
           if (dirs.has(node.id)) return dirs.get(node.id);
           const parent = node.parentNoteId ? notes.find(item => item.id === node.parentNoteId) : null;
-          const directory = path.join(parent ? noteDirectory(parent) : root, `${safeName(node.data.title)}-${node.id}`);
+          const directory = this.store.personalSystem
+            ? readableDirectory(this.store, parent ? noteDirectory(parent) : root, node.data.title, `note:${node.id}`, true, Math.max(8, Math.floor((210 - root.length) / Math.max(1, ...notes.map(item => item.depth + 1)))))
+            : path.join(parent ? noteDirectory(parent) : root, `${safeName(node.data.title)}-${node.id}`);
           noSymlink(directory); fs.mkdirSync(directory, { recursive: true });
           dirs.set(node.id, directory);
           return directory;
@@ -162,7 +174,9 @@ export class LocalHierarchy {
             const node = notes.find(item => item.id === (record.type === 'note' ? record.id : ownerId));
             const base = record.deleted ? path.join(root, '回收站') : record.conflict ? path.join(root, '待处理冲突')
               : ownerIds?.size > 1 ? path.join(root, '共享资料') : node ? noteDirectory(node) : root;
-            const directory = record.type === 'note' && !record.deleted && !record.conflict ? base : path.join(base, names[record.type]);
+            const directory = this.store.personalSystem && record.type === 'asset' ? root : record.type === 'note' && !record.deleted && !record.conflict ? base : !this.store.personalSystem ? path.join(base, names[record.type])
+              : readableDirectory(this.store, readableDirectory(this.store, record.deleted ? path.join(root, '回收站') : root,
+                record.type === 'draft' ? '收集与草稿' : names[record.type] || '其他', `group:${library.id}:${record.deleted ? 'trash:' : ''}${record.type}`), record.data.title, `record:${record.id}`);
             noSymlink(directory); fs.mkdirSync(directory, { recursive: true });
             const stem = `${safeName(record.data.title)}-${record.id}`;
             let original;
@@ -170,10 +184,34 @@ export class LocalHierarchy {
               original = await this.original(record, directory, verify);
               if (!original.available) report.missing++;
             }
-            used.add(this.write(path.join(directory, `${stem}.json`), JSON.stringify({ format: 1, id: record.id, type: record.type,
+            const internal = this.store.personalSystem ? path.join(managedRoot(this.store, true), 'metadata', 'records') : directory; noSymlink(internal); fs.mkdirSync(internal, { recursive: true });
+            const projectionOwners = this.store.local('projectionOwners') || {};
+            const fullFile = path.join(internal, this.store.personalSystem ? `${record.id}.json` : `${stem}.json`);
+            used.add(this.write(fullFile, JSON.stringify({ format: 1, id: record.id, type: record.type,
               data: record.data, heads: record.heads, versions: record.versions, deleted: record.deleted, original }, null, 2), files));
-            if (typeof record.data.content === 'string') used.add(this.write(path.join(directory, `${stem}.md`),
-              `# ${record.data.title}\n\n${record.data.content}\n`, files));
+            projectionOwners[path.relative(this.store.directory, fullFile)] = record.id;
+            if (typeof record.data.content === 'string') {
+              const bodyFile = path.join(directory, this.store.personalSystem ? '正文.md' : `${stem}.md`), refsFile = path.join(directory, '资料引用.md');
+              const assetLink = id => {
+                const local = this.store.assetLocation(id);
+                return local && fs.existsSync(local.path) ? path.relative(directory, local.path).split(path.sep).map(encodeURIComponent).join('/') : `fengzaiy://asset/${id}`;
+              };
+              used.add(this.write(bodyFile, `# ${record.data.title}\n\n${readableMarkdown(record.data, assetLink)}\n`, files));
+              const ids = new Set([...(record.data.assetIds || []), ...(record.data.sourceIds || []), ...richReferences(record.data).refs]);
+              for (const id of ids) {
+                const source = this.store.get(id);
+                if (source?.type === 'source') for (const ref of [...(source.data.assetIds || []), ...richReferences(source.data).refs]) ids.add(ref);
+              }
+              const links = [...ids].map(id => {
+                const ref = this.store.get(id), local = ref?.type === 'asset' ? this.store.assetLocation(id) : null;
+                const title = (ref?.data.title || id).replace(/[\[\]\\]/g, '\\$&');
+                return local && fs.existsSync(local.path) ? `- [${title}](<${path.relative(directory, local.path).split(path.sep).map(encodeURIComponent).join('/')}>)` : `- ${title}（${ref?.type === 'asset' ? '原件待下载' : '来源记录'}，ID: ${id}）`;
+              });
+              if (this.store.personalSystem) used.add(this.write(refsFile, `# 资料引用\n\n${links.join('\n') || '暂无关联资料'}\n`, files));
+              projectionOwners[path.relative(this.store.directory, bodyFile)] = record.id;
+              if (this.store.personalSystem) projectionOwners[path.relative(this.store.directory, refsFile)] = record.id;
+            }
+            this.store.local('projectionOwners', projectionOwners);
             report.records++;
           } catch (error) { report.errors.push({ id: record.id, message: error.message }); }
         }

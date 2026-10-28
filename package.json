@@ -1,6 +1,6 @@
 {
   "name": "fengzaiy",
-  "version": "0.1.13",
+  "version": "0.1.14",
   "private": true,
   "license": "UNLICENSED",
   "description": "FengZaiY personal management system with local encrypted synchronization",
@@ -31,11 +31,15 @@
     "test:dedup": "node scripts/test-asset-dedup.mjs",
     "test:asset-previews": "node scripts/test-asset-previews.mjs",
     "test:asset-storage": "node scripts/test-asset-storage.mjs",
+    "test:readable-storage": "node scripts/test-readable-storage-ui.mjs",
     "test:hierarchy": "node scripts/test-hierarchy-ui.mjs",
     "test:note-drag": "node scripts/test-note-tree-drag.mjs",
     "test:agents": "node scripts/test-agents-ui.mjs",
+    "test:agent-operations": "node scripts/test-agent-operations-ui.mjs",
+    "test:agent-operations-desktop": "node scripts/test-agent-operations-desktop.mjs",
     "test:skills": "node scripts/test-skill-manager.mjs",
     "test:updates": "node scripts/test-updates-ui.mjs",
+    "test:updates-desktop": "node scripts/test-update-download-desktop.mjs",
     "test:drafts": "node scripts/test-draft-workflow.mjs",
     "test:rich": "node scripts/test-rich-ui.mjs",
     "test:retired-reading": "node scripts/test-retired-reading.mjs",
@@ -46,6 +50,11 @@
     "test:docx-preview": "node scripts/test-docx-preview.mjs",
     "test:editor": "node scripts/test-editor-interactions.mjs",
     "test:experience": "node scripts/test-editor-experience.mjs",
+    "test:shortcuts": "node scripts/test-edit-shortcuts.mjs",
+    "test:shortcuts-desktop": "node scripts/test-edit-shortcuts.mjs --desktop",
+    "test:code-blocks": "node scripts/test-code-blocks-ui.mjs",
+    "test:code-paste": "node scripts/test-code-paste-ui.mjs",
+    "test:code-paste-desktop": "node scripts/test-code-paste-ui.mjs --desktop",
     "test:trash": "node scripts/test-trash-ui.mjs",
     "test:document": "node scripts/test-document-flow.mjs",
     "test:storage": "node scripts/test-storage-ui.mjs",
@@ -76,9 +85,7 @@
     "lucide": "^0.468.0",
     "mammoth": "1.13.0",
     "mermaid": "^12.1.0",
-    "playwright": "^1.58.0",
-    "turndown": "^7.2.4",
-    "turndown-plugin-gfm": "^1.0.2"
+    "playwright": "^1.58.0"
   },
   "overrides": {
     "mermaid": {
@@ -114,9 +121,12 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.32.1",
+    "builder-util-runtime": "9.7.0",
     "electron-updater": "6.6.2",
     "marked": "^17.0.6",
     "parse5": "^8.0.1",
+    "turndown": "^7.2.4",
+    "turndown-plugin-gfm": "^1.0.2",
     "zod": "4.6.7"
   }
 }

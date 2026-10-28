@@ -3,6 +3,7 @@ import path from 'node:path';
 import { richReferences } from './rich-content.mjs';
 import { canonical, check, isId, outside } from './util.mjs';
 import { personalReferences, MATERIAL_SCOPE } from './personal-schema.mjs';
+import { isReadableAsset, materialLocation } from './readable-storage.mjs';
 
 const referenceCache = new WeakMap();
 const nonReferencingTypes = ['asset', 'library', 'folder', 'workspace', 'model', 'provider', 'usage', 'agentPreferences'];
@@ -75,6 +76,7 @@ export class AssetManagement {
     const projected = relative && originals[relative] === record.data.sha256;
     let kind = 'legacy', label = '已有存放位置', state = 'missing';
     if (!withinRoot) { kind = 'external'; label = '工作区外'; }
+    else if (isReadableAsset(this.store, file)) { kind = 'organized'; label = '分类资料原件'; }
     else if (projected) {
       if (parts[1] === '回收站') { kind = 'trash'; label = '回收资料'; }
       else if (parts[1] === '共享资料') { kind = 'shared'; label = '共享资料'; }
@@ -100,19 +102,21 @@ export class AssetManagement {
     return records.map(record => {
       const local = this.store.assetLocation(record.id);
       const storage = this.storage(record, local, originals);
-      return { ...record, storage, available: storage.state === 'available', pinned: local?.pinned === 1, kind: assetKind(record.data),
+      let organization; try { organization = materialLocation(this.store, record.data); } catch (error) { organization = { issue: error.message }; }
+      return { ...record, storage, organization, available: storage.state === 'available', pinned: local?.pinned === 1, kind: assetKind(record.data),
         references: index.refs.get(record.id) || [], referencesUnknown: index.uncertain,
         duplicateCount: groups.get(groupKey(record)) || 1 };
     });
   }
-  catalog({ domain, collectionId, query = '', kind = '', availability = '', usage = '', tag = '', sort = 'updated', trash = false, offset = 0, limit = 100, directory = '' } = {}) {
+  catalog({ domain, collectionId, categoryId, topicId, query = '', kind = '', availability = '', usage = '', tag = '', sort = 'updated', trash = false, offset = 0, limit = 100, directory = '' } = {}) {
     check(typeof query === 'string' && query.length <= 1000 && typeof tag === 'string', '筛选条件无效');
     check(typeof directory === 'string' && directory.length <= 32768, '目录筛选无效');
     check(Number.isSafeInteger(offset) && offset >= 0 && Number.isSafeInteger(limit) && limit > 0 && limit <= 200, '分页范围无效');
     const scoped = this.rows(trash === true).filter(row => (!domain || row.versions.some(version => version.data.domain === domain || version.data.libraryDomains?.includes(domain))) && (!collectionId || row.versions.some(v => v.data.collectionIds?.includes(collectionId))));
     const tags = [...new Set(scoped.flatMap(row => row.data.tags))].sort((a, b) => a.localeCompare(b, 'zh-CN'));
     const term = query.trim().toLocaleLowerCase();
-    const filtered = scoped.filter(row => (!term || row.versions.some(v => [v.data.title, v.data.filename, ...v.data.tags].join('\n').toLocaleLowerCase().includes(term)))
+    const filtered = scoped.filter(row => (!categoryId || row.organization.categoryId === categoryId) && (!topicId || (topicId === ':unfiled' ? !row.data.materialTopicId : row.data.materialTopicId === topicId))
+      && (!term || row.versions.some(v => [v.data.title, v.data.filename, ...v.data.tags].join('\n').toLocaleLowerCase().includes(term)))
       && (!kind || row.kind === kind) && (!tag || row.data.tags.includes(tag))
       && (!availability || (availability === 'available' ? row.available : availability === 'missing' ? !row.available : row.pinned))
       && (!usage || (usage === 'used' ? row.references.length > 0 : usage === 'unused' ? !row.references.length && !row.referencesUnknown

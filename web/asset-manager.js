@@ -1,14 +1,15 @@
 import './assets.css';
 import { thumbnailMarkup, mountThumbnails, fitFilterLabels } from './asset-thumbnails.js';
 import { storageTree, storageLocation } from './asset-storage.js';
+import { materialTreeMarkup, materialOrganizationActions } from './material-organization.js';
 
 export function createAssetUI({ state, api, esc, icon, button, bytes, formatTime, libraryName, domainOptions, openModal, confirmBox, toast, run, render, redrawIcons, openRecord, mediaUrl, native, persist }) {
   const $ = selector => document.querySelector(selector);
   const kinds = { image: '图片', video: '视频', audio: '音频', document: '文档', archive: '压缩包', other: '其他' };
   const types = { note: '笔记', draft: '草稿', source: '来源', proposal: '整理方案', annotation: '备注', relation: '关联', conversation: '历史资料', task: '历史任务' };
-  const filters = { kind: '', availability: '', usage: '', tag: '', sort: 'updated', trash: false, offset: 0, limit: 100, directory: '', collectionId: '' };
+  const filters = { kind: '', availability: '', usage: '', tag: '', sort: 'updated', trash: false, offset: 0, limit: 100, directory: '', collectionId: '', categoryId: '', topicId: '' };
   let selected = new Map(), scope = '', serial = 0, rows = [];
-  let directoryDomain, directoriesOpen = true, rootDirectory = '';
+  let directoryDomain, directoriesOpen = false, rootDirectory = '';
   let stopThumbnails, stopFilterLabels;
   const dispose = () => { stopThumbnails?.(); stopFilterLabels?.(); stopThumbnails = stopFilterLabels = null; };
   const options = (values, value) => Object.entries(values).map(([id, text]) => `<option value="${esc(id)}" ${id === value ? 'selected' : ''}>${esc(text)}</option>`).join('');
@@ -17,10 +18,11 @@ export function createAssetUI({ state, api, esc, icon, button, bytes, formatTime
   async function show() {
     const request = ++serial, domain = state.domain, query = state.query;
     if (directoryDomain !== domain) { filters.directory = ''; directoryDomain = domain; }
-    const nextScope = JSON.stringify([domain, query, filters.kind, filters.availability, filters.usage, filters.tag, filters.trash, filters.sort, filters.directory, filters.collectionId]);
+    const nextScope = JSON.stringify([domain, query, { ...filters, offset: 0 }]);
     if (scope !== nextScope) { selected.clear(); filters.offset = 0; scope = nextScope; }
     const result = await api('assetCatalog', { ...filters, domain: domain || undefined, query });
     const collections = await api('personalList', { type: 'materialCollection' });
+    const organization = await api('materialTree');
     if (request !== serial || state.view !== 'assets' || state.domain !== domain || state.query !== query) return;
     if (filters.offset && !result.rows.length) { filters.offset = Math.max(0, filters.offset - filters.limit); return show(); }
     rows = result.rows;
@@ -29,6 +31,8 @@ export function createAssetUI({ state, api, esc, icon, button, bytes, formatTime
     dispose();
     main.className = 'settings-view material-manager';
     main.innerHTML = `<div class="page-heading"><div><h1>资料管理</h1><small class="muted">${domain ? esc(libraryName(domain)) : '全部资料'} · ${result.total} 项 · ${bytes(result.totalBytes)}</small></div><div class="inline-actions"><button class="secondary" data-nav="materials">资料集合</button><button class="secondary" data-action="material-migrate">迁移旧资料</button><button class="primary" data-action="asset-import">${icon('upload')}导入文件</button>${button('files', 'asset-import-separate', '导入为独立资料（允许相同内容）')}</div></div>
+      ${materialTreeMarkup(organization, { esc, icon, categoryId: filters.categoryId, topicId: filters.topicId })}
+      <div class="inline-actions"><button class="text-button" data-action="material-cleanup">${icon('trash-2')}清理迁移旧副本</button></div>
       <section class="material-storage" aria-label="本机存放位置">
         <div class="material-storage-root">${icon('hard-drive')}<div><small>工作区根目录</small><span id="material-root-path">${esc(rootDirectory)}</span></div>
         ${button('copy', 'material-copy-root', '复制工作区根目录')}${native ? button('folder-open', 'storage-open-folder', '打开工作区根目录') : ''}</div>
@@ -49,6 +53,7 @@ export function createAssetUI({ state, api, esc, icon, button, bytes, formatTime
         </div>
       </div>
       <div class="material-bulk" aria-label="批量资料管理"><span id="material-selection-count"></span>
+        <button class="secondary" data-action="material-organize">${icon('folder-input')}整理位置</button>
         ${filters.trash ? `<button class="secondary" data-action="material-batch-restore">${icon('undo-2')}恢复</button>` : `<button class="secondary" data-action="material-batch-tags">${icon('tags')}标签</button><button class="secondary" data-action="material-batch-move">${icon('library')}移动到知识库</button><button class="secondary" data-action="material-batch-trash">${icon('trash-2')}移入回收站</button>`}
         <button class="text-button" data-action="material-deselect">取消选择</button>
       </div>
@@ -249,9 +254,16 @@ export function createAssetUI({ state, api, esc, icon, button, bytes, formatTime
     };
   }
   const actions = {
+    ...materialOrganizationActions({ api, esc, openModal, toast, run, refresh: show, openRecord, selected: items, filter: filters }),
+    'material-cleanup': async () => {
+      const preview = await api('materialCleanupPreview');
+      if (!preview.rows.length) { toast('没有待清理的迁移旧副本'); return; }
+      if (!await confirmBox('清理迁移旧副本', `<p>可释放 ${bytes(preview.bytes)}。当前原件与外部导入源保留。</p>${preview.rows.map(row => `<p class="path-value">${esc(row.relative)}${row.issue ? `：保留，${esc(row.issue)}` : ''}</p>`).join('')}`, '确认清理')) return;
+      const result = await api('materialCleanup', { token: preview.token, confirmed: true }); toast(`已清理 ${result.done.length} 项${result.errors.length ? '，部分文件待重试' : ''}`); await show();
+    },
     'material-migrate': async () => {
       const preview = await api('materialMigrationPreview');
-      const dialog = openModal('迁移到集中原件目录', `<p>旧资料保留标识、历史、原知识库关联及全部引用。先复制并校验，成功后清理经核验的托管旧副本，外部源文件保留。</p><p>可迁移 ${preview.rows.filter(r => !r.issue).length} 项，预估额外空间 ${bytes(preview.bytes)}（另保留 64 MiB）。</p><div class="csv-preview-scroll">${preview.rows.map(r => `<p><strong>${esc(r.title)}</strong><small>${esc(r.issue || r.target)}</small></p>`).join('') || '<p>没有待迁移的旧资料</p>'}</div><div id="migration-result"></div>`, `${['pending', 'running'].includes(preview.progress?.state) ? '<button class="secondary" id="migration-resume">继续上次任务</button>' : ''}<button class="primary" id="migration-start" ${preview.rows.some(r => !r.issue) ? '' : 'disabled'}>确认迁移</button>`);
+      const dialog = openModal('整理为可读目录', `<p>保留身份、历史和全部引用。先复制校验再切换位置；旧副本单独预览清理，外部源文件保留。未确定分类的资料进入待整理区。</p><p>可迁移 ${preview.rows.filter(r => !r.issue).length} 项，预估额外空间 ${bytes(preview.bytes)}（另保留 64 MiB）。</p><div class="csv-preview-scroll">${preview.rows.map(r => `<p><strong>${esc(r.title)}</strong><small class="path-value">${esc(r.source || '原件待下载')}</small><small class="path-value">${esc(r.issue || r.target)}</small></p>`).join('') || '<p>没有待迁移的旧资料</p>'}</div><div id="migration-result"></div>`, `${preview.progress?.format === 2 && ['pending', 'running'].includes(preview.progress?.state) ? '<button class="secondary" id="migration-resume">继续上次任务</button>' : ''}<button class="primary" id="migration-start" ${preview.rows.some(r => !r.issue) ? '' : 'disabled'}>确认迁移</button>`);
       const migrate = resume => run(async () => {
         dialog.querySelectorAll('button').forEach(b => { b.disabled = true; });
         const timer = setInterval(() => { void api('materialMigrationStatus').then(status => { if (dialog.open && status?.state === 'running') $('#migration-result').textContent = `已处理 ${status.done.length} / ${status.rows.length} 项`; }).catch(() => {}); }, 700);
@@ -278,7 +290,7 @@ export function createAssetUI({ state, api, esc, icon, button, bytes, formatTime
     'material-open': target => api('openAsset', { id: target.dataset.asset }),
     'material-active': async () => { filters.trash = false; await show(); },
     'material-trash-view': async () => { filters.trash = true; await show(); },
-    'material-clear': async () => { Object.assign(filters, { kind: '', tag: '', availability: '', usage: '', offset: 0, directory: '' }); state.query = ''; $('#search').value = ''; await show(); },
+    'material-clear': async () => { Object.assign(filters, { kind: '', tag: '', availability: '', usage: '', offset: 0, directory: '', categoryId: '', topicId: '' }); state.query = ''; $('#search').value = ''; await show(); },
     'material-deselect': () => {
       selected.clear();
       document.querySelectorAll('[data-material-check]').forEach(control => { control.checked = false; });

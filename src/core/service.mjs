@@ -5,6 +5,7 @@ import { migrateRetiredAI, cleanRetiredTabs, retiredAI } from './retired-ai.mjs'
 import { makePairingKey, importAttachment } from './transport.mjs';
 import { CurrentSync } from './current-sync.mjs';
 import { AgentAccess } from './agent-access.mjs';
+import { AgentOperations } from './agent-operations.mjs';
 import { SkillInstallations } from './skill-installations.mjs';
 import { uuid, check, now, atomicWrite } from './util.mjs';
 import { workspaceLock } from './workspace-lock.mjs';
@@ -26,6 +27,8 @@ import { ChangeHistory } from './change-history.mjs';
 import { MaterialCenter } from './material-center.mjs';
 import { SECRET_TYPES } from './personal-schema.mjs';
 import { UI_PROTOCOL } from './ui-protocol.mjs';
+import { proposedMaterials } from './material-organization.mjs';
+import { applyLayout, layoutPreview, scheduleLayout, relocateInternalFiles } from './workspace-layout.mjs';
 
 const sharedTab = tab => Object.fromEntries(['id', 'recordId', 'title', 'domain', 'scroll']
   .filter(key => Object.hasOwn(tab, key)).map(key => [key, tab[key]]));
@@ -37,7 +40,16 @@ export class Service {
     this.releaseLock = workspaceLock(directory);
     this.storage = options.storage;
     try {
+      applyLayout(directory);
       this.store = new Store(directory, options);
+      if (options.initializeInternal) {
+        const preview = layoutPreview(this.store);
+        if (preview.state === 'legacy') {
+          scheduleLayout(this.store, { token: preview.token, confirmed: true });
+          this.store.close(); this.store = null;
+          applyLayout(directory); this.store = new Store(directory, options);
+        }
+      }
       this.transport = new CurrentSync(this.store);
       this.store.migrateNoteHierarchy();
       this.agents = new AgentAccess(this.store);
@@ -49,6 +61,9 @@ export class Service {
       this.passwordVault = new PasswordVault(this.store);
       this.changes = new ChangeHistory(this.store, this.passwordVault);
       this.materialCenter = new MaterialCenter(this.store, this.localHierarchy);
+      this.agentOperations = new AgentOperations(this);
+      this.agents.operations = this.agentOperations;
+      this.agentOperationTasks = new Set();
       this.store.local('hierarchyEnabled', true);
       this.store.local('hierarchyDirty', true);
       this.timer = null;
@@ -57,7 +72,9 @@ export class Service {
       this.store.retiredAI = true;
       const cleanupNeeded = migrateRetiredAI(this.store, validateEvent);
       this.store.importEvents([]);
-      this.ready = cleanupNeeded || this.store.local('presentationRetirement')?.pending ? this.finishDeletion() : Promise.resolve();
+      this.readyPending = true;
+      this.ready = (cleanupNeeded || this.store.local('presentationRetirement')?.pending ? this.finishDeletion() : Promise.resolve())
+        .then(() => relocateInternalFiles(this.store)).finally(() => { this.readyPending = false; });
     } catch (error) { this.store?.close(); this.releaseLock(); throw error; }
   }
   startTimer() {
@@ -67,15 +84,24 @@ export class Service {
         try { this.skillInstallations.tick(); } catch { /* Per-installation errors are retained for the settings page. */ }
       }
       const status = this.localHierarchy.status();
-      if (!this.closed && !this.store.permanentDeleting && !this.imports.size && status.enabled && status.pending && !status.busy && !this.transport.running && !status.errors?.length) {
-        this.organizeLocal({ verify: false });
+      if (!this.closed && !this.store.permanentDeleting && !this.imports.size && !this.localTask && !this.agents.uploadTasks?.size && status.enabled && status.pending && !status.busy && !this.transport.running && !status.errors?.length) {
+        this.organizeLocal({ verify: false }).catch(error => this.store.local('hierarchyReport', { ...status, errors: [{ message: error.message }] }));
       }
     }, 2500);
     this.timer.unref?.();
   }
   organizeLocal({ verify = true } = {}) {
     check(!this.transport.running && !this.localTask && !this.imports.size, '请等待当前同步、导入或目录整理完成');
-    this.localTask = this.localHierarchy.refresh({ enable: true, verify }).finally(() => { this.localTask = null; });
+    this.localTask = (async () => {
+      const preview = this.materialCenter.preview({ onlyPlanned: true });
+      const migration = preview.rows.length ? await this.materialCenter.migrate({ token: preview.token, confirmed: true, onlyPlanned: true }) : null;
+      const report = await this.localHierarchy.refresh({ enable: true, verify });
+      if (migration?.errors.length) {
+        report.errors = [...report.errors, ...migration.errors]; report.pending = true;
+        this.store.local('hierarchyReport', report); this.store.local('hierarchyDirty', true);
+      }
+      return report;
+    })().finally(() => { this.localTask = null; });
     return this.localTask;
   }
   close() {
@@ -85,7 +111,7 @@ export class Service {
     this.agents.close();
     this.passwordVault.close();
     const finish = () => { this.store.close(); this.releaseLock(); };
-    if (this.localTask || this.imports.size) return Promise.allSettled([this.localTask, ...this.imports]).finally(finish);
+    if (this.readyPending || this.localTask || this.imports.size || this.agentOperationTask || this.agents.uploadTasks?.size) return Promise.allSettled([this.ready, this.localTask, ...this.imports, this.agentOperationTask, ...(this.agents.uploadTasks || [])]).finally(finish);
     finish();
   }
   state() {
@@ -97,8 +123,8 @@ export class Service {
     summary.trash -= legacy.filter(item => item.deleted).length;
     return { ...summary, libraries: this.store.directories.describe(this.store.libraries()), sync: this.transport.config(),
       workspace: this.store.local('workspace') || { tabs: [], selectedTab: null },
-      version: '0.1.13', uiProtocol: UI_PROTOCOL, localDataDirectory: this.store.directory, localHierarchy: this.localHierarchy.status(), deletion: deletionStatus(this.store),
-      skillInstallations: this.skillInstallations.summary() };
+      version: '0.1.14', uiProtocol: UI_PROTOCOL, localDataDirectory: this.store.directory, localHierarchy: this.localHierarchy.status(), deletion: deletionStatus(this.store),
+      skillInstallations: this.skillInstallations.summary(), agentPending: this.agentOperations.list().filter(item => item.state === 'pending').length };
   }
   async finishDeletion() {
     this.store.permanentDeleting = true;
@@ -119,13 +145,18 @@ export class Service {
   }
   async call(method, input = {}) {
     await this.ready;
-    if (this.materialCenter.running && !['state', 'materialMigrationStatus', 'vaultLock', 'vaultStatus'].includes(method)) check(false, '资料迁移正在进行，请稍后操作', 'BUSY');
+    if ((this.materialCenter.running || this.store.materialMigrating) && !['state', 'materialMigrationStatus', 'vaultLock', 'vaultStatus'].includes(method)) check(false, '资料迁移正在进行，请稍后操作', 'BUSY');
     check(!this.store.permanentDeleting || ['state', 'deletionStatus'].includes(method), '永久删除正在处理，请稍后操作', 'BUSY');
     if (['syncPlan', 'syncPublish', 'syncImport', 'deviceManage', 'deviceSetPrimary', 'deviceVerify', 'assetHydrate', 'assetEvict'].includes(method)) {
       if (this.imports.size) await Promise.allSettled([...this.imports]);
       if (this.localTask) await this.localTask;
     }
     switch (method) {
+      case 'storageInternalPreview': return layoutPreview(this.store);
+      case 'storageInternalSchedule': {
+        check(!this.transport.running && !this.localTask && !this.imports.size && !this.agents.uploadTasks?.size, '请等待同步、导入与目录任务完成');
+        return scheduleLayout(this.store, input);
+      }
       case 'storageStatus': return this.storage?.status() || { directory: this.store.directory, unavailable: true };
       case 'storagePreviousPreview':
       case 'storagePreviousClean': {
@@ -188,14 +219,37 @@ export class Service {
       case 'vaultDraft': return this.passwordVault.draft(input);
       case 'vaultGenerate': return this.passwordVault.generate(input);
       case 'materialUpdate': return this.materialCenter.update(input);
+      case 'materialTree': return this.materialCenter.tree();
+      case 'materialProposalPreview': return this.materialCenter.proposalPreview(input.id);
+      case 'materialCleanupPreview':
+      case 'materialCleanup': {
+        check(!this.transport.running && !this.localTask && !this.imports.size && !this.agents.uploadTasks?.size, '请等待同步、导入或目录整理完成', 'BUSY');
+        this.store.materialMigrating = true;
+        const task = method === 'materialCleanup' ? this.materialCenter.cleanup(input) : this.materialCenter.cleanupPreview(); this.imports.add(task);
+        try { return await task; } finally { this.imports.delete(task); this.store.materialMigrating = false; }
+      }
+      case 'materialPropose': return this.store.change('提交资料整理方案', '用户', () => this.store.write({ type: 'proposal', data: {
+        title: input.title || '资料整理方案', domain: '__materials__', content: input.content || '', items: [], materialItems: proposedMaterials(this.store, input.materialItems)
+      } }));
       case 'materialMigrationPreview': return this.materialCenter.preview();
       case 'materialMigrationStatus': return this.store.local('materialMigration');
       case 'materialMigrate': {
-        check(!this.transport.running && !this.localTask && !this.imports.size, '请等待同步或文件整理完成', 'BUSY');
+        check(!this.transport.running && !this.localTask && !this.imports.size && !this.agents.uploadTasks?.size, '请等待同步或文件整理完成', 'BUSY');
         const task = this.materialCenter.migrate(input); this.imports.add(task);
-        try { return await task; } finally { this.imports.delete(task); }
+        try { const result = await task; await this.localHierarchy.refresh({ enable: true }); return result; } finally { this.imports.delete(task); }
       }
       case 'agentStatus': return this.agents.status();
+      case 'agentOperationList': return this.agentOperations.list();
+      case 'agentOperationDetail': return this.agentOperations.review(input.id);
+      case 'agentOperationDecide': {
+        const task = this.agentOperations.decide(input); this.agentOperationTasks.add(task);
+        this.agentOperationTask = Promise.allSettled([...this.agentOperationTasks]);
+        try { return await task; } finally {
+          this.agentOperationTasks.delete(task);
+          this.agentOperationTask = this.agentOperationTasks.size ? Promise.allSettled([...this.agentOperationTasks]) : null;
+        }
+      }
+      case 'agentOperationFinishLocal': return this.agentOperations.finishLocal(input);
       case 'agentConfigure': return this.agents.configure(input.enabled === true);
       case 'agentGrant': return this.agents.createGrant(input);
       case 'agentRevoke': return this.agents.revoke(input.id);

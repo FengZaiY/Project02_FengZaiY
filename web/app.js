@@ -7,6 +7,7 @@ import StarterKit from '@tiptap/starter-kit';
 import { TableKit, createTable } from '@tiptap/extension-table';
 import { createSkillManager } from './skill-manager.js';
 import { mcpConnectionMarkup, bindMcpConnection } from './agent-mcp.js';
+import { createAgentOperationsUI } from './agent-operations.js';
 import { createUpdateUI } from './update-manager.js';
 import { createSyncUI } from './sync-pages.js';
 import { cleanNoteHtml, richExtensions, hydrateRich, editRichBlock, addRichMarkdownRules, diagramTemplates } from './rich-editor.js';
@@ -18,6 +19,7 @@ import { createNoteTreeDrag } from './note-tree-drag.js';
 import { createAssetUI } from './asset-manager.js';
 import { attachmentContent, bindAttachmentSources, bindAttachmentDrop } from './attachment-drag.js';
 import { editorMarkers, experienceCodeBlock, mountEditorExperience } from './editor-experience.js';
+import { normalizePastedCode } from './code-paste.js';
 import { showHistoryBrowser } from './history-ui.js';
 import { isDocx, readDocx, docxPage } from './docx-preview.js';
 import { createDraftUI, processingLabels } from './draft-workflow.js';
@@ -137,6 +139,29 @@ const hierarchyUI = createHierarchyUI({ state, api, esc, icon, button, render: r
 const draftUI = createDraftUI({ state, api, esc, icon, openModal, saveNote, persist, openRecord, hierarchyUI, libraries, run, toast, redrawIcons });
 const skillUI = createSkillManager({ api, esc, icon, safeHtml, formatTime, toast, confirmBox, redrawIcons, run, pickDirectory });
 const personalUI = createPersonalUI({ api, esc, icon, toast, confirmBox, openModal, redrawIcons, openRecord, native, navigate: navigateView });
+const agentOperationsUI = createAgentOperationsUI({ api, esc, icon, formatTime, openModal, redrawIcons, toast,
+  beforeApprove: async () => {
+    stash();
+    if (state.tabs.some(tab => tab.dirty || noteSaver.state(tab.id) === 'saving') || personalUI.dirty() || skillUI.dirty() || importingFiles) {
+      throw new Error('请先保存或放弃未保存内容，并等待导入结束');
+    }
+    await persist();
+  },
+  localAction: async (id, { method, input, token }) => {
+    const finish = value => api('agentOperationFinishLocal', { id, token, value });
+    if (method === 'vaultUnlock') return personalUI.openVault(async () => { await finish({ unlocked: true }); await agentOperationsUI.refresh(); toast('密码库已解锁，Agent 可以继续请求'); });
+    if (method === 'vaultResetMaster') return personalUI.openVault();
+    if (['updateInstall', 'updateConfigure', 'storageRestart'].includes(method)) {
+      await navigateView('settings'); toast('请在系统设置中完成本机确认；该请求尚未执行'); return;
+    }
+    if (method === 'printPdf') { toast('请打开需要导出的笔记，使用笔记的 PDF 导出入口'); return; }
+    if (method === 'chooseDirectory' && !native) { await finish(await pickDirectory()); await agentOperationsUI.refresh(); return; }
+    if (!native) { toast('此操作需要在桌面应用中完成；当前为浏览器预览', true); return; }
+    try { await finish(await api(method, input)); }
+    catch (error) { await api('agentOperationFinishLocal', { id, token, failed: true }).catch(() => {}); throw error; }
+    await agentOperationsUI.refresh();
+  }
+});
 installExitCheck({ bridge: window.desktop, api, esc, openModal, toast, persist,
   snapshot: () => {
     stash();
@@ -454,7 +479,7 @@ async function renderDocument(record) {
       element: $('#editor-content'), extensions: [StarterKit.configure({ codeBlock: false, link: { openOnClick: false, protocols: ['fengzaiy', 'studyself'], isAllowedUri: safeNoteLink } }), experienceCodeBlock, editorMarkers, TableKit.configure({ table: { resizable: true } }), ...richExtensions({ mediaUrl, edit: editBlock })],
       content: safeHtml(data.content || '', data.format), editorProps: {
         attributes: { 'aria-label': '笔记正文', role: 'textbox', 'aria-multiline': 'true' },
-        transformPastedHTML: cleanNoteHtml
+        transformPastedHTML: html => cleanNoteHtml(normalizePastedCode(html))
       },
       onUpdate: changed,
       onSelectionUpdate: ({ editor }) => { if ($('#heading-level')) $('#heading-level').value = String(editor.getAttributes('heading').level || 0); if ($('#table-action')) $('#table-action').disabled = !editor.isActive('table'); }
@@ -474,6 +499,7 @@ async function renderDocument(record) {
     updateSaveStatus();
     $('#note-title').addEventListener('input', changed);
     $('#heading-level').onchange = event => { const chain = state.editor.chain().focus(); const level = Number(event.target.value); if (level) chain.setHeading({ level }).run(); else chain.setParagraph().run(); };
+    $('#insert-content').add(new Option('纯文本 / 代码块', 'code'), 1);
     $('#insert-content').onchange = event => { const value = event.target.value; event.target.value = ''; run(() => insertContent(value)); };
     $('#table-action').disabled = true;
     $('#table-action').onchange = event => { const command = event.target.value; event.target.value = ''; if (command) state.editor.chain().focus()[command]().run(); };
@@ -482,7 +508,7 @@ async function renderDocument(record) {
   } else if (record.type === 'conversation') {
     $('#editor-content').innerHTML = '<p class="muted">内置 AI 对话已取消，旧对话已清理。</p>';
   } else if (record.type === 'proposal') {
-    const complete = data.items.length > 0 && data.items.every(item => item.status === 'accepted');
+    const complete = data.items.length + (data.materialItems?.length || 0) > 0 && [...data.items, ...(data.materialItems || [])].every(item => item.status === 'accepted');
     const actionable = !record.deleted && !record.conflict;
     const proposalActions = !actionable ? '' : complete
       ? `<div class="sticky-actions proposal-complete-actions"><span class="pill green">全部已确认</span><button class="secondary" data-action="proposal-cleanup">${icon('archive')}清理已确认方案</button></div>`
@@ -497,6 +523,13 @@ async function renderDocument(record) {
         : '<div class="proposal-operation muted">新建笔记</div>');
     });
     const proposalHost = $('.proposal-items');
+    if (data.materialItems?.length) {
+      const previews = await api('materialProposalPreview', { id: record.id });
+      if (proposalHost.isConnected && state.selected?.id === record.id) proposalHost.insertAdjacentHTML('afterend', `<div class="material-proposal-items">${data.materialItems.map(item => {
+        const preview = previews.find(p => p.id === item.id);
+        return `<section class="proposal-item"><label class="check-row"><input type="checkbox" data-proposal-item="${item.id}" ${item.status === 'accepted' ? 'disabled checked' : actionable ? '' : 'disabled'}><strong>${esc(preview?.title || item.data.title || '资料整理')}</strong><span class="pill">${item.status === 'accepted' ? `已确认入库${item.type === 'asset' ? preview?.placement === 'ready' ? ' · 目录已落盘' : ' · 目录待整理' : ''}` : '待确认'}</span></label><p>${esc(item.reason || ({ asset: '调整原件位置与文件名', materialCategory: '资料分类', materialTopic: '资料主题' })[item.type])}</p>${preview?.source ? `<p class="path-value">当前位置：${esc(preview.source)}</p>` : ''}${preview?.target ? `<p class="path-value">目标位置：${esc(preview.target)}</p><small>原件 ${bytes(preview.bytes || 0)} · ${preview.references?.length || 0} 处引用保留</small>` : `<p>${esc(preview?.issue || preview?.logical || '')}</p>`}</section>`;
+      }).join('')}</div>`);
+    }
     const draftIds = [...new Set(data.items.flatMap(item => (item.draftRefs || []).map(ref => ref.id)))];
     if (draftIds.length) {
       const drafts = new Map(await Promise.all(draftIds.map(async id => [id, await api('record', { id })])));
@@ -786,12 +819,14 @@ async function renderAgents() {
   $('#main').className = 'settings-view';
   $('#main').innerHTML = `<div class="page-heading"><div><div class="eyebrow">本机 MCP</div><h1>外部 Agent</h1></div></div>
     ${mcpConnectionMarkup(access, { esc, icon })}
+    <section class="settings-section" id="agent-operation-requests"></section>
     <section class="settings-section"><h2>新建授权</h2><form id="agent-grant-form" class="settings-form"><div class="form-grid"><label>Agent 名称<input name="name" maxlength="100" required></label><label>有效天数<input name="days" type="number" value="30" min="1" max="365" required></label></div>
-      <div class="muted">全部知识库及非秘密个人业务（含敏感资料）：读取、收集、整理方案、直接修改、关联及回收。密码、恢复码和秘密备注不开放；确认入库、撤回、永久删除和系统管理由你操作。</div>
+      <div class="muted">全部知识库及个人业务（含敏感资料）。密码须本机解锁后访问；删除、授权和系统变更须在本页确认，主密码及恢复密钥只在本机输入。</div>
       <button class="primary" type="submit">${icon('key-round')}生成访问凭证</button></form></section>
-    <section class="settings-section"><h2>已授权 Agent</h2>${access.grants.length ? `<div class="table-scroll"><table class="data-table"><thead><tr><th>名称 / 有效期</th><th>访问范围</th><th>状态</th><th></th></tr></thead><tbody>${access.grants.map(grant => `<tr><td><strong>${esc(grant.name)}</strong><small>${formatTime(grant.expiresAt)}</small></td><td>全部知识库及非秘密个人业务<small>含敏感资料 · 密码库不开放</small></td><td>${Date.parse(grant.expiresAt) <= Date.now() ? '已到期' : '有效'}</td><td>${button('key-round', 'agent-revoke', '撤销并删除授权', `data-grant="${grant.id}"`)}</td></tr>`).join('')}</tbody></table></div>` : '<div class="section-empty">尚无授权</div>'}</section>
+    <section class="settings-section"><h2>已授权 Agent</h2>${access.grants.length ? `<div class="table-scroll"><table class="data-table"><thead><tr><th>名称 / 有效期</th><th>访问范围</th><th>状态</th><th></th></tr></thead><tbody>${access.grants.map(grant => `<tr><td><strong>${esc(grant.name)}</strong><small>${formatTime(grant.expiresAt)}</small></td><td>全部知识库及个人业务<small>密码需解锁 · 管理操作需确认</small></td><td>${Date.parse(grant.expiresAt) <= Date.now() ? '已到期' : '有效'}</td><td>${button('key-round', 'agent-revoke', '撤销并删除授权', `data-grant="${grant.id}"`)}</td></tr>`).join('')}</tbody></table></div>` : '<div class="section-empty">尚无授权</div>'}</section>
     <section class="settings-section"><h2>最近访问</h2>${access.audit.length ? `<div class="table-scroll"><table class="data-table"><thead><tr><th>时间</th><th>Agent</th><th>操作</th><th>结果</th></tr></thead><tbody>${access.audit.slice(0, 30).map(item => `<tr><td>${formatTime(item.at)}</td><td>${esc(item.name)}</td><td>${esc(item.method)}</td><td>${esc(item.result)}</td></tr>`).join('')}</tbody></table></div>` : '<div class="section-empty">尚无访问记录</div>'}</section>`;
   bindMcpConnection(access, { root: $('#main'), run, toast });
+  await agentOperationsUI.mount($('#agent-operation-requests'));
   $('#agent-enabled').onchange = event => run(async () => {
     event.target.disabled = true;
     try { await api('agentConfigure', { enabled: event.target.checked }); await render(); }
@@ -807,7 +842,7 @@ async function renderAgents() {
         const values = new FormData(form);
         const grant = await api('agentGrant', { name: values.get('name'), days: Number(values.get('days')) });
         await render();
-        openModal('访问凭证（仅显示一次）', `<div class="notice amber">此凭证可读写全部知识库、非秘密个人业务及敏感资料，密码库不开放。请勿放入笔记、同步目录或公开聊天。</div><label class="settings-form">FENGZAIY_AGENT_TOKEN<input id="agent-token" type="password" readonly value="${esc(grant.token)}" autocomplete="off"></label><label class="check-row"><input id="agent-token-visible" type="checkbox">显示凭证</label><button class="secondary" id="agent-token-copy">${icon('copy')}复制凭证</button>`);
+        openModal('访问凭证（仅显示一次）', `<div class="notice amber">此凭证可访问全部知识库及个人业务，密码库解锁后可读取密码。删除、授权和系统变更须本机确认。请勿公开或存入笔记。</div><label class="settings-form">FENGZAIY_AGENT_TOKEN<input id="agent-token" type="password" readonly value="${esc(grant.token)}" autocomplete="off"></label><label class="check-row"><input id="agent-token-visible" type="checkbox">显示凭证</label><button class="secondary" id="agent-token-copy">${icon('copy')}复制凭证</button>`);
         $('#agent-token-visible').onchange = e => { $('#agent-token').type = e.target.checked ? 'text' : 'password'; };
         $('#agent-token-copy').onclick = () => run(async () => {
           const input = $('#agent-token'), copied = await copyVisibleText(grant.token, input);
@@ -835,6 +870,7 @@ async function renderSettings() {
       ${state.snapshot.localHierarchy?.errors?.length ? `<div class="notice amber">${state.snapshot.localHierarchy.errors.map(item => esc(item.message)).join('<br>')}${button('refresh-cw', 'storage-retry', '重试本地文件维护')}</div>` : ''}
       ${legacyCleanupNotice()}
       <div class="storage-actions"><button class="secondary" data-action="empty-directories">${icon('folder-search')}检查废弃空目录</button></div>
+      <div class="storage-actions"><button class="secondary" data-action="storage-internal">${icon('folder-cog')}整理系统内部目录</button><button class="secondary" data-action="material-migrate">${icon('folder-input')}整理已有资料目录</button><button class="secondary" data-action="material-cleanup">${icon('trash-2')}清理迁移旧副本</button></div>
       <div class="received-objects" id="received-objects" aria-label="同步接收目录"></div>
       ${state.snapshot.deletion?.files?.length || state.snapshot.deletion?.database ? `<div class="notice"><div><strong>永久删除清理</strong><p>本地文件已释放 ${bytes(state.snapshot.deletion.releasedBytes)} · ${state.snapshot.deletion.pending} 个文件待处理 · 数据库${state.snapshot.deletion.database?.state === 'done' ? '已压缩' : '待压缩'}</p>
         ${state.snapshot.deletion.retiredAI ? `<p>内置 AI 历史：已移除 ${state.snapshot.deletion.retiredAI.records} 条旧记录及 ${state.snapshot.deletion.retiredAI.settings} 项本机配置${state.snapshot.deletion.retiredAI.pending ? '，文件清理或数据库压缩待完成' : ''}。</p>` : ''}
@@ -1328,6 +1364,7 @@ function editBlock(block, commit) {
 }
 async function insertContent(kind) {
   const editor = state.editor; if (!editor || !kind) return;
+  if (kind === 'code') { editor.chain().focus().setCodeBlock({ language: null }).run(); return; }
   const selection = editor.state.selection;
   const range = { from: selection.node?.type.name === 'richBlock' ? selection.to : selection.from, to: selection.to };
   const commit = block => { if (!editor.isDestroyed) editor.chain().focus().insertContentAt(range, [{ type: 'richBlock', attrs: { payload: encodeBlock(block) } }, { type: 'paragraph' }]).run(); };
@@ -1469,6 +1506,12 @@ const actions = {
     await api('storagePreviousClean', { confirmed: true, token: plan.token }); await render(); toast('旧副本托管内容已清理，额外文件保留');
   },
   'storage-open-folder': async () => api('storageOpenFolder'),
+  'storage-internal': async () => {
+    const preview = await api('storageInternalPreview');
+    if (preview.state === 'complete') { toast('系统内部数据已集中存放在 .fengzai-y'); return; }
+    if (!await confirmBox('整理系统内部目录', `<p>关闭数据库后，在下次启动时迁移。</p><p class="path-value">${esc(preview.source)} → ${esc(preview.target)}</p><p>${esc(preview.legacyGuard)}</p><p>迁移后须使用支持新目录的客户端，旧版不会打开此工作区。</p>`, '安排重启迁移')) return;
+    await api('storageInternalSchedule', { token: preview.token, confirmed: true }); toast('已安排，下次启动时迁移内部数据');
+  },
   'storage-change': async target => changeStorage(target.dataset.mode),
   'storage-pick': async () => { if (await pickDirectory($('#storage-target'))) { const error = $('#storage-form-error'); if (error) error.hidden = true; } },
   'storage-cancel': async () => { requireStorageSaved(); await api('storageCancel'); await render(); toast('已取消存储位置变更'); },
@@ -1639,6 +1682,31 @@ const actions = {
   },
   'proposal-edit': async () => {
     const record = state.selected, selectedId = $('[data-proposal-item]:checked:not(:disabled)')?.dataset.proposalItem;
+    const material = record.data.materialItems?.find(i => i.id === selectedId && i.status === 'pending')
+      || (!record.data.items.some(i => i.status === 'pending') && record.data.materialItems?.find(i => i.status === 'pending'));
+    if (material) {
+      const tree = await api('materialTree');
+      const candidates = [...tree.categories, ...tree.topics, ...(record.data.materialItems || []).filter(i => i.type !== 'asset' && i.status === 'pending').map(i => ({ id: i.targetId, type: i.type, data: i.data }))];
+      const dependency = material.type === 'asset' ? 'materialTopicId' : 'materialCategoryId';
+      const dependencyType = material.type === 'asset' ? 'materialTopic' : 'materialCategory';
+      const dialog = openModal('修改资料整理方案', `<form class="settings-form">${material.type === 'asset'
+        ? `<label>实际文件名<input name="managedFilename" value="${esc(material.data.managedFilename || '')}" placeholder="保留原文件名"></label>`
+        : `<label>名称<input name="title" required value="${esc(material.data.title)}"></label><label>说明<textarea name="description">${esc(material.data.description || '')}</textarea></label>`}
+        ${material.type === 'materialCategory' ? '' : `<label>${material.type === 'asset' ? '资料主题' : '所属分类'}<select name="${dependency}" ${material.type === 'materialTopic' ? 'required' : ''}><option value="">${material.type === 'asset' ? '待整理' : '选择分类'}</option>${[...new Map(candidates.filter(i => i.type === dependencyType).map(i => [i.id, i])).values()].map(i => `<option value="${i.id}" ${material.data[dependency] === i.id ? 'selected' : ''}>${esc(i.data.title)}</option>`).join('')}</select></label>`}
+        <label>整理理由<textarea name="reason">${esc(material.reason || '')}</textarea></label><button class="primary" type="submit">保存方案</button></form>`);
+      dialog.querySelector('form').onsubmit = event => { event.preventDefault(); run(async () => {
+        const button = event.target.querySelector('button[type=submit]'); button.disabled = true;
+        try {
+          const { reason, ...values } = Object.fromEntries(new FormData(event.target));
+          const data = { ...material.data, ...values };
+          if (material.type === 'asset') { data.materialTopicId ||= null; if (!data.managedFilename) delete data.managedFilename; }
+          const materialItems = record.data.materialItems.map(i => i.id === material.id ? { ...i, data, reason } : i);
+          state.selected = await api('save', { id: record.id, type: 'proposal', parents: record.heads, data: { ...record.data, materialItems } });
+          dialog.close(); await render();
+        } finally { if (button.isConnected) button.disabled = false; }
+      }); };
+      return;
+    }
     const item = record.data.items.find(i => i.id === selectedId) || record.data.items.find(i => i.status !== 'accepted');
     if (!item) throw new Error('没有待修改的部分');
     const dialog = openModal('修改待确认内容', `<form id="proposal-edit-form" class="settings-form"><label>标题<input name="title" required value="${esc(item.data.title)}"></label><label>目标知识库<select name="domain" required>${domainOptions(item.data.domain, false)}</select></label><label>上级笔记<select name="parentNoteId">${hierarchyUI.options(item.data.domain, item.data.parentNoteId, item.targetId, record.data.items)}</select></label><label>内容<textarea name="content" rows="8">${esc(item.data.content)}</textarea></label><button class="primary" type="submit">保存方案</button></form>`);
@@ -1776,6 +1844,8 @@ async function init() {
   try { const last = localStorage.getItem('fengzai-last-view'); if (navs.some(n => n[0] === last)) state.view = last; } catch {}
   await render();
   await updateUI.start();
+  await agentOperationsUI.refresh();
+  setInterval(() => { void agentOperationsUI.refresh().catch(() => {}); }, 5000);
   if (state.snapshot.sync.configured) {
     try {
       const report = await syncUI.scanDownloaded();

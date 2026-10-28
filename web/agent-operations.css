@@ -1,0 +1,16 @@
+.agent-request-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.agent-request-heading h2 { margin: 0; }
+.agent-requests { margin-top: 12px; max-height: 440px; overflow: auto; }
+.agent-request { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 12px; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--line, #e1e5e8); }
+.agent-request strong, .agent-request small { display: block; overflow-wrap: anywhere; }
+.agent-request small { margin-top: 4px; color: var(--muted, #66716b); }
+.agent-request-state { font-size: 12px; }
+.agent-review dl { display: grid; grid-template-columns: 86px minmax(0, 1fr); gap: 8px; }
+.agent-review dd { margin: 0; overflow-wrap: anywhere; }
+.agent-review pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 300px; overflow: auto; font-size: 12px; }
+.agent-request-error { color: #a12e35; }
+@media (max-width: 650px) {
+  .agent-request { grid-template-columns: minmax(0, 1fr) auto; }
+  .agent-request-state { grid-row: 2; }
+  .agent-request > button { grid-column: 2; grid-row: 1 / 3; }
+}

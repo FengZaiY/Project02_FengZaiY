@@ -1,6 +1,8 @@
 import { check, uuid } from '../core/util.mjs';
 
 export function exitActivity(service, activeCalls = 0) {
+  if (service.agents.uploadTasks?.size) return 'Agent 文件正在接收或校验，请等待当前操作完成';
+  if (service.agentOperationTask) return 'Agent 请求正在执行，请等待完成';
   if (service.transport.running) return '同步正在进行，请暂停或等待当前任务完成';
   if (service.localTask) return '本地目录正在整理，请稍后重试';
   if (service.imports.size || service.store.permanentDeleting) return '资料导入或清理正在进行，请稍后重试';

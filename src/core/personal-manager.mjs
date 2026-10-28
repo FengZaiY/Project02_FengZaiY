@@ -42,7 +42,7 @@ export class PersonalManager {
     check(data && typeof data === 'object', '请填写记录');
     let id = input.id || uuid();
     if (!input.id && input.type === 'moneyEntry') id = ledgerId(data) || id;
-    return this.store.change(`保存${({ personalTask: '任务', personalProject: '项目', loginAccount: '账号', subscription: '订阅', moneyAccount: '资金账户', moneyEntry: '账目', moneyBudget: '预算', materialCollection: '资料集合' })[input.type]}`, actor,
+    return this.store.change(`保存${({ personalTask: '任务', personalProject: '项目', loginAccount: '账号', subscription: '订阅', moneyAccount: '资金账户', moneyEntry: '账目', moneyBudget: '预算', materialCollection: '资料集合', materialCategory: '资料分类', materialTopic: '资料主题' })[input.type]}`, actor,
       () => this.store.write({ id, type: input.type, data, parents: input.parents || [] }));
   }
   batch({ items, title = '批量修改' }, actor = '用户') {

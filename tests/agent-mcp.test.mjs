@@ -32,12 +32,16 @@ async function setup(t, options = {}) {
 const noteData = (library, title = '概念') => ({ title, domain: library.data.domain, content: '完整正文', sourceIds: [], assetIds: [] });
 const value = result => { assert.ok(!result.isError, result.content?.[0]?.text); return result.structuredContent.value; };
 const error = result => { assert.equal(result.isError, true); return JSON.parse(result.content[0].text).error; };
+async function approve(service, request) {
+  const detail = await service.call('agentOperationDetail', { id: request.id });
+  return service.call('agentOperationDecide', { id: request.id, token: detail.token, approved: true });
+}
 
 test('FengZaiY discovery hides legacy names while legacy calls share authorization and idempotent receipts', async t => {
   const { service, client, library, prefs, call, grant, url } = await setup(t);
   assert.equal(client.getServerVersion().name, 'FengZaiY');
   const tools = (await client.listTools()).tools;
-  assert.equal(tools.length, 28);
+  assert.equal(tools.length, 36);
   assert.ok(tools.every(tool => tool.name.startsWith('FengZaiY_') && !/studyself/i.test(tool.name)));
   const boot = value(await call('bootstrap'));
   assert.equal(boot.product, 'FengZaiY');
@@ -63,7 +67,8 @@ test('all public business MCP tools complete linked local workflows through the 
   const done = await save('taskSave', { ...task.data, status: 'done' }, task);
   assert.equal(done.data.status, 'done');
   assert.equal(value(await call('history', { id: done.id })).length, 2);
-  assert.equal(error(await write('trash', { id: project.id, parents: project.heads })).code, 'REFERENCED');
+  const blockedProject = value(await write('trash', { id: project.id, parents: project.heads }));
+  await assert.rejects(approve(service, blockedProject), { code: 'REFERENCED' });
   const account = await save('accountSave', { title: '工具账号', website: 'https://example.com', username: 'audit' });
   const subscription = await save('subscriptionSave', { title: '工具订阅', accountId: account.id, amount: 199, currency: 'CNY', cycle: 'monthly', nextDate: '2026-10-01', status: 'active' });
   const cash = await save('moneyAccountSave', { title: '现金', currency: 'CNY', kind: 'cash', opening: 10000, openingDate: '2026-01-01' });
@@ -83,11 +88,15 @@ test('all public business MCP tools complete linked local workflows through the 
   await save('taskSave', { ...done.data, assetIds: [asset.id] }, done);
   assert.equal(value(await call('assetRead', { id: asset.id })).data, bytes.toString('base64'));
   assert.deepEqual(updated.data.collectionIds, [collection.id]);
-  assert.equal(error(await write('trash', { id: asset.id, parents: updated.heads })).code, 'ASSET_REFERENCED');
+  const blockedAsset = value(await write('trash', { id: asset.id, parents: updated.heads }));
+  await assert.rejects(approve(service, blockedAsset), { code: 'ASSET_REFERENCED' });
   const env = { FENGZAIY_AGENT_URL: url, FENGZAIY_AGENT_TOKEN: grant.token };
   const viaSkill = await httpCall('accountSave', { preferencesVersion: prefs, parents: [], data: { title: 'Skill 脚本账号' } }, uuid(), env);
   assert.equal((await httpCall('record', { id: viaSkill.id }, undefined, env)).data.title, 'Skill 脚本账号');
-  assert.equal(value(await write('trash', { id: viaSkill.id, parents: viaSkill.heads })).deleted, true);
+  const trashRequest = value(await write('trash', { id: viaSkill.id, parents: viaSkill.heads }));
+  assert.equal(trashRequest.state, 'pending');
+  assert.equal(service.store.get(viaSkill.id).deleted, false);
+  await approve(service, trashRequest);
   assert.ok(value(await call('personalList', { type: 'loginAccount', trash: true })).some(r => r.id === viaSkill.id));
   const prepared = await service.passwordVault.setup({ password: 'mcp-audit-master-password' });
   service.passwordVault.confirmSetup({ token: prepared.token, confirmed: true });
@@ -152,6 +161,40 @@ test('MCP SDK handshake, scoped discovery, bootstrap and collection-to-reviewed-
   assert.ok(!JSON.stringify(service.agents.status()).includes(grant.token));
 });
 
+test('MCP unified material proposals require local approval, retain dependencies and reject stale targets', async t => {
+  const { service, library, client, call, write } = await setup(t);
+  const tools = (await client.listTools()).tools;
+  assert.ok(tools.find(tool => tool.name === mcpToolName('propose')).inputSchema.properties.materialItems);
+  const bytes = Buffer.from('original material');
+  const asset = value(await write('assetWrite', { domain: library.data.domain, filename: 'source.txt', sha256: sha(bytes), data: bytes.toString('base64') }));
+  const requestId = uuid(), input = { domain: library.data.domain, title: '统一整理',
+    items: [{ data: { ...noteData(library), assetIds: [asset.id] } }],
+    materialItems: [
+      { type: 'materialCategory', key: 'category', data: { title: '装修' } },
+      { type: 'materialTopic', key: 'topic', categoryKey: 'category', data: { title: '合同模板' } },
+      { type: 'asset', targetId: asset.id, parents: asset.heads, topicKey: 'topic', data: { managedFilename: '01_说明.txt' } }
+    ] };
+  let proposal = value(await write('propose', input, requestId));
+  assert.equal(value(await write('propose', input, requestId)).id, proposal.id);
+  assert.equal(service.store.list({ type: 'materialCategory' }).length, 0);
+  assert.equal(service.store.list({ type: 'note' }).length, 0);
+  assert.equal(service.store.get(asset.id).data.managedFilename, undefined);
+  const assetItem = proposal.data.materialItems.find(item => item.type === 'asset');
+  proposal = value(await write('proposalRevise', { id: proposal.id, parents: proposal.heads, items: [],
+    materialItems: [{ id: assetItem.id, data: { ...assetItem.data, managedFilename: '01_合同说明.txt' } }] }));
+  assert.throws(() => service.store.approve(proposal.id, [assetItem.id], proposal.heads), /分类或主题/);
+  assert.equal(service.store.list({ type: 'materialCategory' }).length, 0);
+  assert.equal((await call('approve', { id: proposal.id })).isError, true);
+  proposal = service.store.approve(proposal.id, [...proposal.data.items, ...proposal.data.materialItems].map(item => item.id), proposal.heads);
+  await service.organizeLocal();
+  assert.equal(service.store.list({ type: 'note' }).length, 1);
+  assert.match(service.store.assetLocation(asset.id).path, /资料.*装修.*合同模板.*01_合同说明.txt/);
+  assert.equal(service.store.get(asset.id).data.sha256, sha(bytes));
+  assert.equal(error(await write('propose', input)).code, 'CONFLICT');
+  assert.equal(error(await write('proposalRevise', { id: proposal.id, parents: proposal.heads, items: [],
+    materialItems: [{ id: assetItem.id, data: { ...assetItem.data, managedFilename: '不能改写.txt' } }] })).code, 'INVALID');
+});
+
 test('MCP writes preserve idempotency, preference and base-version checks', async t => {
   const { service, library, write, call, prefs, grant } = await setup(t);
   const requestId = uuid(), data = noteData(library);
@@ -197,7 +240,8 @@ test('MCP extra permissions and binary attachments still use existing protection
   const note = service.store.get(event.id);
   value(await write('noteUpdate', { id: note.id, parents: note.heads, data: { ...note.data, content: '显式编辑' } }));
   const latest = service.store.get(note.id);
-  assert.equal(value(await write('trash', { id: latest.id, parents: latest.heads })).deleted, true);
+  await approve(service, value(await write('trash', { id: latest.id, parents: latest.heads })));
+  assert.equal(service.store.get(latest.id).deleted, true);
 });
 
 function raw(url, token, { method = 'POST', headers = {}, body = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }) } = {}) {

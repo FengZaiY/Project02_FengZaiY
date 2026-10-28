@@ -5,6 +5,7 @@ import { call as mcpCall } from '../skills/fengzaiy/scripts/client.mjs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { StorageLocation } from '../src/core/storage-location.mjs';
+import { databasePath } from '../src/core/workspace-layout.mjs';
 import { Service } from '../src/core/service.mjs';
 import { createServer } from '../src/server.mjs';
 import { uuid } from '../src/core/util.mjs';
@@ -182,9 +183,9 @@ test('missing selected database is an error, never a silently initialized blank 
   const app = await setup(t), target = path.join(app.base, 'target');
   await app.service.call('storageSchedule', { mode: 'migrate', directory: target });
   await app.restart(); app.close();
-  fs.renameSync(path.join(target, 'knowledge.sqlite'), path.join(target, 'held.sqlite'));
+  fs.renameSync(databasePath(target), path.join(target, 'held.sqlite'));
   await assert.rejects(new StorageLocation(app.anchor).open(), /没有 FengZaiY/);
-  assert.equal(fs.existsSync(path.join(target, 'knowledge.sqlite')), false);
+  assert.equal(fs.existsSync(databasePath(target)), false);
 });
 
 test('first launch rejects incomplete, corrupt and differently encrypted existing workspaces', async t => {
@@ -233,7 +234,7 @@ test('persistent settings write failure still opens the intact source and report
 });
 
 test('migration snapshot includes WAL commits and preserves the original database', async t => {
-  const app = await setup(t), dbFile = path.join(app.anchor, 'knowledge.sqlite');
+  const app = await setup(t), dbFile = databasePath(app.anchor);
   const reader = new DatabaseSync(dbFile, { readOnly: true });
   reader.exec('BEGIN'); reader.prepare('SELECT COUNT(*) FROM events').get();
   const note = app.service.store.write({ type: 'note', data: { title: 'WAL 中的新版本' } });

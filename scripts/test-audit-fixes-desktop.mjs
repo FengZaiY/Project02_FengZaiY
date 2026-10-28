@@ -4,6 +4,7 @@ import path from 'node:path';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { DatabaseSync } from 'node:sqlite';
+import { databasePath } from '../src/core/workspace-layout.mjs';
 import { _electron as electron } from 'playwright';
 import electronPath from 'electron';
 
@@ -128,7 +129,7 @@ try {
   const exited = once(application.process(), 'exit');
   await application.evaluate(() => globalThis.auditClose()); await exited;
   assert.deepEqual(JSON.parse(fs.readFileSync(marker, 'utf8')), { workspaceLocked: false, locationLocked: false });
-  const db = new DatabaseSync(path.join(profile, 'knowledge.sqlite'), { readOnly: true });
+  const db = new DatabaseSync(databasePath(profile), { readOnly: true });
   try { assert.equal(db.prepare('SELECT COUNT(*) AS n FROM assets').get().n, 2); }
   finally { db.close(); }
   assert.deepEqual(errors, []);

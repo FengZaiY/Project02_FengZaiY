@@ -10,6 +10,7 @@ import { minorUnits, convertMoney, decimalMoney } from '../src/core/personal-sch
 import { CurrentSync } from '../src/core/current-sync.mjs';
 import { makePairingKey, importAttachment } from '../src/core/transport.mjs';
 import { MaterialCenter, isCentralAsset, userExportPath } from '../src/core/material-center.mjs';
+import { isReadableAsset } from '../src/core/readable-storage.mjs';
 import { LocalHierarchy } from '../src/core/local-hierarchy.mjs';
 import { uuid, hashFile } from '../src/core/util.mjs';
 import { AgentAccess } from '../src/core/agent-access.mjs';
@@ -170,7 +171,7 @@ test('format 7 carries independent records, encrypted vault and batches while lo
   await syncA.publish(); await syncB.importLatest();
   assert.equal(vaultB.status().unlocked, false); await vaultB.unlock({ password: 'portable password' });
   assert.equal(vaultB.read({ accountId: account.id }).value.password, 'synced secret');
-  assert.ok(isCentralAsset(b, b.assetLocation(asset.id).path));
+  assert.ok(isReadableAsset(b, b.assetLocation(asset.id).path));
   assert.equal(fs.readFileSync(b.assetLocation(asset.id).path, 'utf8'), 'central received original');
   assert.equal(fs.existsSync(path.join(b.directory, 'received-objects', `${asset.data.sha256}.v3.partial`)), false);
   assert.equal((await syncB.importLatest()).imported, 0); assert.ok(b.list({ type: 'changeBatch' }).length);
@@ -193,20 +194,20 @@ test('materials preserve IDs and history, validate copies and retain external so
   assert.equal(preview.rows.length, 1); const result = await center.migrate({ token: preview.token, confirmed: true });
   assert.equal(result.state, 'complete'); assert.equal(f.store.get(asset.id).id, asset.id);
   assert.ok(history.every(id => f.store.event(id))); assert.equal(fs.existsSync(source), true);
-  assert.equal(isCentralAsset(f.store, f.store.assetLocation(asset.id).path), true);
+  assert.equal(isReadableAsset(f.store, f.store.assetLocation(asset.id).path), true);
   assert.equal(await hashFile(f.store.assetLocation(asset.id).path), asset.data.sha256);
 });
 
 test('explicit user exports have a separate owned directory and preserve existing files', t => {
   const f = fixture(t), target = userExportPath(f.store, '../../账目.csv');
-  assert.equal(target, path.join(f.store.directory, '.fengzai-y', 'exports', '账目.csv'));
+  assert.equal(target, path.join(f.store.directory, '导出', '账目.csv'));
   fs.writeFileSync(target, 'previous export');
   assert.equal(userExportPath(f.store, '账目.csv'), target);
   assert.equal(fs.readFileSync(target, 'utf8'), 'previous export');
   assert.equal(path.basename(userExportPath(f.store, 'CON.txt')), 'FengZaiY-CON.txt');
-  const marker = path.join(f.store.directory, '.fengzai-y', 'owner.json');
-  fs.writeFileSync(marker, JSON.stringify({ deviceId: 'different-workspace' }));
-  assert.throws(() => userExportPath(f.store, 'new.csv'), /归属不符/);
+  const marker = path.join(path.dirname(target), '.fengzaiy-directory.json');
+  fs.writeFileSync(marker, JSON.stringify({ owner: 'different-workspace' }));
+  assert.notEqual(path.dirname(userExportPath(f.store, 'new.csv')), path.dirname(target));
   assert.equal(fs.existsSync(path.join(path.dirname(target), 'new.csv')), false);
 });
 

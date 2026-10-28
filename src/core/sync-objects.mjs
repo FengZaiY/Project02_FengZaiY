@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { workspaceInternalPath } from './workspace-layout.mjs';
 import path from 'node:path';
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
 import { atomicWrite, canonical, check, hashFile, isHash, noSymlink, sha, uuid } from './util.mjs';
@@ -116,7 +117,7 @@ export async function receiveAsset(channel, store, asset) {
   validateAssets([asset]);
   const existing = await localAsset(store, asset);
   if (existing) return existing;
-  const directory = path.join(store.directory, 'received-objects'); noSymlink(directory);
+  const directory = workspaceInternalPath(store, 'received-objects'); noSymlink(directory);
   fs.mkdirSync(directory, { recursive: true });
   const target = path.join(directory, asset.hash), temp = `${target}.${uuid()}.partial`;
   noSymlink(target); noSymlink(temp);

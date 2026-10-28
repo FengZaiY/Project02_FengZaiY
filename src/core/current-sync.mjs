@@ -1,5 +1,7 @@
 import { syncRootPath } from './legacy-names.mjs';
 import { requiresNamingFormat, assertNamingFormat } from './naming-format.mjs';
+import { requiresReadableFormat, isReadableAsset } from './readable-storage.mjs';
+import { MaterialCenter } from './material-center.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { DirectoryChannel, assetObjects, assetAAD, localAsset, sealBinary, validateAssets } from './sync-objects.mjs';
@@ -193,7 +195,7 @@ export class CurrentSync {
         descriptor.chunks.forEach((chunk, index) => objects.push({ kind: 'asset', ...chunk, assetIndex, index }));
       }
       const erasures = this.store.erasures();
-      const format = events.some(requiresNamingFormat) ? 8 : events.some(requiresPersonalFormat) || erasures.some(requiresPersonalFormat) ? 7 : events.some(event => event.retiredPresentation) ? 6 : this.control().management?.length ? 5 : erasures.length ? 4 : 3;
+      const format = events.some(requiresReadableFormat) || erasures.some(requiresReadableFormat) ? 9 : events.some(requiresNamingFormat) ? 8 : events.some(requiresPersonalFormat) || erasures.some(requiresPersonalFormat) ? 7 : events.some(event => event.retiredPresentation) ? 6 : this.control().management?.length ? 5 : erasures.length ? 4 : 3;
       const manifest = { format, ...(format >= 4 ? { erasures } : {}), id: uuid(), deviceId: this.store.deviceId, deviceName: this.store.getMeta('deviceName'),
         at: now(), parts, assets, control: mergeControl(EMPTY_CONTROL, this.control()) };
       manifest.digest = manifestDigest(manifest);
@@ -244,6 +246,7 @@ export class CurrentSync {
       this.guardParticipation();
       const plan = this.value('plan'), channel = this.channel(), progress = { ...this.progress(), state: 'running', phase: 'objects', reason: '' };
       assertNamingFormat(plan.manifest.format, Object.values(plan.metadata).flat());
+      check(plan.manifest.format >= 9 || !Object.values(plan.metadata).flat().some(requiresReadableFormat), '目录结构已升级，请取消旧发布任务并重新规划');
       check(canonical(plan.manifest.control.management || []) === canonical(this.control().management || [])
         && canonical(plan.manifest.control.roles) === canonical(this.control().roles), '设备管理或主力角色已变化，请取消旧发布任务后重新发布', 'CONFLICT');
       this.saveProgress(progress);
@@ -305,7 +308,7 @@ export class CurrentSync {
     });
   }
   validateManifest(manifest, deviceId) {
-    check([3, 4, 5, 6, 7, 8].includes(manifest?.format) && isId(manifest.id) && manifest.deviceId === deviceId && isId(deviceId)
+    check([3, 4, 5, 6, 7, 8, 9].includes(manifest?.format) && isId(manifest.id) && manifest.deviceId === deviceId && isId(deviceId)
       && typeof manifest.deviceName === 'string' && manifest.deviceName.length <= 100 && Number.isFinite(Date.parse(manifest.at)), '无效的最新内容清单');
     check(Object.keys(manifest).sort().join() === (manifest.format >= 4
       ? 'assets,at,control,deviceId,deviceName,digest,erasures,format,id,parts' : 'assets,at,control,deviceId,deviceName,digest,format,id,parts'), '清单含未知字段');
@@ -378,6 +381,7 @@ export class CurrentSync {
         const original = histories.get(manifest.id);
         assertNamingFormat(manifest.format, original);
         check(manifest.format >= 7 || ![...original, ...(manifest.erasures || [])].some(requiresPersonalFormat), '个人管理记录需要 format 7，请升级所有同步客户端');
+        check(manifest.format >= 9 || !original.some(requiresReadableFormat), '资料分类与路径方案需要 format 9，请升级所有同步客户端');
         const events = [...filterErased(original, erasures), ...replacementWorkspaces(original, erasures)];
         orderedEvents(events, this.store);
         const assets = manifest.assets.map(asset => ({ ...asset, ids: asset.ids.filter(id => !erasedIds.has(id)) })).filter(asset => asset.ids.length);
@@ -421,11 +425,18 @@ export class CurrentSync {
         this.value('remotes', remotes); this.value('seen', seen); this.value('receivedAt', now());
       });
       const cleanup = erasures.length ? await runDeletionFiles(this.store) : null;
+      let directoryWarning;
+      if (this.store.personalSystem && paths.size) {
+        const materials = new MaterialCenter(this.store, new LocalHierarchy(this.store));
+        const ids = [...paths.keys()].flatMap(hash => descriptors.get(hash).ids);
+        try { const preview = materials.preview({ ids }); if (preview.rows.length) { const job = await materials.migrate({ token: preview.token, confirmed: true, ids }); if (job.state !== 'complete') directoryWarning = '部分原件目录待整理，已保留校验后的接收原件'; } }
+        catch (error) { directoryWarning = error.message; }
+      }
       if (erasures.length || this.store.getMeta('presentationRetired') === '1') cleanErasedTransport(this);
       let receiptWarning;
       try { await this.verifyPrimary(); } catch (error) { receiptWarning = error.message; }
       return { imported: count, unchanged: !count, metadataOnly, devices: incoming.length,
-        skippedDevices: manifests.length - incoming.length, receiptWarning, cleanup };
+        skippedDevices: manifests.length - incoming.length, receiptWarning, directoryWarning, cleanup };
     });
   }
   confirmUpload({ id, confirmed }) {
@@ -540,8 +551,17 @@ export class CurrentSync {
       check(asset, '请先拉取最新文件索引');
       const file = await receiveResumable(this.channel(), this.store, asset,
         { space: this.space, reserveBytes: this.reserveBytes, paused: () => this.pauseRequested });
-      for (const assetId of asset.ids) if (this.store.get(assetId)) this.store.bindAsset(assetId, file, this.store.assetLocation(assetId)?.pinned === 1);
-      await this.verifyPrimary(); return { available: true };
+      for (const assetId of asset.ids) if (this.store.get(assetId)?.data.sha256 === asset.hash) this.store.bindAsset(assetId, file, this.store.assetLocation(assetId)?.pinned === 1);
+      let directoryWarning = '';
+      if (this.store.personalSystem) {
+        const materials = new MaterialCenter(this.store, new LocalHierarchy(this.store)), ids = asset.ids.filter(assetId => this.store.get(assetId)?.data.sha256 === asset.hash);
+        try {
+          const preview = materials.preview({ ids });
+          if (preview.rows.length && (await materials.migrate({ token: preview.token, confirmed: true, ids })).state !== 'complete') directoryWarning = '原件已下载，部分目录待整理，已保留可用接收原件';
+        } catch (error) { directoryWarning = `原件已下载，目录待整理：${error.message}`; }
+        this.store.local('hierarchyDirty', true);
+      }
+      await this.verifyPrimary(); return { available: true, directoryWarning };
     });
   }
   async evict({ id, confirmed }) {
@@ -559,6 +579,7 @@ export class CurrentSync {
       const file = path.resolve(local.path); noSymlink(file);
       const allowed = ['objects', 'received-objects'].map(folder => path.join(this.store.directory, folder, record.data.sha256));
       allowed.push(this.store.directories.assetPath(record.data.domain, record.data.sha256));
+      if (isReadableAsset(this.store, file)) allowed.push(file);
       check((allowed.some(value => path.resolve(value).toLowerCase() === file.toLowerCase()) || new LocalHierarchy(this.store).managedOriginal(file))
         && outside(this.config().folder, file), '只能释放系统托管原件');
       const protectedFile = () => {

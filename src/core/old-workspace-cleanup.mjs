@@ -4,6 +4,7 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { canonical, check, hashFile, inside, noSymlink, outside, sha } from './util.mjs';
 import { workspaceLock } from './workspace-lock.mjs';
+import { databasePath, deviceKeyPath } from './workspace-layout.mjs';
 
 function previousRoot(storage) {
   check(storage.config.lastChange?.mode === 'migrate', '没有可清理的迁移旧目录');
@@ -20,7 +21,7 @@ async function inventory(storage, root) {
     check(storage.config.previousCleanup.directory === root, '旧目录清理记录与当前迁移不匹配');
     return storage.config.previousCleanup;
   }
-  const database = inside(root, 'knowledge.sqlite'); noSymlink(database);
+  const database = databasePath(root); noSymlink(database);
   const db = new DatabaseSync(database, { readOnly: true });
   const candidates = new Map(), protectedFiles = [];
   const local = key => JSON.parse(db.prepare('SELECT value FROM local_config WHERE key=?').get(key)?.value || 'null');
@@ -50,11 +51,24 @@ async function inventory(storage, root) {
       if (event) {
         const hash = JSON.parse(event.json).data.sha256, relative = path.relative(root, row.path);
         const managed = (local('hierarchyOriginals') || {})[relative] === hash
+          || Object.values(local('readableAssets') || {}).some(item => item.relative === relative && item.hash === hash)
+          || relative === path.join('.fengzai-y', 'materials', hash.slice(0, 2), hash)
+          || ['history/objects', 'staging/received-objects'].some(folder => relative === path.join('.fengzai-y', folder, hash))
           || ['objects', 'received-objects'].some(folder => relative === path.join(folder, hash))
           || Object.values(local('libraryDirectories') || {}).some(folder => relative === path.join(folder, 'attachments', hash));
         if (managed) add(relative, hash);
       }
     }
+    for (const [key, relative] of Object.entries(local('readableDirectories') || {})) {
+      const marker = inside(root, path.join(relative, '.fengzaiy-directory.json')); noSymlink(marker);
+      if (fs.existsSync(marker) && JSON.parse(fs.readFileSync(marker, 'utf8')).owner === sha(key)) add(path.relative(root, marker));
+    }
+    for (const relative of ['.fengzai-y/owner.json', '.fengzai-y/metadata/layout.json']) {
+      const file = inside(root, relative); noSymlink(file);
+      if (fs.existsSync(file)) { check(JSON.parse(fs.readFileSync(file, 'utf8')).deviceId === storage.service.store.deviceId, '旧内部目录身份已变化'); add(relative, undefined, true); }
+    }
+    const guard = inside(root, 'knowledge.sqlite/请升级客户端.txt');
+    if (fs.existsSync(guard)) { noSymlink(guard); check(fs.readFileSync(guard, 'utf8') === '数据库已迁移到 .fengzai-y/database。请使用支持可读目录的新版本打开本工作区。\n', '旧版保护文件被修改'); add(path.relative(root, guard), undefined, true); }
     for (const [id, name] of Object.entries(local('libraryDirectories') || {})) {
       check(typeof name === 'string' && path.basename(name) === name, '旧知识库目录映射无效');
       const marker = libraryMarkerPath(inside(root, name)); noSymlink(marker);
@@ -65,7 +79,7 @@ async function inventory(storage, root) {
       }
     }
   } finally { db.close(); }
-  for (const relative of ['device-vault.key', 'knowledge.sqlite', 'knowledge.sqlite-wal', 'knowledge.sqlite-shm']) {
+  for (const relative of [path.relative(root, deviceKeyPath(root)), ...['', '-wal', '-shm'].map(suffix => path.relative(root, databasePath(root)) + suffix)]) {
     if (fs.existsSync(inside(root, relative))) add(relative, undefined, true);
   }
   const files = [];

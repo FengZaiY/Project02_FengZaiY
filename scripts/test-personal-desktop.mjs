@@ -5,6 +5,7 @@ import path from 'node:path';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
+import { databasePath } from '../src/core/workspace-layout.mjs';
 
 const root = path.resolve('artifacts/personal-desktop'); fs.mkdirSync(root, { recursive: true });
 const profile = fs.mkdtempSync(path.join(root, 'profile-'));
@@ -66,7 +67,7 @@ try {
   fs.writeFileSync(path.join(root, 'exit-personal-draft.png'), Buffer.from(screenshot, 'base64'));
   assert.deepEqual(errors, []);
   await page.locator('#exit-confirm').click(); await application.waitForEvent('close', { timeout: 30000 }); application = null;
-  const db = new DatabaseSync(path.join(profile, 'knowledge.sqlite'), { readOnly: true });
+  const db = new DatabaseSync(databasePath(profile), { readOnly: true });
   try {
     assert.ok(db.prepare("SELECT 1 FROM events WHERE type='personalTask' AND json_extract(json,'$.data.title')=?").get('退出前待保存的任务'));
     assert.deepEqual(JSON.parse(db.prepare("SELECT value FROM local_config WHERE key='personalDrafts'").get().value), {});

@@ -6,6 +6,8 @@ import { lexer, walkTokens } from 'marked';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const required = [
+  'src/core/agent-operation-catalog.mjs', 'src/core/agent-operations.mjs', 'web/agent-operations.js', 'web/agent-operations.css',
+  'tests/agent-operations.test.mjs', 'scripts/test-agent-operations-ui.mjs', 'scripts/test-agent-operations-desktop.mjs',
   'AGENTS.md', 'README.md', 'CONTRIBUTING.md',
   '.editorconfig', '.gitattributes', '.gitignore', 'package.json', 'package-lock.json',
   'docs/README.md', 'docs/project-status.md', 'docs/architecture.md',
@@ -23,6 +25,7 @@ const required = [
   'web/skill-manager.js', 'web/skill-manager.css', 'scripts/test-skill-manager.mjs',
   'src/core/skill-installations.mjs', 'web/skill-installations.js', 'tests/skill-installations.test.mjs',
   'src/desktop/updates.mjs', 'src/desktop/update-source.mjs', 'web/update-manager.js', 'web/update-manager.css',
+  'src/desktop/update-download.mjs', 'tests/update-download.test.mjs', 'scripts/test-update-download-desktop.mjs',
   'tests/updates.test.mjs', 'scripts/test-updates-ui.mjs', 'scripts/release-config.mjs', 'docs/online-updates.md',
   'web/note-tree-drag.js', 'scripts/test-note-tree-drag.mjs',
   'src/core/asset-management.mjs', 'web/asset-manager.js', 'web/assets.css', 'tests/asset-management.test.mjs', 'scripts/test-assets-ui.mjs',

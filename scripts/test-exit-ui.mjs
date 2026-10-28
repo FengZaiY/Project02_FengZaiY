@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
+import { databasePath } from '../src/core/workspace-layout.mjs';
 import { once } from 'node:events';
 
 const root = path.resolve('artifacts/exit-ui'); fs.mkdirSync(root, { recursive: true });
@@ -94,7 +95,7 @@ try {
   const exited = once(application.process(), 'exit');
   await page.locator('#exit-confirm').click(); await closed;
   await exited;
-  const db = new DatabaseSync(path.join(profile, 'knowledge.sqlite'), { readOnly: true });
+  const db = new DatabaseSync(databasePath(profile), { readOnly: true });
   try {
     for (const id of savedIds) {
       const row = db.prepare('SELECT e.json FROM events e JOIN heads h ON h.event_id=e.id WHERE e.entity_id=?').get(id);

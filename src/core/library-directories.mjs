@@ -4,9 +4,10 @@ import path from 'node:path';
 import { check, inside, isId, isHash, noSymlink, sha } from './util.mjs';
 import { centralAssetPath } from './material-center.mjs';
 import { MATERIAL_SCOPE } from './personal-schema.mjs';
+import { readableAssetPath } from './readable-storage.mjs';
 
 const markerName = '.fengzaiy-library.json';
-const reserved = new Set(['objects', 'assets', 'incoming', 'opened-files', 'electron-profile', 'knowledge.sqlite', 'device-vault.key', 'version-repositories', 'version-staging', 'received-objects']);
+const reserved = new Set(['资料', '导出', 'objects', 'assets', 'incoming', 'opened-files', 'electron-profile', 'knowledge.sqlite', 'device-vault.key', 'version-repositories', 'version-staging', 'received-objects']);
 export function legacyLibraryId(scope) {
   const hash = sha(`${legacyNames.librarySeed}${scope}`).slice(0, 32);
   return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-${hash.slice(12, 16)}-${hash.slice(16, 20)}-${hash.slice(20)}`;
@@ -76,7 +77,8 @@ export class LibraryDirectories {
       catch (error) { return { ...record, localDirectory: null, directoryError: error.message }; }
     });
   }
-  assetPath(domain, hash) {
+  assetPath(domain, hash, record) {
+    if (record && (this.store.personalSystem || domain === MATERIAL_SCOPE || record.data.centralized)) return readableAssetPath(this.store, record);
     if (this.store.personalSystem || domain === MATERIAL_SCOPE) return centralAssetPath(this.store, hash);
     check(typeof domain === 'string' && domain && domain !== '__all_libraries__' && isHash(hash), '附件知识库或内容标识无效');
     const library = this.store.libraries().find(item => item.data.domain === domain) || {

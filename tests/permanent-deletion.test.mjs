@@ -24,7 +24,7 @@ test('permanent removal deletes payload, database bytes and projections; journal
   const f = setup(t), secret = 'erase-this-unique-sentinel-9481255', note = f.note(secret);
   await f.a.organizeLocal(); f.remove(note); await f.a.organizeLocal();
   const files = previewTrash(f.a.store).files.map(item => path.join(f.a.store.directory, item.relative));
-  assert.equal(files.length, 2);
+  assert.equal(files.length, 3);
   const plan = previewTrash(f.a.store);
   emptyTrash(f.a.store, { token: plan.token, confirmed: true });
   assert.equal(files.every(file => fs.existsSync(file)), true);

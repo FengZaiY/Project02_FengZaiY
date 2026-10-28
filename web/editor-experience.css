@@ -4,6 +4,11 @@
 .selection-tools .icon-button{width:32px;height:32px}
 .selection-tools [aria-pressed=true],.editor-toolbar [aria-pressed=true],.editor-reading-bar [aria-pressed=true]{background:#e1eef6;color:#225d81}
 .editor-copy-status:empty{display:none}
+.editor-shortcuts{position:relative;font-size:12px;margin-left:auto}
+.editor-shortcuts summary{cursor:pointer;padding:6px;border-radius:4px}
+.editor-shortcuts[open] summary{background:#e1eef6}
+.editor-shortcuts>div{position:absolute;right:0;top:100%;z-index:55;width:280px;max-width:calc(100vw - 32px);display:grid;gap:8px;padding:12px;background:#fff;border:1px solid var(--line);border-radius:6px;box-shadow:0 5px 20px #26384c20}
+.editor-shortcuts span{display:flex;gap:5px;align-items:center}.editor-shortcuts kbd{font:inherit;background:#f2f5f7;border:1px solid var(--line);border-radius:3px;padding:1px 4px}.editor-shortcuts small{color:var(--muted);line-height:1.5}
 .editor-copy-status{font-size:11px;padding:0 5px;color:#22674d}
 .editor-command-menu{width:300px}
 .editor-command-list{max-height:310px;overflow:auto}
@@ -40,11 +45,15 @@
 .source-pane[hidden]+.source-splitter{display:none}
 #app.editor-focus{grid-template-columns:minmax(0,1fr)}
 #app.editor-focus>.sidebar,#app.editor-focus .record-list{display:none}
-.code-surface{position:relative;background:#f4f6f9;margin:16px 0;border-radius:4px;max-width:100%;overflow:hidden}
-.code-tools{display:flex;align-items:center;gap:5px;border-bottom:1px solid #e3e8ee;padding:3px 8px}
-.code-tools select{margin-right:auto;border:0;background:transparent;font-size:12px;max-width:160px}
+.code-surface{position:relative;background:#f3f4f5;margin:16px 0;border:1px solid #e5e7e9;border-radius:8px;max-width:100%;min-width:0;overflow:hidden}
+.code-tools{display:flex;align-items:center;gap:5px;flex-wrap:wrap;padding:6px 12px}
+.code-language-icon{width:16px;height:16px;flex-shrink:0;color:#606b74}
+.code-tools select{margin-right:auto;border:0;background:transparent;font-size:12px;max-width:160px;min-width:0}
+.code-tools .icon-button{width:28px;min-width:28px;height:28px;min-height:28px;flex-shrink:0}
+.code-copy-status{font-size:11px;color:#466454;overflow-wrap:anywhere;max-width:100%}
+.code-copy-status:empty{display:none}
 .code-surface pre{margin:0!important;border:0!important;border-radius:0!important;overflow-x:auto;background:transparent!important;padding:12px!important}
-.code-surface pre code{white-space:pre;font-family:Consolas,monospace;font-size:13px}
+.code-surface pre code{display:block;white-space:pre;overflow-wrap:normal;word-break:normal;tab-size:2;font-family:'Cascadia Mono',Consolas,monospace;font-size:13px;line-height:1.7;background:transparent;padding:0;border-radius:0}
 .code-surface.code-wrap pre code{white-space:pre-wrap;overflow-wrap:anywhere}
 .note-link-preview{width:300px;padding:14px}
 .note-link-preview strong,.note-link-preview small{display:block;overflow-wrap:anywhere}

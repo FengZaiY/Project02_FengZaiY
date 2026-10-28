@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { workspaceInternalPath } from './workspace-layout.mjs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { CHUNK_BYTES, assetAAD, chunkName, localAsset, validateAssets } from './sync-objects.mjs';
@@ -59,7 +60,7 @@ export async function receiveResumable(channel, store, asset, options = {}) {
   const key = `v3Receive:${asset.hash}`, fingerprint = sha(JSON.stringify(asset.chunks));
   const existing = await localAsset(store, asset);
   if (existing) { store.local(key, null); return existing; }
-  const directory = path.join(store.directory, 'received-objects'); noSymlink(directory);
+  const directory = workspaceInternalPath(store, 'received-objects'); noSymlink(directory);
   fs.mkdirSync(directory, { recursive: true });
   const staging = path.join(directory, asset.hash), target = store.personalSystem ? centralAssetPath(store, asset.hash) : staging;
   const temp = `${staging}.v3.partial`;

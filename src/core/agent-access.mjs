@@ -10,6 +10,9 @@ import { handleMcp } from './agent-mcp.mjs';
 import { PUBLIC_PERSONAL_TYPES, PERSONAL_SCOPE, MATERIAL_SCOPE, personalReferences } from './personal-schema.mjs';
 import { PersonalManager } from './personal-manager.mjs';
 import { MaterialCenter } from './material-center.mjs';
+import { agentOperations } from './agent-operation-catalog.mjs';
+import { proposedMaterials, cleanMaterialItems } from './material-organization.mjs';
+import { AgentUploads } from './agent-uploads.mjs';
 
 const skillRoot = fileURLToPath(new URL('../../skills/fengzaiy/', import.meta.url));
 const skillNames = ['SKILL.md', 'references/preferences.md', 'references/api.md', 'scripts/client.mjs'];
@@ -28,6 +31,7 @@ const allPermissions = ['read', 'collect', 'propose', 'edit', 'trash'];
 export class AgentAccess {
   constructor(store) {
     this.store = store;
+    this.uploads = new AgentUploads(this);
     this.personal = new PersonalManager(store); this.materials = new MaterialCenter(store);
     this.server = null;
     this.closed = false;
@@ -97,6 +101,7 @@ export class AgentAccess {
       this.store.local('agentAudit', (this.store.local('agentAudit') || []).filter(item => !removed.has(item.grantId)));
       const erase = this.store.db.prepare('DELETE FROM agent_requests WHERE grant_id=?');
       for (const id of removed) erase.run(id);
+      this.operations?.removeGrants(ids);
     });
   }
   authenticate(token) {
@@ -113,11 +118,13 @@ export class AgentAccess {
   checkData(grant, data, seen = new Set(), virtual = new Map()) {
     this.scope(grant, data.domain);
     check(!data.sensitive || grant.sensitive, '敏感资料未授权', 'FORBIDDEN');
-    if (data.items) virtual = new Map(data.items.map(item => [item.targetId, { id: item.targetId, type: 'note', data: item.data, versions: [{ data: item.data }] }]));
+    if (data.items) virtual = new Map([...data.items.map(item => [item.targetId, { id: item.targetId, type: 'note', data: item.data, versions: [{ data: item.data }] }]),
+      ...(data.materialItems || []).filter(item => item.type !== 'asset').map(item => [item.targetId, { id: item.targetId, type: item.type, data: item.data, versions: [{ data: item.data }] }])]);
     const refs = [...(data.sourceIds || []), ...personalReferences(data), ...richReferences(data).refs, ...[data.noteId, data.from, data.to, data.folderId, data.parentId].filter(Boolean)];
     for (const id of refs) {
       if (this.store.isRetiredAI(id)) continue;
-      this.readable(grant, this.store.get(id), seen, virtual);
+      const candidate = virtual.get(id);
+      this.readable(grant, this.store.get(id) || (['materialCategory', 'materialTopic'].includes(candidate?.type) ? candidate : null), seen, virtual);
     }
     const checkDraft = ref => {
       this.readable(grant, this.store.get(ref.id), seen, virtual);
@@ -147,7 +154,39 @@ export class AgentAccess {
     items.unshift({ at: now(), grantId: grant.id, name: grant.name, method: String(method).slice(0, 80), requestId: String(requestId || '').slice(0, 100), result: code });
     this.store.local('agentAudit', items.slice(0, 200));
   }
+  async invoke(grant, { method, input = {}, requestId }) {
+    if (['assetUploadStart', 'assetUploadChunk', 'assetUploadStatus', 'assetUploadFinish', 'assetUploadCancel'].includes(method)) {
+      const task = this.uploads.invoke(grant, method, input, requestId); this.uploadTasks ||= new Set(); this.uploadTasks.add(task);
+      try { const result = await task; this.audit(grant, method, requestId, 'OK'); return result; }
+      finally { this.uploadTasks.delete(task); }
+    }
+    if (['operationCatalog', 'operation', 'operationResult', 'trash'].includes(method)) {
+      check(this.operations, '请更新本机服务以使用操作目录', 'FORBIDDEN');
+      const current = this.operations.authorize(grant.id);
+      check(current.hash === grant.hash, '授权已变化', 'UNAUTHORIZED');
+      check(!this.store.materialMigrating && !this.store.permanentDeleting, '资料维护正在进行', 'BUSY');
+      check(current.permissions.includes(method === 'operationCatalog' || method === 'operationResult' ? 'read' : method === 'trash' ? 'trash' : 'edit'), '未授权的操作', 'FORBIDDEN');
+      try {
+        let value;
+        if (method === 'operationCatalog') value = { operations: Object.values(agentOperations), secrets: 'local-unlock-required',
+          confirmations: 'local-ui-only', internalRpc: false, masterCredentials: 'local-ui-only' };
+        else if (method === 'operationResult') value = this.operations.result(current, input.id);
+        else {
+          if (method === 'trash') {
+            const record = this.readable(current, this.store.get(input.id));
+            check(record.type !== 'library' && record.type !== 'folder', '知识库管理请使用操作目录');
+            input = { operation: PUBLIC_PERSONAL_TYPES.includes(record.type) ? 'personalDelete' : 'delete',
+              input: { id: input.id, parents: input.parents }, preferencesVersion: input.preferencesVersion };
+          }
+          value = await this.operations.request(current, input, requestId);
+        }
+        if (this.grants().some(item => item.id === current.id)) this.audit(current, method === 'operation' ? `operation:${input.operation}` : method, requestId, 'OK'); return value;
+      } catch (error) { if (this.grants().some(item => item.id === current.id)) this.audit(current, method, requestId, error.code || 'INVALID'); throw error; }
+    }
+    return this.dispatch(grant, { method, input, requestId });
+  }
   dispatch(grant, { method, input = {}, requestId }) {
+    if (method === 'trash') return this.invoke(grant, { method, input, requestId });
     try {
       check(Object.hasOwn(permissions, method), '未授权的操作', 'FORBIDDEN');
       const current = this.grants().find(item => item.id === grant.id && item.hash === grant.hash);
@@ -183,7 +222,8 @@ export class AgentAccess {
   read(grant, method, input) {
     if (method === 'bootstrap') {
       const files = this.skillFiles();
-      return { protocolVersion: 1, product: 'FengZaiY', capabilities: { mcp: { transport: 'streamable-http', toolPrefix: 'FengZaiY_' }, personalTypes: PUBLIC_PERSONAL_TYPES, syncFormat: 8, secrets: false }, skillVersion: sha(canonical(files)), skill: files['SKILL.md'], apiReference: files['references/api.md'],
+      return { protocolVersion: 1, product: 'FengZaiY', capabilities: { mcp: { transport: 'streamable-http', toolPrefix: 'FengZaiY_' }, personalTypes: PUBLIC_PERSONAL_TYPES, syncFormat: 9, materialOrganization: true,
+        secrets: 'local-unlock-required', operations: 'fixed-catalog', confirmation: 'local-ui-only', masterCredentials: false }, skillVersion: sha(canonical(files)), skill: files['SKILL.md'], apiReference: files['references/api.md'],
         preferences: this.preferences(), access: { scope: 'all', domains: this.store.libraries().filter(item => !item.deleted && !item.conflict).map(item => item.data.domain),
           permissions: grant.permissions, sensitive: grant.sensitive, expiresAt: grant.expiresAt } };
     }
@@ -223,6 +263,7 @@ export class AgentAccess {
       return this.personal.save({ ...input, type: businessMethods[method] }, `Agent：${grant.name}`);
     }
     if (method === 'personalBatch') {
+      check(!input.items?.some(item => ['materialCategory', 'materialTopic'].includes(item.type)), '资料分类与主题请提交整理方案，由用户确认');
       check(input.items?.every(item => Array.isArray(item.parents)), '每项须提供基础版本');
       return this.personal.batch(input, `Agent：${grant.name}`);
     }
@@ -248,16 +289,17 @@ export class AgentAccess {
         size: bytes.length, sha256: hash, priority: 'normal', sensitive: input.sensitive === true,
         ...(input.folderId ? { folderId: input.folderId } : {}) };
       this.checkData(grant, data);
-      const target = this.store.directories.assetPath(input.domain, hash);
+      const id = uuid();
+      const target = this.store.directories.assetPath(input.domain, hash, { id, data });
       noSymlink(target);
       if (fs.existsSync(target)) check(sha(fs.readFileSync(target)) === hash, '资料目标已变化，停止写入');
       else fs.writeFileSync(target, bytes, { flag: 'wx' });
-      const record = write('asset', data);
+      const record = write('asset', data, id);
       this.store.bindAsset(record.id, target);
       return record;
     }
     if (method === 'propose') {
-      check(Array.isArray(input.items) && input.items.length > 0 && input.items.length <= 100, '方案需要 1 至 100 项');
+      check(Array.isArray(input.items) && input.items.length <= 100 && input.items.length + (input.materialItems?.length || 0) > 0, '方案需要笔记项或资料整理项');
       const keys = new Map();
       for (const item of input.items) if (item.key !== undefined) {
         check(typeof item.key === 'string' && /^[a-zA-Z0-9_-]{1,80}$/.test(item.key) && !keys.has(item.key), '方案 key 必须唯一且只含字母、数字、下划线或短横线');
@@ -270,18 +312,14 @@ export class AgentAccess {
         if (!item.targetId && item.key) entry.targetId = keys.get(item.key);
         return entry;
       });
-      return write('proposal', { title: input.title || '外部 Agent 整理方案', domain: input.domain, content: input.content || '', items });
+      const materialItems = input.materialItems ? proposedMaterials(this.store, input.materialItems) : undefined;
+      return write('proposal', { title: input.title || '外部 Agent 整理方案', domain: input.domain, content: input.content || '', items, ...(materialItems ? { materialItems } : {}) });
     }
     const record = this.readable(grant, this.store.get(input.id));
     check(!record.conflict && !record.deleted, '请先在系统内处理冲突或恢复资料', 'CONFLICT');
     check(Array.isArray(input.parents) && canonical([...input.parents].sort()) === canonical(record.heads), '内容已变化，请读取最新版本', 'CONFLICT');
-    if (method === 'trash') {
-      check(['note', 'draft', 'source', 'annotation', 'relation', 'proposal', 'asset', ...PUBLIC_PERSONAL_TYPES].includes(record.type), '不允许删除该类型');
-      this.store.writeRaw({ id: record.id, type: record.type, data: record.data, parents: input.parents, deleted: true });
-      return this.store.get(record.id);
-    }
     if (method === 'proposalRevise') {
-      check(record.type === 'proposal' && Array.isArray(input.items) && input.items.length > 0, '请选择待确认方案项');
+      check(record.type === 'proposal' && Array.isArray(input.items) && input.items.length + (input.materialItems?.length || 0) > 0, '请选择待确认方案项');
       const updates = new Map();
       for (const item of input.items) {
         const old = record.data.items.find(entry => entry.id === item.id);
@@ -292,7 +330,14 @@ export class AgentAccess {
         updates.set(item.id, { ...this.proposalItem(grant, { ...item, data: item.data, draftRefs: item.draftRefs ?? old.draftRefs,
           reason: item.reason ?? old.reason, targetId, parents: old.parents }), id: old.id, targetId: old.targetId });
       }
-      return write('proposal', { ...record.data, items: record.data.items.map(item => updates.get(item.id) || item) }, record.id, input.parents);
+      const materialUpdates = new Map();
+      for (const item of input.materialItems || []) {
+        const old = record.data.materialItems?.find(entry => entry.id === item.id);
+        check(old && old.status === 'pending' && !materialUpdates.has(item.id), '不能改写已确认资料项或重复同一项');
+        materialUpdates.set(item.id, cleanMaterialItems([{ ...old, data: item.data, reason: item.reason ?? old.reason }])[0]);
+      }
+      return write('proposal', { ...record.data, items: record.data.items.map(item => updates.get(item.id) || item),
+        ...(record.data.materialItems ? { materialItems: record.data.materialItems.map(item => materialUpdates.get(item.id) || item) } : {}) }, record.id, input.parents);
     }
     check(record.type === (method === 'noteUpdate' ? 'note' : 'draft'), '记录类型不符');
     check(input.data.domain === record.data.domain, '改换知识库请提交方案，不直接移动');

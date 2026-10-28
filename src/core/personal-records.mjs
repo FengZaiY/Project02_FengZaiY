@@ -20,6 +20,7 @@ export function validatePersonalWrite(store, type, data, id, deleted) {
   const requireType = (ref, types) => { if (ref) check(types.includes(store.get(ref)?.type), '关联记录类型不符'); };
   for (const ref of data.assetIds || []) requireType(ref, ['asset']);
   for (const ref of data.noteIds || []) requireType(ref, ['note', 'draft']);
+  if (type === 'materialTopic') requireType(data.materialCategoryId, ['materialCategory']);
   if (type === 'personalTask') {
     requireType(data.projectId, ['personalProject']); requireType(data.parentTaskId, ['personalTask']);
     let next = data.parentTaskId, depth = 1;

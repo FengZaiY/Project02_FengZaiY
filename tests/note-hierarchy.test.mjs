@@ -165,7 +165,7 @@ test('service maintains local note files automatically and exposes compact UI tr
   const note = await service.call('save', { type: 'note', data: { title: '知识点', domain: library.data.domain, content: '原文' } });
   await service.organizeLocal({ verify: false });
   assert.equal((await service.call('localHierarchyStatus')).enabled, true);
-  assert.ok(Object.keys(service.store.local('hierarchyFiles')).some(file => file.endsWith(`${note.id}.md`)));
+  assert.ok(Object.keys(service.store.local('hierarchyFiles')).some(file => file.endsWith('正文.md') && service.store.local('projectionOwners')[file] === note.id));
   const tree = await service.call('noteTree');
   assert.equal(tree[0].id, note.id);
   assert.equal(tree[0].data.content, undefined);

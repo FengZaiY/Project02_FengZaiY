@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import { pruneReceivedDirectory } from './received-objects.mjs';
 import path from 'node:path';
 import { LocalHierarchy } from './local-hierarchy.mjs';
+import { workspaceInternalPath } from './workspace-layout.mjs';
 import { check, hashFile, inside, noSymlink, now, outside } from './util.mjs';
 
 export function deletionFiles(store, ids) {
@@ -17,7 +18,7 @@ export function deletionFiles(store, ids) {
     items.set(relative, { relative, hash, kind, ...(assetId ? { assetId } : {}), bytes: stat?.size || 0, state: 'pending' });
   };
   for (const [relative, hash] of Object.entries(store.local('hierarchyFiles') || {})) {
-    if (!ids.some(id => relative.endsWith(`-${id}.json`) || relative.endsWith(`-${id}.md`))) continue;
+    if (!selected.has((store.local('projectionOwners') || {})[relative]) && !ids.some(id => relative.endsWith(`-${id}.json`) || relative.endsWith(`-${id}.md`))) continue;
     const file = inside(store.directory, relative);
     check(hierarchy.projectionFile(file), '生成文件的知识库归属无法核验，暂不能永久删除');
     add(relative, hash, 'projection');
@@ -31,9 +32,9 @@ export function deletionFiles(store, ids) {
         relative === path.join(folder, asset.data.sha256));
       if (managed) add(relative, asset.data.sha256, 'asset', asset.entityId);
     }
-    const received = path.join('received-objects', asset.data.sha256);
+    const received = path.relative(store.directory, workspaceInternalPath(store, 'received-objects', asset.data.sha256));
     if (fs.existsSync(inside(store.directory, received))) add(received, asset.data.sha256, 'asset', asset.entityId);
-    const opened = path.join('opened-files', asset.entityId, asset.data.filename);
+    const opened = path.relative(store.directory, workspaceInternalPath(store, 'opened-files', asset.entityId, asset.data.filename));
     if (fs.existsSync(inside(store.directory, opened))) add(opened, asset.data.sha256, 'asset', asset.entityId);
     const partial = `${received}.v3.partial`, progress = store.local(`v3Receive:${asset.data.sha256}`);
     if (progress?.hash === asset.data.sha256 && fs.existsSync(inside(store.directory, partial))) {
@@ -41,7 +42,7 @@ export function deletionFiles(store, ids) {
       items.get(partial).mtime = fs.statSync(inside(store.directory, partial)).mtimeMs;
     }
   }
-  for (const item of store.local('hierarchyCleanup') || []) {
+  for (const item of [...(store.local('hierarchyCleanup') || []), ...(store.local('readableOldCopies') || [])]) {
     if (hashes.has(item.hash) && hierarchy.managedOriginal(inside(store.directory, item.relative))) add(item.relative, item.hash, 'asset', item.assetId);
   }
   for (const [relative, hash] of Object.entries(store.local('hierarchyOriginals') || {})) {
@@ -108,7 +109,7 @@ export async function runDeletionFiles(store) {
         if (item.kind === 'projection') check(hierarchy.projectionFile(file), '知识库目录归属已变化，暂停清理');
         if (item.kind === 'asset') check(hierarchy.managedOriginal(file)
           || ['objects', 'received-objects'].some(folder => item.relative === path.join(folder, item.hash))
-          || item.assetId && path.dirname(item.relative) === path.join('opened-files', item.assetId), '原件目录归属已变化，暂停清理');
+          || item.assetId && path.dirname(item.relative) === path.relative(store.directory, workspaceInternalPath(store, 'opened-files', item.assetId)), '原件目录归属已变化，暂停清理');
         const bindings = store.db.prepare('SELECT id,path FROM assets').all().filter(row => path.resolve(row.path).toLowerCase() === file.toLowerCase());
         check(!bindings.some(row => !store.isPurged(row.id) || store.activeAssetReads?.get(row.id)), '文件仍有共用或正在读取的引用');
         check(!Object.values(store.local('localFileLinks') || {}).some(value => path.resolve(value).toLowerCase() === file.toLowerCase()), '文件仍被本机链接引用');
@@ -119,7 +120,7 @@ export async function runDeletionFiles(store) {
       if (fs.existsSync(file)) {
         const stat = fs.statSync(file);
         if (item.kind === 'partial') {
-          check(item.relative === path.join('received-objects', `${item.hash}.v3.partial`)
+          check(item.relative === path.relative(store.directory, workspaceInternalPath(store, 'received-objects', `${item.hash}.v3.partial`))
             && store.local(`v3Receive:${item.hash}`)?.hash === item.hash
             && stat.isFile() && stat.size === item.bytes && stat.mtimeMs === item.mtime, '接收临时文件已变化，保留并等待处理');
         } else check(stat.isFile() && await hashFile(file) === item.hash, '文件已被外部修改，保留并等待处理');
@@ -128,11 +129,12 @@ export async function runDeletionFiles(store) {
         check(current.size === stat.size && current.mtimeMs === stat.mtimeMs && current.ctimeMs === stat.ctimeMs && current.ino === stat.ino, '文件在校验期间变化，保留等待处理');
         fs.unlinkSync(file); releasedBytes = stat.size;
       }
-      for (const key of ['hierarchyFiles', 'hierarchyOriginals', 'hierarchyVerified']) {
+      for (const key of ['hierarchyFiles', 'hierarchyOriginals', 'hierarchyVerified', 'projectionOwners', 'readableAssetHistory']) {
         const values = store.local(key) || {}; delete values[item.relative]; store.local(key, values);
       }
       if (item.kind === 'partial') store.local(`v3Receive:${item.hash}`, null);
       store.local('hierarchyCleanup', (store.local('hierarchyCleanup') || []).filter(entry => entry.relative !== item.relative));
+      store.local('readableOldCopies', (store.local('readableOldCopies') || []).filter(entry => entry.relative !== item.relative));
       for (const row of store.db.prepare('SELECT id,path FROM assets').all()) {
         if (store.isPurged(row.id) && path.resolve(row.path).toLowerCase() === file.toLowerCase()) store.db.prepare('DELETE FROM assets WHERE id=?').run(row.id);
       }

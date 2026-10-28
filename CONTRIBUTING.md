@@ -65,7 +65,7 @@ MCP 适配使用生产依赖 `@modelcontextprotocol/sdk` 和 `zod`，是唯一�
 | 草稿直接归档、方案来源关联与处理状态 | `npm run test:drafts`、`node --test tests/draft-workflow.test.mjs`；另运行完整核心、知识库/层级/Agent 界面回归，核对来源版本、部分覆盖、未保存修改、取消、重复、失败回滚、双目录同步及授权 |
 | 草稿与正式笔记共用界面 | `npm run test:drafts`、`npm run test:experience`、`npm run test:attachments`；另以 `node scripts/test-editor-experience.mjs --draft` 和 `node scripts/test-note-attachments.mjs --draft` 验证草稿工具/附件，核对导航切换不重建编辑器、紧凑保存、重开草稿范围及窄窗口 |
 | 系统设置的内置 Skill 管理 | `npm run test:skills`、`npm run test:agents`、`npm test`；核对只读文件、导出版本清单、偏好快照、历史取回、保存期间输入、未保存内容保护与过期版本对照。导出生成记录不表示外部安装成功 |
-| 在线升级更新 | `node --test tests/updates.test.mjs`、`npm run test:updates`、`test:ui`、`test:desktop`；验证固定来源、错误/并发、真实更新库的隔离下载与损坏校验、未保存保护、普通退出不安装、开发环境限制与 Agent 越权 |
+| 在线升级更新 | `node --test tests/updates.test.mjs tests/update-download.test.mjs`、`npm run test:updates`、`npm run test:updates-desktop`、`test:ui`、`test:desktop`；验证固定来源、真实 Electron 下载暂停/Range 续传/重新下载、服务器回退、错误/并发、真实更新库的损坏校验、未保存保护、普通退出不安装、开发环境限制与 Agent 越权 |
 | 笔记富内容、链接、媒体或画板 | 另运行 `npm run test:rich`，检查所有模板、保存重开、原文件播放、画板像素和桌面/窄窗口截图；原生协议/本地文件绑定另测 `test:desktop` |
 | 思维导图可视化编辑 | 另运行 `npm run test:mindmap`、`node --test tests/mindmap.test.mjs`；覆盖源文本保留、实体编码、中文输入、分支移动/循环/折叠、保存重开、取消、撤销、导出及窗口截图 |
 | 正文富媒体尺寸调整 | 另运行 `npm run test:rich-layout`；覆盖导图八方向实际缩放、图表/画板比例、调节点边界、取消/撤销、键盘、长按编排、双击编辑、保存重开、历史与窄窗口，不以布局属性变化代替可见尺寸验证 |
@@ -99,6 +99,12 @@ MCP 适配使用生产依赖 `@modelcontextprotocol/sdk` 和 `zod`，是唯一�
 
 界面测试需要 Playwright 可用浏览器，现有脚本可尝试本机 Edge。原生桌面测试启动隔离的 Electron 实例，可能需要桌面/沙箱权限。不要让测试与正式资料共用数据目录。
 
+纯文本/代码块改动另运行 `npm run test:code-blocks`，覆盖目录树的缩进与换行、制表符粘贴、复制、撤销、保存重开、Markdown 围栏读取及窄窗口滚动。
+
+外部代码粘贴改动另运行 `node --test tests/code-paste.test.mjs`、`npm run test:code-paste` 与 `npm run test:code-paste-desktop`。分别覆盖文本识别、浏览器剪贴板格式和真实 Electron Ctrl+V；真实剪贴板测试不要并行执行，只在测试写入内容未变时恢复先前剪贴板。
+
+笔记快捷键改动运行 `npm run test:shortcuts` 和 `npm run test:shortcuts-desktop`，使用隔离目录验证正文/标题/代码块/草稿的全选、真实剪贴板复制粘贴、剪切、撤销重做及保存。桌面测试有条件恢复原剪贴板，仅结束自身进程；另运行 `test:experience` 验证输入法与编辑交互。
+
 测试报告和截图写入 `artifacts/`。没有通过的检查不得标为通过，未执行的检查应说明原因。既有验证记录仅代表其标注日期的版本。
 
 ## 构建与交付
@@ -122,6 +128,8 @@ MCP 适配使用生产依赖 `@modelcontextprotocol/sdk` 和 `zod`，是唯一�
 - 当前没有仓库级 CI 或 lint/format 工具，不宣称不存在的检查已执行。
 
 ## 文档维护
+
+可读目录变更运行 `node --test tests/readable-storage.test.mjs tests/storage.test.mjs tests/agent-mcp.test.mjs`、`npm run test:readable-storage`，并按影响运行资料、层级、回收站和源码桌面测试。覆盖复制校验后切换绑定、中断恢复、旧副本清理保护、MCP 依赖确认和 format 9 接收。正式工作区迁移只能在用户明确批准、正常退出安装版后使用受信任迁移流程；`scripts/migrate-readable-workspace.mjs` 要求显式工作区及 `--confirmed`，不会确认内容方案或删除旧副本。内部布局迁移后旧安装版不能继续打开，发布升级前使用源码桌面。
 
 先阅读 [AGENTS.md](AGENTS.md)。新需求、能力状态、工程约定和设计决策分开维护，避免一个文档变成聊天记录。
 

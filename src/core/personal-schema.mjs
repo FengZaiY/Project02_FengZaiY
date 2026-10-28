@@ -3,6 +3,8 @@ import { check, isId, canonical } from './util.mjs';
 export const PERSONAL_SCOPE = '__personal__';
 export const MATERIAL_SCOPE = '__materials__';
 export const PERSONAL_FIELDS = {
+  materialCategory: ['description'],
+  materialTopic: ['description', 'materialCategoryId'],
   materialCollection: ['description'],
   personalProject: ['description', 'status'],
   personalTask: ['content', 'projectId', 'parentTaskId', 'status', 'priority', 'startDate', 'dueDate', 'noteIds', 'assetIds'],
@@ -47,7 +49,9 @@ export function decimalMoney(amount, code = 'CNY') {
 }
 export function personalReferences(data) {
   return [...new Set([...(data.noteIds || []), ...(data.assetIds || []), ...(data.collectionIds || []),
-    data.projectId, data.parentTaskId, data.accountId, data.toAccountId, data.refundOf, data.subscriptionId].filter(isId))];
+    data.projectId, data.parentTaskId, data.accountId, data.toAccountId, data.refundOf, data.subscriptionId,
+    data.materialCategoryId, data.materialTopicId,
+    ...(data.materialItems || []).flatMap(item => [item.targetId, ...personalReferences(item.data)])].filter(isId))];
 }
 export function dateOnly(value) { return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(value)) && new Date(value).toISOString().slice(0, 10) === value; }
 function box(value) {
@@ -62,7 +66,8 @@ export function cleanPersonal(type, data) {
   const result = { ...data, title: data.title.trim(), domain: PERSONAL_SCOPE, tags: data.tags || [], sensitive: data.sensitive === true };
   check(Array.isArray(result.tags) && result.tags.length <= 100 && result.tags.every(t => typeof t === 'string' && t.length <= 100), '标签无效');
   for (const field of ['content', 'description', 'username', 'email', 'category']) check(result[field] === undefined || typeof result[field] === 'string' && result[field].length <= 30000, '文本字段过长');
-  for (const field of ['projectId', 'parentTaskId', 'accountId', 'toAccountId', 'refundOf', 'subscriptionId', 'keyId', 'reversalOf']) check(result[field] == null || isId(result[field]), '关联标识无效');
+  for (const field of ['projectId', 'parentTaskId', 'accountId', 'toAccountId', 'refundOf', 'subscriptionId', 'keyId', 'reversalOf', 'materialCategoryId']) check(result[field] == null || isId(result[field]), '关联标识无效');
+  if (type === 'materialTopic') check(isId(result.materialCategoryId), '资料主题必须属于一个分类');
   for (const field of ['assetIds', 'noteIds']) check(result[field] === undefined || Array.isArray(result[field]) && result[field].length <= 200 && result[field].every(isId), '关联列表无效');
   for (const field of ['startDate', 'dueDate', 'openingDate', 'nextDate', 'date']) check(!result[field] || dateOnly(result[field]), '日期必须为有效的 YYYY-MM-DD');
   if (result.currency !== undefined) currency(result.currency);
