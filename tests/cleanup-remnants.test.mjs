@@ -67,6 +67,31 @@ test('new files and changed markers invalidate confirmation; unknown directories
   assert.ok(fs.existsSync(unknown));
 });
 
+test('permanently erased library identifiers in change batches do not pin an empty folder', async t => {
+  const { service, store, clean } = await fixture(t);
+  const library = store.change('create library', 'user', () => store.saveLibrary({ title: '已清空的测试' }));
+  const directory = store.directories.ensure(library);
+  store.remove(library.id, library.heads);
+  const trash = await service.call('trashPreview');
+  await service.call('trashEmpty', { token: trash.token, confirmed: true });
+  assert.ok(store.erasures().some(item => item.entityId === library.id));
+  assert.equal(store.get(library.id), null);
+  const history = store.allEvents();
+  assert.ok(history.some(event => event.type === 'changeBatch' && event.data.entries.some(entry => entry.id === library.id)));
+  const preview = previewEmptyDirectories(store);
+  assert.equal(preview.directory, store.directory);
+  assert.equal(preview.eligible.find(item => item.id === library.id)?.path, directory);
+  assert.equal(clean().removed, 1);
+  assert.equal(fs.existsSync(directory), false);
+  assert.deepEqual(store.allEvents(), history);
+});
+
+test('batch identifiers without permanent erasure still protect empty directories', async t => {
+  const { store, orphan } = await fixture(t), target = orphan('unverified history');
+  store.write({ type: 'changeBatch', data: { title: 'batch', actor: 'user', entries: [{ id: target.id, before: [], after: [randomUUID()] }] } });
+  assert.ok(previewEmptyDirectories(store).blocked.some(item => item.id === target.id && /历史/.test(item.reason)));
+});
+
 test('history, workspace tabs, file bindings and pending sync each protect orphan directories', async t => {
   const { store, orphan } = await fixture(t);
   const history = orphan('history'), tab = orphan('tab'), bound = orphan('binding'), pending = orphan('pending');

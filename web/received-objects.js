@@ -3,15 +3,18 @@ import './received-objects.css';
 const labels = { resume: '等待续传', reading: '正在读取', linked: '链接引用中', organize: '等待整理',
   cleanup: '等待校验清理', deletion: '等待永久删除', review: '保留待核对' };
 
-export async function mountReceivedObjects(host, { api, esc, bytes, icon, refreshIcons }) {
+export async function mountReceivedObjects(host, { api, esc, bytes, icon, refreshIcons, initialStatus }) {
   let offset = 0, running = false;
   const load = async () => {
-    const status = await api('receivedObjectsStatus', { offset });
+    const status = initialStatus ?? await api('receivedObjectsStatus', { offset });
+    initialStatus = null;
     if (!host.isConnected) return;
     if (offset && offset >= status.total) { offset = 0; return load(); }
+    const needsOrganize = !!(status.error || status.counts.organize || status.counts.cleanup
+      || status.cleanup?.state === 'blocked' || status.exists && !status.total && !status.pendingReceives && status.cleanup?.state !== 'protected');
     host.innerHTML = `<div class="received-heading"><h3>同步接收目录</h3><div class="heading-actions">
       <button class="secondary" data-received-refresh>${icon('refresh-cw')}检查状态</button>
-      <button class="secondary" data-received-organize ${status.busy ? 'disabled' : ''}>${icon('folder-check')}重试整理</button></div></div>
+      ${needsOrganize ? `<button class="secondary" data-received-organize ${status.busy ? 'disabled' : ''}>${icon('folder-check')}重试整理</button>` : ''}</div></div>
       <p class="storage-path">${esc(status.directory)}</p>
       <div class="storage-summary"><span>${status.error ? '检查未完成' : !status.exists ? '无需保留接收目录' : status.total ? `${status.total} 项 · ${bytes(status.bytes)}` : '空目录，整理时将检查并清理'}</span>
       ${status.busy ? '<span>同步或文件维护进行中</span>' : ''}
@@ -38,12 +41,14 @@ export async function mountReceivedObjects(host, { api, esc, bytes, icon, refres
         if (host.isConnected) {
           host.querySelector('.received-result').textContent = error.message;
           host.querySelector('[data-received-refresh]').disabled = false;
-          host.querySelector('[data-received-organize]').disabled = false;
+          const organize = host.querySelector('[data-received-organize]');
+          if (organize) organize.disabled = !!status.busy;
         }
       } finally { running = false; }
     };
     host.querySelector('[data-received-refresh]').onclick = () => perform(async () => {});
-    host.querySelector('[data-received-organize]').onclick = () => perform(() => api('localHierarchyRefresh'));
+    const organize = host.querySelector('[data-received-organize]');
+    if (organize) organize.onclick = () => perform(() => api('localHierarchyRefresh'));
     const previous = host.querySelector('[data-received-prev]'), next = host.querySelector('[data-received-next]');
     if (previous) previous.onclick = () => perform(async () => { offset = Math.max(0, offset - status.limit); });
     if (next) next.onclick = () => perform(async () => { offset += status.limit; });

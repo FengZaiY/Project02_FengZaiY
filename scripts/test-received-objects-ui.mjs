@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import assert from 'node:assert/strict';
 import { createServer } from '../src/server.mjs';
+import { workspaceInternalPath } from '../src/core/workspace-layout.mjs';
 
 const root = path.resolve('artifacts/ui-received-objects');
 fs.mkdirSync(root, { recursive: true });
@@ -11,21 +12,23 @@ const app = await createServer({ directory, port: 0 });
 clearInterval(app.service.timer); app.service.timer = null;
 await app.service.ready;
 if (app.service.localTask) await app.service.localTask;
-const received = path.join(app.service.store.directory, 'received-objects');
+const received = workspaceInternalPath(app.service.store, 'received-objects');
 fs.mkdirSync(received, { recursive: true });
 const hash = 'a'.repeat(64), partial = `${hash}.v3.partial`;
 fs.writeFileSync(path.join(received, partial), 'partial');
 app.service.store.local(`v3Receive:${hash}`, { hash, bytes: 7, size: 100 });
 for (let i = 0; i < 26; i++) fs.writeFileSync(path.join(received, `user-extra-${String(i).padStart(2, '0')}.txt`), 'keep');
-let browser;
+let browser, page;
 const errors = [];
 try {
   try { browser = await chromium.launch({ headless: true }); }
   catch { browser = await chromium.launch({ channel: 'msedge', headless: true }); }
-  const page = await browser.newPage({ viewport: { width: 1165, height: 892 } });
+  page = await browser.newPage({ viewport: { width: 1165, height: 892 } });
   page.on('pageerror', error => errors.push(error.message));
   await page.goto(app.url);
   await page.locator('[data-nav="settings"]').click();
+  await page.locator('[data-storage-scan]').click();
+  await page.locator('.maintenance-received summary').click();
   const panel = page.locator('#received-objects');
   await panel.getByText('等待续传', { exact: true }).waitFor();
   assert.equal(await panel.locator('li').count(), 25);
@@ -35,8 +38,9 @@ try {
   assert.equal(await panel.locator('li').count(), 2);
   await panel.locator('[data-received-prev]').click();
   await panel.getByText('等待续传', { exact: true }).waitFor();
-  await panel.locator('[data-received-organize]').click();
-  await page.waitForFunction(() => !document.querySelector('[data-received-organize]').disabled);
+  assert.equal(await panel.locator('[data-received-organize]').count(), 0);
+  await panel.locator('[data-received-refresh]').click();
+  await page.waitForFunction(() => !document.querySelector('[data-received-refresh]').disabled);
   assert.equal(await page.locator('#agent-preferences-form textarea').inputValue(), '未保存的整理偏好');
   assert.equal(fs.readdirSync(received).length, 27);
   for (const width of [1165, 600]) {
@@ -50,10 +54,15 @@ try {
   for (let i = 0; i < 26; i++) fs.unlinkSync(path.join(received, `user-extra-${String(i).padStart(2, '0')}.txt`));
   fs.unlinkSync(path.join(received, partial));
   app.service.store.local(`v3Receive:${hash}`, null);
+  await panel.locator('[data-received-refresh]').click();
   await panel.locator('[data-received-organize]').click();
   await panel.getByText('无需保留接收目录', { exact: true }).waitFor();
   assert.equal(fs.existsSync(received), false);
+  assert.equal(await panel.locator('[data-received-organize]').count(), 0);
   assert.equal(await page.locator('#agent-preferences-form textarea').inputValue(), '未保存的整理偏好');
   assert.deepEqual(errors, []);
   console.log('Received directory UI: pagination, progress, retention, empty cleanup, unsaved preferences and responsive screenshots passed.');
+} catch (error) {
+  if (page) { await page.screenshot({ path: path.join(root, 'failure.png'), fullPage: true }); console.log(await page.locator('#storage-maintenance').innerText()); }
+  throw error;
 } finally { await browser?.close(); await app.close(); }

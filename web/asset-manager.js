@@ -9,7 +9,7 @@ export function createAssetUI({ state, api, esc, icon, button, bytes, formatTime
   const types = { note: '笔记', draft: '草稿', source: '来源', proposal: '整理方案', annotation: '备注', relation: '关联', conversation: '历史资料', task: '历史任务' };
   const filters = { kind: '', availability: '', usage: '', tag: '', sort: 'updated', trash: false, offset: 0, limit: 100, directory: '', collectionId: '', categoryId: '', topicId: '' };
   let selected = new Map(), scope = '', serial = 0, rows = [];
-  let directoryDomain, directoriesOpen = false, rootDirectory = '';
+  let directoryDomain, directoriesOpen = false, collectionsOpen = false, rootDirectory = '';
   let stopThumbnails, stopFilterLabels;
   const dispose = () => { stopThumbnails?.(); stopFilterLabels?.(); stopThumbnails = stopFilterLabels = null; };
   const options = (values, value) => Object.entries(values).map(([id, text]) => `<option value="${esc(id)}" ${id === value ? 'selected' : ''}>${esc(text)}</option>`).join('');
@@ -30,9 +30,9 @@ export function createAssetUI({ state, api, esc, icon, button, bytes, formatTime
     const main = $('#main');
     dispose();
     main.className = 'settings-view material-manager';
-    main.innerHTML = `<div class="page-heading"><div><h1>资料管理</h1><small class="muted">${domain ? esc(libraryName(domain)) : '全部资料'} · ${result.total} 项 · ${bytes(result.totalBytes)}</small></div><div class="inline-actions"><button class="secondary" data-nav="materials">资料集合</button><button class="secondary" data-action="material-migrate">迁移旧资料</button><button class="primary" data-action="asset-import">${icon('upload')}导入文件</button>${button('files', 'asset-import-separate', '导入为独立资料（允许相同内容）')}</div></div>
+    main.innerHTML = `<div class="page-heading"><div><h1>资料管理</h1><small class="muted">${domain ? esc(libraryName(domain)) : '全部资料'} · ${result.total} 项 · ${bytes(result.totalBytes)}</small></div><div class="inline-actions"><button class="primary" data-action="asset-import">${icon('upload')}导入文件</button>${button('files', 'asset-import-separate', '导入为独立资料（允许相同内容）')}</div></div>
       ${materialTreeMarkup(organization, { esc, icon, categoryId: filters.categoryId, topicId: filters.topicId })}
-      <div class="inline-actions"><button class="text-button" data-action="material-cleanup">${icon('trash-2')}清理迁移旧副本</button></div>
+      <details class="material-optional" id="material-collections" ${collectionsOpen || filters.collectionId ? 'open' : ''}><summary>用途集合${filters.collectionId ? ` · ${esc(collections.find(r => r.id === filters.collectionId)?.data.title || '已筛选')}` : ' · 可选'}</summary><div class="material-collection-controls">${filter('collectionId', '用途集合', '用途集合筛选', { '': '全部用途集合', ...Object.fromEntries(collections.map(r => [r.id, r.data.title])) })}<button class="secondary" data-nav="materials">${icon('folders')}管理用途集合</button></div></details>
       <section class="material-storage" aria-label="本机存放位置">
         <div class="material-storage-root">${icon('hard-drive')}<div><small>工作区根目录</small><span id="material-root-path">${esc(rootDirectory)}</span></div>
         ${button('copy', 'material-copy-root', '复制工作区根目录')}${native ? button('folder-open', 'storage-open-folder', '打开工作区根目录') : ''}</div>
@@ -44,7 +44,6 @@ export function createAssetUI({ state, api, esc, icon, button, bytes, formatTime
         <div class="material-scope-bar"><div class="material-tabs" role="group" aria-label="资料范围"><button data-action="material-active" aria-pressed="${!filters.trash}">全部资料</button><button data-action="material-trash-view" aria-pressed="${filters.trash}">${icon('trash-2')}资料回收站</button></div>
         ${button('filter-x', 'material-clear', '清除资料筛选')}</div>
         <div class="material-filters">
-        ${filter('collectionId', '集合', '资料集合', { '': '全部集合', ...Object.fromEntries(collections.map(r => [r.id, r.data.title])) })}
         ${filter('kind', '类型', '资料类型', { '': '全部类型', ...kinds })}
         ${filter('tag', '标签', '资料标签', { '': '全部标签', ...Object.fromEntries(result.tags.map(tag => [tag, tag])) })}
         ${filter('availability', '本机文件', '本机文件状态', { '': '全部本机状态', available: '本机可用', missing: '待下载或缺失', pinned: '长期保留' })}
@@ -74,6 +73,7 @@ export function createAssetUI({ state, api, esc, icon, button, bytes, formatTime
       ${!rows.length ? `<div class="section-empty">${result.scopedTotal ? '没有符合条件的资料' : filters.trash ? '资料回收站为空' : '暂无资料'}</div>` : ''}
       <div class="material-pagination"><span>${result.total ? filters.offset + 1 : 0}–${filters.offset + rows.length} / ${result.total}</span><button class="icon-button" data-action="material-prev" aria-label="上一页资料" title="上一页资料" ${filters.offset ? '' : 'disabled'}>${icon('chevron-left')}</button><button class="icon-button" data-action="material-next" aria-label="下一页资料" title="下一页资料" ${filters.offset + rows.length < result.total ? '' : 'disabled'}>${icon('chevron-right')}</button></div>`;
     $('#material-directories').ontoggle = event => { directoriesOpen = event.target.open; };
+    $('#material-collections').ontoggle = event => { collectionsOpen = event.target.open; };
     main.querySelectorAll('.material-directory').forEach(control => control.addEventListener('click', event => event.preventDefault()));
     main.querySelectorAll('[data-material-filter]').forEach(control => control.onchange = () => run(async () => { filters[control.dataset.materialFilter] = control.value; await show(); }));
     main.querySelectorAll('[data-material-check]').forEach(control => control.onchange = () => {
@@ -192,7 +192,7 @@ export function createAssetUI({ state, api, esc, icon, button, bytes, formatTime
       <label>原知识库关联<select name="domain" required ${row.references.length || row.referencesUnknown ? 'disabled' : ''}><option value="__materials__" ${row.data.domain === '__materials__' ? 'selected' : ''}>独立资料</option>${domainOptions(row.data.domain, false)}</select></label>
       ${row.references.length || row.referencesUnknown ? '<small class="muted">已有引用或引用待核验，暂不能跨库移动。</small>' : ''}
       <label>标签（逗号分隔）<input name="tags" value="${esc(row.data.tags.join(', '))}" maxlength="10000"></label>
-      <label>所属集合（Ctrl 多选）<select name="collectionIds" multiple>${collections.map(r => `<option value="${r.id}" ${row.data.collectionIds?.includes(r.id) ? 'selected' : ''}>${esc(r.data.title)}</option>`).join('')}</select></label>
+      <label>用途集合（可选，Ctrl 多选）<select name="collectionIds" multiple>${collections.map(r => `<option value="${r.id}" ${row.data.collectionIds?.includes(r.id) ? 'selected' : ''}>${esc(r.data.title)}</option>`).join('')}</select></label>
       <label class="check-row"><input name="sensitive" type="checkbox" ${row.data.sensitive ? 'checked' : ''}>敏感资料</label>
       <div class="form-actions"><button class="primary" type="submit">保存属性</button></div><p class="material-form-error" role="alert"></p></form>`);
     bindSubmit(dialog, async form => {
@@ -259,19 +259,28 @@ export function createAssetUI({ state, api, esc, icon, button, bytes, formatTime
       const preview = await api('materialCleanupPreview');
       if (!preview.rows.length) { toast('没有待清理的迁移旧副本'); return; }
       if (!await confirmBox('清理迁移旧副本', `<p>可释放 ${bytes(preview.bytes)}。当前原件与外部导入源保留。</p>${preview.rows.map(row => `<p class="path-value">${esc(row.relative)}${row.issue ? `：保留，${esc(row.issue)}` : ''}</p>`).join('')}`, '确认清理')) return;
-      const result = await api('materialCleanup', { token: preview.token, confirmed: true }); toast(`已清理 ${result.done.length} 项${result.errors.length ? '，部分文件待重试' : ''}`); await show();
+      const result = await api('materialCleanup', { token: preview.token, confirmed: true }); toast(`已清理 ${result.done.length} 项${result.errors.length ? '，部分文件待重试' : ''}`); await render();
     },
     'material-migrate': async () => {
       const preview = await api('materialMigrationPreview');
       const dialog = openModal('整理为可读目录', `<p>保留身份、历史和全部引用。先复制校验再切换位置；旧副本单独预览清理，外部源文件保留。未确定分类的资料进入待整理区。</p><p>可迁移 ${preview.rows.filter(r => !r.issue).length} 项，预估额外空间 ${bytes(preview.bytes)}（另保留 64 MiB）。</p><div class="csv-preview-scroll">${preview.rows.map(r => `<p><strong>${esc(r.title)}</strong><small class="path-value">${esc(r.source || '原件待下载')}</small><small class="path-value">${esc(r.issue || r.target)}</small></p>`).join('') || '<p>没有待迁移的旧资料</p>'}</div><div id="migration-result"></div>`, `${preview.progress?.format === 2 && ['pending', 'running'].includes(preview.progress?.state) ? '<button class="secondary" id="migration-resume">继续上次任务</button>' : ''}<button class="primary" id="migration-start" ${preview.rows.some(r => !r.issue) ? '' : 'disabled'}>确认迁移</button>`);
       const migrate = resume => run(async () => {
+        let complete = false;
         dialog.querySelectorAll('button').forEach(b => { b.disabled = true; });
         const timer = setInterval(() => { void api('materialMigrationStatus').then(status => { if (dialog.open && status?.state === 'running') $('#migration-result').textContent = `已处理 ${status.done.length} / ${status.rows.length} 项`; }).catch(() => {}); }, 700);
         try {
           const result = await api('materialMigrate', { token: preview.token, confirmed: true, resume });
+          complete = result.state === 'complete';
           $('#migration-result').textContent = `已完成 ${result.done.length} 项。${result.errors.map(e => e.message).join('；') || '迁移完成'}`;
           toast(result.state === 'complete' ? '资料迁移完成' : '部分资料待处理，可继续任务');
-        } finally { clearInterval(timer); dialog.querySelectorAll('button').forEach(b => { b.disabled = false; }); }
+        } finally {
+          clearInterval(timer); dialog.querySelectorAll('button').forEach(b => { b.disabled = false; });
+          if (complete) {
+            $('#migration-resume')?.remove();
+            const finish = $('#migration-start'); finish.textContent = '完成';
+            finish.onclick = () => run(async () => { dialog.close(); await render(); });
+          }
+        }
       });
       $('#migration-start').onclick = () => migrate(false); if ($('#migration-resume')) $('#migration-resume').onclick = () => migrate(true);
     },

@@ -28,7 +28,7 @@ import './draft-workflow.css';
 import { recordRows } from './record-navigation.js';
 import './record-navigation.css';
 import { copyText, copyVisibleText } from './editor-text.js';
-import { mountReceivedObjects } from './received-objects.js';
+import { mountStorageMaintenance } from './storage-maintenance.js';
 import { createPersonalUI, businessLabels } from './personal-pages.js';
 import { assertUiProtocol } from '../src/core/ui-protocol.mjs';
 import { startApplication } from './startup.js';
@@ -62,7 +62,7 @@ const navs = [
   ['sync', 'refresh-cw', '多电脑同步'], ['changes', 'history', '修改记录'],
   ['conflicts', 'git-merge', '版本冲突'], ['trash', 'trash-2', '回收站'],
   ['agents', 'plug', '外部 Agent'], ['settings', 'settings', '系统设置'],
-  ['drafts', 'inbox', '收集与草稿'], ['proposals', 'list-checks', '整理方案'], ['libraries', 'folders', '知识库管理'], ['devices', 'monitor-cog', '设备管理'], ['materials', 'folders', '资料集合']
+  ['drafts', 'inbox', '收集与草稿'], ['proposals', 'list-checks', '整理方案'], ['libraries', 'folders', '知识库管理'], ['devices', 'monitor-cog', '设备管理'], ['materials', 'folders', '用途集合']
 ];
 const knowledgeViews = ['notes', 'drafts', 'proposals', 'libraries'];
 const personalViews = ['tasks', 'accounts', 'finance', 'materials'];
@@ -390,6 +390,7 @@ async function renderView() {
 const navigationPositions = new Map();
 async function navigateView(view) {
   if (view === state.view) return;
+  if (view !== 'settings') state.storageScanned = false;
   await persist();
   navigationPositions.set(state.view, { query: state.query, domain: state.domain, selected: state.selected, selectedTab: state.selectedTab });
   personalUI.leave();
@@ -863,33 +864,21 @@ async function renderSettings() {
   $('#main').innerHTML = `<div class="page-heading"><div><h1>系统设置</h1></div><div class="settings-shortcuts"><button class="secondary" data-action="update-manage">${icon('download')}升级更新</button><button class="secondary" data-action="skill-manage">${icon('book-open-check')}SKILL 管理</button></div></div>
     <section class="settings-section" id="upgrade-settings" aria-label="升级更新"></section>
     <section class="settings-section" id="storage-settings"><h2>本地存储</h2>
-      <label class="field-label">系统工作目录（根目录）<div class="input-with-action"><input id="storage-current" readonly value="${esc(storage.directory)}">${button('copy', 'storage-copy', '复制存储路径')}${native ? button('folder-open', 'storage-open-folder', '在文件管理器中打开') : ''}</div></label>
-      ${!storage.unavailable && !storage.pending ? `<div class="storage-actions"><button class="primary" data-action="storage-change" data-mode="select">${icon('folder-cog')}选择或修改根目录</button></div>` : ''}
+      <label class="field-label">当前工作区<div class="input-with-action"><input id="storage-current" readonly value="${esc(storage.directory)}">${button('copy', 'storage-copy', '复制存储路径')}</div></label>
+      <div class="storage-actions"><button class="secondary" data-action="storage-open-folder" ${native ? '' : 'disabled title="请在桌面版打开本机目录"'}>${icon('folder-open')}打开目录</button>${!storage.unavailable && !storage.pending ? `<button class="secondary" data-action="storage-change" data-mode="select">${icon('folder-cog')}更换工作区</button>` : ''}</div>
       <div class="storage-summary"><span>知识库 ${activeLibraries().length}</span><span>笔记 ${state.snapshot.counts.note || 0}</span><span>附件 ${state.snapshot.counts.asset || 0}</span></div>
       <div class="storage-summary"><span>本地文件：${state.snapshot.localHierarchy?.busy ? '维护中' : state.snapshot.localHierarchy?.errors?.length ? '维护未完成' : state.snapshot.localHierarchy?.pending ? '待更新' : '已更新'}</span>${state.snapshot.localHierarchy?.missing ? `<span>${state.snapshot.localHierarchy.missing} 个原件待接收</span>` : ''}</div>
-      ${state.snapshot.localHierarchy?.errors?.length ? `<div class="notice amber">${state.snapshot.localHierarchy.errors.map(item => esc(item.message)).join('<br>')}${button('refresh-cw', 'storage-retry', '重试本地文件维护')}</div>` : ''}
-      ${legacyCleanupNotice()}
-      <div class="storage-actions"><button class="secondary" data-action="empty-directories">${icon('folder-search')}检查废弃空目录</button></div>
-      <div class="storage-actions"><button class="secondary" data-action="storage-internal">${icon('folder-cog')}整理系统内部目录</button><button class="secondary" data-action="material-migrate">${icon('folder-input')}整理已有资料目录</button><button class="secondary" data-action="material-cleanup">${icon('trash-2')}清理迁移旧副本</button></div>
-      <div class="received-objects" id="received-objects" aria-label="同步接收目录"></div>
-      ${state.snapshot.deletion?.files?.length || state.snapshot.deletion?.database ? `<div class="notice"><div><strong>永久删除清理</strong><p>本地文件已释放 ${bytes(state.snapshot.deletion.releasedBytes)} · ${state.snapshot.deletion.pending} 个文件待处理 · 数据库${state.snapshot.deletion.database?.state === 'done' ? '已压缩' : '待压缩'}</p>
-        ${state.snapshot.deletion.retiredAI ? `<p>内置 AI 历史：已移除 ${state.snapshot.deletion.retiredAI.records} 条旧记录及 ${state.snapshot.deletion.retiredAI.settings} 项本机配置${state.snapshot.deletion.retiredAI.pending ? '，文件清理或数据库压缩待完成' : ''}。</p>` : ''}
-        ${state.snapshot.deletion.files.filter(item => item.state !== 'done').map(item => `<p class="storage-path">${esc(item.relative)}：${esc(item.reason || '等待清理')}</p>`).join('')}
-        ${state.snapshot.deletion.database?.reason ? `<p>${esc(state.snapshot.deletion.database.reason)}</p>` : ''}
-        <p>同步传输副本：${({ done: '本机目录清理完成，等待百度客户端传输删除', blocked: '部分待处理', unconfigured: '未配置同步' })[state.snapshot.deletion.transport?.state] || '待处理'}。百度历史版本和回收站需在客户端另行清理。</p>
-        ${(state.snapshot.deletion.transport?.errors || []).map(item => `<p>${esc(item.file || '')} ${esc(item.message)}</p>`).join('')}
-        ${state.snapshot.deletion.legacyArchives?.length || state.snapshot.deletion.legacyBackups ? '<p>检测到退役版本目录或旧备份登记，可能含历史副本。本次未清理，需单独核对，不能视为所有本地副本已删除。</p>' : ''}
-        <button class="secondary" data-action="deletion-retry">${icon('refresh-cw')}重试永久删除清理</button></div></div>` : ''}
       ${activeLibraries().filter(item => item.directoryError).map(item => `<div class="notice amber">${esc(item.data.title)}：${esc(item.directoryError)}${button('refresh-cw', 'library-storage-retry', '重试本地存储', `data-library="${item.id}"`)}</div>`).join('')}
       ${storage.error ? `<div class="notice danger" role="alert">${esc(storage.error)}</div>` : ''}
-      ${storage.lastChange?.mode === 'migrate' ? `<div class="notice"><div>${storage.lastChange.cleaned ? '迁移旧副本的托管内容已清理，额外文件保留：' : '原目录保留为迁移前副本，请勿同时打开：'}<span class="storage-path">${esc(storage.lastChange.previous)}</span>${!storage.lastChange.cleaned ? '<button class="secondary" data-action="storage-previous-clean">检查并清理旧副本</button>' : ''}</div></div>` : ''}
-      ${storage.unavailable ? '<div class="notice amber">当前服务尚未加载存储设置，请重新启动应用。</div>' : storage.pending ? `<div class="notice amber" id="storage-pending"><div><strong>待重启生效 · ${storage.pending.mode === 'migrate' ? '迁移当前工作区' : '打开已有工作区'}</strong><div class="storage-path">${esc(storage.pending.directory)}</div><p>${native ? '重启时应用变更，当前资料继续保存在原目录。' : '关闭并重新启动预览服务后生效，仅刷新网页不会切换目录。'}</p></div></div><div class="heading-actions">${native ? `<button class="primary" data-action="storage-restart">${icon('rotate-cw')}重启并应用</button>` : ''}<button class="secondary" data-action="storage-cancel">${icon('x')}取消变更</button></div>` : `<div class="heading-actions storage-actions"><button class="secondary" data-action="storage-change" data-mode="migrate">${icon('folder-input')}迁移到新目录</button><button class="secondary" data-action="storage-change" data-mode="open">${icon('folder-open')}打开已有工作区</button></div>`}
+      ${storage.unavailable ? '<div class="notice amber">当前服务尚未加载存储设置，请重新启动应用。</div>' : storage.pending ? `<div class="notice amber" id="storage-pending"><div><strong>待重启生效 · ${storage.pending.mode === 'migrate' ? '迁移当前工作区' : '打开已有工作区'}</strong><div class="storage-path">${esc(storage.pending.directory)}</div><p>${native ? '重启时应用变更，当前资料继续保存在原目录。' : '关闭并重新启动预览服务后生效，仅刷新网页不会切换目录。'}</p></div></div><div class="heading-actions">${native ? `<button class="primary" data-action="storage-restart">${icon('rotate-cw')}重启并应用</button>` : ''}<button class="secondary" data-action="storage-cancel">${icon('x')}取消变更</button></div>` : ''}
     </section>
+    <div id="storage-maintenance"></div>
     <section class="settings-section" id="skill-management" aria-label="SKILL 管理"></section>`;
   await skillUI.mount($('#skill-management'), skill);
   await updateUI.mount($('#upgrade-settings'), state.snapshot.version);
-  const receivedHost = $('#received-objects');
-  if (receivedHost) await mountReceivedObjects(receivedHost, { api, esc, bytes, icon, refreshIcons: () => createIcons({ icons }) });
+  const maintenanceHost = $('#storage-maintenance');
+  if (maintenanceHost) await mountStorageMaintenance(maintenanceHost, { api, esc, bytes, icon, refreshIcons: redrawIcons,
+    autoScan: state.storageScanned, onScan: () => { state.storageScanned = true; } });
 }
 function requireStorageSaved() {
   stash();
@@ -902,7 +891,7 @@ async function changeStorage(mode) {
   const directory = await pickDirectory();
   if (!directory) return;
   requireStorageSaved();
-  const title = mode === 'select' ? '选择或修改系统根目录' : mode === 'migrate' ? '迁移当前工作区' : '打开已有工作区';
+  const title = mode === 'select' ? '更换工作区' : mode === 'migrate' ? '迁移当前工作区' : '打开已有工作区';
   const dialog = openModal(title, `<form id="storage-form" class="settings-form"><label>目标文件夹<div class="input-with-action"><input id="storage-target" readonly value="${esc(directory)}">${button('folder-open', 'storage-pick', '选择目标文件夹', 'type="button"')}</div></label>
     <div class="notice amber">${mode === 'select' ? '选择空目录将迁移当前资料；选择已有工作区将切换资料。检查后须再次确认，不会直接清空或覆盖当前知识库。' : mode === 'migrate' ? '迁移全部知识库、笔记、历史与附件。目标必须为空，校验成功后切换，原目录不删除。' : '选择已有的 FengZaiY工作区，不会合并或搬走当前资料。'}<br>本地工作区不得放入网盘同步目录。请关闭使用这些目录的其他应用实例，包括旧版本。</div><div id="storage-form-error" class="notice danger" role="alert" hidden></div><button type="submit" class="primary">${icon('search-check')}检查目录</button></form>`);
   $('#storage-form').onsubmit = async event => {
@@ -1483,9 +1472,10 @@ const actions = {
   'empty-directories': async () => {
     await persist();
     const plan = await api('emptyDirectoriesPreview');
-    const dialog = openModal('检查废弃空目录', `<p>可清理 ${plan.eligible.length} 项，保留 ${plan.blocked.length} 项。仍在使用的空知识库和系统运行目录会保留。</p>
-      <ul>${plan.eligible.map(item => `<li class="storage-path">${esc(item.name)} · ${item.missing ? '目录已不存在，仅清理登记' : '只剩系统归属标识'}</li>`).join('')}</ul>
-      ${plan.blocked.length ? `<details open><summary>保留原因</summary><ul>${plan.blocked.map(item => `<li class="storage-path">${esc(item.name)}：${esc(item.reason)}</li>`).join('')}</ul></details>` : ''}
+    const dialog = openModal('检查废弃空目录', `<p>当前检查工作区</p><p class="storage-path" id="empty-directories-root">${esc(plan.directory || state.snapshot.localDataDirectory)}</p>
+      <h3>可清理目录 · ${plan.eligible.length} 项</h3>
+      ${plan.eligible.length ? `<ul>${plan.eligible.map(item => `<li class="storage-path"><strong>${esc(item.name)}</strong> · ${item.missing ? '目录已不存在，仅清理登记' : '只剩系统归属标识'}${item.path ? `<br>${esc(item.path)}` : ''}</li>`).join('')}</ul>` : '<p>当前工作区没有符合清理条件的目录。</p>'}
+      ${plan.blocked.length ? `<h3>保留目录 · ${plan.blocked.length} 项</h3><ul>${plan.blocked.map(item => `<li class="storage-path"><strong>${esc(item.name)}</strong>：${esc(item.reason)}${item.path ? `<br>${esc(item.path)}` : ''}</li>`).join('')}</ul>` : ''}
       <p id="directory-clean-error" role="alert" hidden></p>`, `<button class="secondary" data-cancel>取消</button><button class="primary danger-action" id="directory-clean-confirm" ${plan.eligible.length ? '' : 'disabled'}>确认清理空目录</button>`);
     $('[data-cancel]', dialog).onclick = () => dialog.close();
     $('#directory-clean-confirm', dialog).onclick = async event => {
@@ -1510,7 +1500,7 @@ const actions = {
     const preview = await api('storageInternalPreview');
     if (preview.state === 'complete') { toast('系统内部数据已集中存放在 .fengzai-y'); return; }
     if (!await confirmBox('整理系统内部目录', `<p>关闭数据库后，在下次启动时迁移。</p><p class="path-value">${esc(preview.source)} → ${esc(preview.target)}</p><p>${esc(preview.legacyGuard)}</p><p>迁移后须使用支持新目录的客户端，旧版不会打开此工作区。</p>`, '安排重启迁移')) return;
-    await api('storageInternalSchedule', { token: preview.token, confirmed: true }); toast('已安排，下次启动时迁移内部数据');
+    await api('storageInternalSchedule', { token: preview.token, confirmed: true }); await render(); toast('已安排，下次启动时迁移内部数据');
   },
   'storage-change': async target => changeStorage(target.dataset.mode),
   'storage-pick': async () => { if (await pickDirectory($('#storage-target'))) { const error = $('#storage-form-error'); if (error) error.hidden = true; } },

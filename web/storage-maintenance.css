@@ -1,0 +1,13 @@
+.maintenance-heading,.maintenance-row{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px}
+.maintenance-heading h2{margin:0}
+.maintenance-row{padding:12px 0;border-bottom:1px solid var(--line)}
+.maintenance-result{padding:12px 0;border-top:1px solid var(--line);min-width:0}
+.maintenance-result h3{font-size:14px;margin:0 0 8px}
+.maintenance-result p,.storage-issues li{overflow-wrap:anywhere;font-size:13px;line-height:1.7}
+.maintenance-result button{margin:4px 8px 4px 0}
+.storage-advanced{padding:16px 0;border-bottom:1px solid var(--line)}
+.storage-advanced summary,.maintenance-received summary{cursor:pointer;font-size:14px;padding:8px 0}
+.storage-advanced summary span{margin-left:12px;font-size:12px}
+.maintenance-attention{color:#916414}
+.storage-issues{padding-left:20px;color:#9c422f}
+.maintenance-received{margin-top:12px}

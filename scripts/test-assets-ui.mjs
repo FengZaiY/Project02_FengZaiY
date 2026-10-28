@@ -39,7 +39,8 @@ try {
   const choose = async (name, value) => {
     const response = page.waitForResponse(r => r.url().endsWith('/api') && r.request().postDataJSON()?.method === 'assetCatalog');
     await page.getByRole('combobox', { name, exact: true }).selectOption(value);
-    await response;
+    const result = (await (await response).json()).value;
+    await page.waitForFunction(ids => JSON.stringify([...document.querySelectorAll('[data-material-row]')].map(row => row.dataset.materialRow)) === JSON.stringify(ids), result.rows.map(row => row.id));
   };
   // Use visible UI for editing, with original identity retained.
   await row(a).getByRole('button', { name: '编辑资料属性', exact: true }).click();

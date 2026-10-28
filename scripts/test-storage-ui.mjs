@@ -23,8 +23,8 @@ try {
   await page.locator('[data-nav="settings"]').click();
   assert.equal(await page.locator('#storage-current').inputValue(), anchor);
   assert.equal(await page.locator('[data-mode="select"]').isVisible(), true);
-  assert.equal(await page.locator('[data-mode="migrate"]').isVisible(), true);
-  assert.equal(await page.locator('[data-mode="open"]').isVisible(), true);
+  assert.equal(await page.locator('[data-mode="migrate"]').count(), 0);
+  assert.equal(await page.locator('[data-mode="open"]').count(), 0);
   for (const [width, height] of [[1480, 940], [1165, 892], [600, 900]]) {
     await page.setViewportSize({ width, height });
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
@@ -40,17 +40,17 @@ try {
   await page.waitForFunction(() => !document.querySelector('#modal').open);
   assert.equal(app.service.storage.status().pending, null);
   pickerError = '无法完成文件夹选择';
-  await page.locator('[data-mode="open"]').click();
+  await page.locator('[data-mode="select"]').click();
   await page.locator('#toast', { hasText: pickerError }).waitFor();
   pickerError = null;
   assert.equal(await page.locator('#modal').isVisible(), false);
   await page.locator('#agent-preferences-form textarea').fill('尚未保存的偏好');
-  await page.locator('[data-mode="migrate"]').click();
+  await page.locator('[data-mode="select"]').click();
   await page.locator('#toast', { hasText: '请先保存整理偏好' }).waitFor();
   assert.equal(await page.locator('#modal').isVisible(), false);
   await page.locator('#agent-preferences-form textarea').fill('');
   picked = anchor;
-  await page.locator('[data-mode="migrate"]').click();
+  await page.locator('[data-mode="select"]').click();
   await page.locator('#storage-target').waitFor();
   assert.equal(await page.locator('#storage-target').inputValue(), anchor);
   assert.equal(await page.locator('#storage-target').getAttribute('readonly'), '');
@@ -74,7 +74,7 @@ try {
   await page.locator('#storage-form button[type="submit"]').click();
   await page.locator('[data-cancel]').click();
   assert.equal(app.service.storage.status().pending, null);
-  const schedule = async (mode = 'migrate') => {
+  const schedule = async (mode = 'select') => {
     picked = target;
     await page.locator(`[data-mode="${mode}"]`).click();
     await page.locator('#storage-form button[type="submit"]').click();
@@ -85,12 +85,12 @@ try {
   assert.equal(app.service.store.directory, anchor);
   await page.screenshot({ path: path.join(root, 'pending-1165.png'), fullPage: true });
   await page.locator('[data-action="storage-cancel"]').click();
-  await page.locator('[data-mode="migrate"]').waitFor();
+  await page.locator('[data-mode="select"]').waitFor();
   await page.locator('[data-nav="notes"]').click();
   await page.locator(`[data-record="${note.id}"]`).click();
   await page.locator('.tiptap').fill('还没有保存的编辑');
   await page.locator('[data-nav="settings"]').click();
-  await page.locator('[data-mode="migrate"]').click();
+  await page.locator('[data-mode="select"]').click();
   await page.locator('#toast', { hasText: '未保存的笔记' }).waitFor();
   assert.equal(app.service.storage.status().pending, null);
   await page.locator('[data-nav=notes]').click();
@@ -111,6 +111,7 @@ try {
   assert.equal(app.service.store.get(note.id).data.content.includes('还没有保存的编辑'), true);
   await restored.screenshot({ path: path.join(root, 'migrated-1165.png'), fullPage: true });
   if (app.service.localTask) await app.service.localTask;
+  await restored.locator('[data-storage-scan]').click();
   await restored.locator('[data-action="storage-previous-clean"]').click();
   await restored.locator('#modal h2', { hasText: '永久清理迁移旧副本' }).waitFor();
   await restored.locator('[data-cancel]').click();
@@ -129,7 +130,7 @@ try {
   await restored.locator('[data-cancel]').click();
   assert.equal(app.service.storage.status().pending, null);
   assert.equal(app.service.store.directory, target);
-  await restored.locator('[data-mode="open"]').click();
+  await restored.locator('[data-mode="select"]').click();
   await restored.locator('#storage-target').waitFor();
   assert.equal(await restored.locator('#storage-target').inputValue(), picked);
   await restored.locator('[data-modal-close]').click();

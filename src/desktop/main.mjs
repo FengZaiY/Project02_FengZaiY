@@ -14,6 +14,7 @@ import { importClipboardImage } from './clipboard-import.mjs';
 import { ExitCheck, exitActivity } from './exit-check.mjs';
 import { SecretClipboard } from './secret-clipboard.mjs';
 import { userExportPath } from '../core/material-center.mjs';
+import { activateDesktopWindow } from './window-activation.mjs';
 
 protocol.registerSchemesAsPrivileged([{ scheme: 'fengzaiy-media', privileges: { standard: true, secure: true, stream: true } }]);
 
@@ -33,7 +34,7 @@ const secretClipboard = new SecretClipboard(clipboard);
 let activeCalls = 0, installingUpdate = false, allowClose = false;
 if (!app.requestSingleInstanceLock()) app.quit();
 else {
-  app.on('second-instance', () => { if (window) { if (window.isMinimized()) window.restore(); window.focus(); } });
+  app.on('second-instance', () => activateDesktopWindow(window));
   app.whenReady().then(async () => {
   const vault = {
     seal: value => { check(safeStorage.isEncryptionAvailable(), 'Windows credential encryption is unavailable'); return safeStorage.encryptString(value).toString('base64'); },
@@ -225,6 +226,7 @@ else {
     finally { if (counted) activeCalls--; }
   });
   await window.loadFile(entry);
+  if (!smokeTest) activateDesktopWindow(window);
   service.startTimer();
   if (updates.updater && updates.status().autoCheck && !smokeTest) {
     const timer = setTimeout(() => { if (updates.status().autoCheck) void updates.check().catch(() => {}); }, 5000);

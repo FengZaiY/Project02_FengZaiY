@@ -2,11 +2,14 @@ import { libraryMarkerPath } from './legacy-names.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { canonical, check, noSymlink, now, outside, sha } from './util.mjs';
-
-
-
 export function previewEmptyDirectories(store) {
   const events = store.allEvents(), mappings = store.local('libraryDirectories') || {};
+  const eventIds = new Set(events.map(event => event.id)), erasedIds = new Set(store.erasures().map(item => item.entityId));
+  // A batch keeps only version identifiers after permanent erasure; those identifiers need no folder.
+  const referenceEvents = events.map(event => event.type !== 'changeBatch' ? event : {
+    ...event, data: { ...event.data, entries: event.data.entries.filter(entry => !erasedIds.has(entry.id)
+      || [...entry.before, ...entry.after].some(id => eventIds.has(id))) }
+  });
   const bindings = store.db.prepare('SELECT path FROM assets').all().map(row => row.path);
   const links = Object.values(store.local('localFileLinks') || {});
   const pending = [...store.db.prepare('SELECT json FROM pending').all(), ...store.db.prepare('SELECT json FROM rejected').all()];
@@ -17,6 +20,7 @@ export function previewEmptyDirectories(store) {
     const item = { id, name, reason: '', missing: false };
     try {
       const directory = store.directories.location(name);
+      item.path = directory;
       const exists = fs.existsSync(directory);
       item.missing = !exists;
       let domain = id;
@@ -30,7 +34,7 @@ export function previewEmptyDirectories(store) {
       }
       check(typeof domain === 'string' && domain.length > 0, '目录范围无法核验');
       check(!store.get(id)?.versions.some(event => event.type === 'library' && !event.deleted), '知识库仍在使用，空库目录正常保留');
-      check(!events.some(event => event.entityId === id || event.data.domain === domain
+      check(!referenceEvents.some(event => event.entityId === id || event.data.domain === domain
         || JSON.stringify(event.data).includes(JSON.stringify(id))), '知识库或相关修改历史仍存在，请先处理回收内容');
       check(!pending.some(row => row.json.includes(JSON.stringify(id)) || row.json.includes(JSON.stringify(domain))), '仍有待处理同步记录');
       check(!(store.local('workspace')?.tabs || []).some(tab => tab.domain === domain || tab.draft?.domain === domain), '仍有相关工作标签，请先关闭');
@@ -40,7 +44,8 @@ export function previewEmptyDirectories(store) {
     } catch (error) { item.reason = error.message; }
     return item;
   }).sort((a, b) => a.id.localeCompare(b.id));
-  return { eligible: items.filter(item => !item.reason), blocked: items.filter(item => item.reason), token: sha(canonical(items)) };
+  return { directory: store.directory, eligible: items.filter(item => !item.reason), blocked: items.filter(item => item.reason),
+    token: sha(canonical({ directory: store.directory, items })) };
 }
 
 export function cleanEmptyDirectories(store, { confirmed, token } = {}) {

@@ -69,15 +69,15 @@ try {
   assert.equal(await page.getByRole('button', { name: '确认清空 0 项', exact: true }).isDisabled(), true);
   await page.getByRole('button', { name: '取消', exact: true }).click();
   await page.locator('[data-nav=settings]').click();
-  await page.getByRole('button', { name: '重试永久删除清理', exact: true }).waitFor();
+  await page.locator('[data-storage-scan]').click();
+  await page.waitForFunction(() => document.querySelector('[data-storage-results]') && !document.querySelector('[data-storage-results]').hasAttribute('aria-busy'));
+  assert.equal(await page.getByRole('button', { name: '重试永久删除清理', exact: true }).count(), 0);
   for (const width of [1220, 600]) {
     await page.setViewportSize({ width, height: 892 });
-    await page.getByRole('button', { name: '重试永久删除清理', exact: true }).scrollIntoViewIfNeeded();
+    await page.locator('[data-storage-results]').scrollIntoViewIfNeeded();
     await page.screenshot({ path: path.join(root, `cleanup-${width}.png`) });
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
   }
-  await page.getByRole('button', { name: '重试永久删除清理', exact: true }).click();
-  await page.locator('#toast', { hasText: '已重试' }).waitFor();
   const legacy = make('旧版隐藏残留', '旧领域');
   await app.service.organizeLocal();
   store.transaction(() => store.purgeRaw(legacy.id, legacy.heads));
@@ -103,8 +103,12 @@ try {
   assert.ok(store.get(other.id)?.deleted);
   assert.equal(await page.getByRole('button', { name: '检查旧版残留', exact: true }).count(), 0);
   await page.locator('[data-nav=settings]').click();
+  await page.locator('[data-storage-scan]').click();
   await page.getByRole('button', { name: '检查废弃空目录', exact: true }).click();
   await page.getByRole('button', { name: '确认清理空目录', exact: true }).waitFor();
+  assert.equal(await page.locator('#empty-directories-root').innerText(), store.directory);
+  assert.match(await page.locator('#modal').innerText(), /可清理目录.*保留目录/s);
+  assert.match(await page.locator('#modal').innerText(), /旧领域/);
   for (const width of [1220, 600]) {
     await page.setViewportSize({ width, height: 892 });
     await page.screenshot({ path: path.join(root, `directories-${width}.png`) });

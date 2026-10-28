@@ -1,8 +1,8 @@
 import './personal-pages.css';
 
-export const businessLabels = { personalTask: '任务', personalProject: '项目', loginAccount: '账号', subscription: '订阅', moneyAccount: '资金账户', moneyEntry: '收支与转账', moneyBudget: '预算', materialCollection: '资料集合' };
+export const businessLabels = { personalTask: '任务', personalProject: '项目', loginAccount: '账号', subscription: '订阅', moneyAccount: '资金账户', moneyEntry: '收支与转账', moneyBudget: '预算', materialCollection: '用途集合' };
 const groups = { tasks: ['personalTask', 'personalProject'], accounts: ['loginAccount', 'subscription'], finance: ['overview', 'moneyEntry', 'moneyAccount', 'moneyBudget'], materials: ['materialCollection'] };
-const views = { tasks: '任务管理', accounts: '账号与订阅', finance: '财务管理', materials: '资料集合' };
+const views = { tasks: '任务管理', accounts: '账号与订阅', finance: '财务管理', materials: '用途集合' };
 const digits = { CNY: 2, USD: 2, EUR: 2, HKD: 2, JPY: 0, GBP: 2, AUD: 2, CAD: 2, SGD: 2, TWD: 2, KRW: 0, CHF: 2, KWD: 3, BHD: 3 };
 const currencies = Object.fromEntries(Object.keys(digits).map(code => [code, code]));
 const statusLabels = { todo: '待办', doing: '进行中', done: '已完成', cancelled: '已取消', active: '使用中', archived: '已归档', paused: '已暂停' };
@@ -15,7 +15,7 @@ const fields = {
   moneyAccount: [['kind', '账户性质', 'select', { cash: '现金 / 银行', asset: '其他资产', liability: '负债（欠款记负数）' }], ['currency', '币种', 'select', currencies], ['opening', '期初余额', 'money'], ['openingDate', '期初日期', 'date'], ['rate', '折算汇率（1 外币兑人民币）', 'text'], ['content', '备注', 'textarea']],
   moneyEntry: [['kind', '账目类型', 'select', kinds], ['accountId', '资金账户', 'ref', 'moneyAccount'], ['amount', '金额', 'money'], ['currency', '币种', 'select', currencies], ['date', '记账日期', 'date'], ['category', '分类', 'text'], ['rate', '本次人工汇率（外币填写）', 'text'], ['toAccountId', '转入账户（转账）', 'ref', 'moneyAccount'], ['toAmount', '到账金额（转账）', 'money'], ['refundOf', '原支出（退款）', 'ref', 'expense'], ['content', '备注', 'textarea'], ['assetIds', '票据 / 关联资料', 'multi', 'asset']],
   moneyBudget: [['month', '预算月份', 'month'], ['category', '支出分类', 'text'], ['amount', '预算金额', 'money'], ['currency', '币种', 'select', currencies]],
-  materialCollection: [['description', '集合说明', 'textarea']]
+  materialCollection: [['description', '用途说明', 'textarea']]
 };
 const today = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
 export function moneyText(value = 0, currency = 'CNY') {

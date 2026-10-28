@@ -24,6 +24,7 @@ try {
   assert.equal(app.service.personal.list({ type: 'personalTask' }).length, 1);
   const firstTask = app.service.personal.list({ type: 'personalTask' })[0];
   await page.locator('[data-personal=new]').click();
+  await page.waitForFunction(() => document.querySelector('#personal-form [name=title]')?.value === '');
   await page.locator('#personal-form [name=title]').fill('核对另一份清单');
   await page.locator('#personal-form button[type=submit]').click();
   await page.waitForFunction(() => document.querySelector('#personal-save-state')?.textContent === '已保存');
@@ -91,10 +92,11 @@ try {
   await page.screenshot({ path: path.join(root, 'changes-desktop.png'), fullPage: true });
   await page.locator('[data-nav=assets]').click(); await page.locator('.material-manager').waitFor();
   assert.ok((await page.locator('h1').textContent()).includes('资料管理'));
+  await page.locator('#material-collections summary').click();
   await page.locator('[data-nav=materials]').click(); await page.locator('[data-personal=new]').click();
   await page.locator('#personal-form [name=title]').fill('年度资料'); await page.locator('#personal-form button[type=submit]').click();
   await page.waitForFunction(() => document.querySelector('#personal-save-state')?.textContent === '已保存');
   await page.reload(); await page.locator('.personal-page').waitFor();
-  assert.ok((await page.locator('.personal-page-heading h1').textContent()).includes('资料集合'));
+  assert.ok((await page.locator('.personal-page-heading h1').textContent()).includes('用途集合'));
   assert.deepEqual(errors, []); console.log('Personal UI passed: five modules, same-board selection/search, protected drafts, finance, vault, history, restore and narrow viewport.');
 } finally { await browser?.close(); await app.close(); }

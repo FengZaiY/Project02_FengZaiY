@@ -127,3 +127,7 @@
 .material-topic-row .text-button, .material-category-tree summary .text-button { white-space: normal; overflow-wrap: anywhere; text-align: left; }
 .material-organization [aria-pressed="true"] { color: #126e51; background: #e7f5ed; }
 .path-value { overflow-wrap: anywhere; white-space: normal; display: block; }
+.material-optional{padding:10px 0;border-bottom:1px solid var(--line);font-size:13px}
+.material-optional summary{cursor:pointer;color:var(--muted)}
+.material-collection-controls{display:flex;flex-wrap:wrap;align-items:end;gap:12px;padding:10px 0}
+.material-collection-controls .material-filter{width:240px;max-width:100%;min-width:0}
