@@ -1,6 +1,7 @@
 import './update-manager.css';
 import { fengzaiyUpdateSource } from '../package.json';
 import { sourceLabel } from '../src/desktop/update-source.mjs';
+import { updateNotesMarkup } from './update-notes.js';
 
 const phases = { preview: '浏览器开发预览', development: '桌面开发模式', unconfigured: '尚未配置更新来源',
   'configuration-error': '更新来源配置有误', idle: '尚未检查', checking: '正在检查更新', available: '发现新版本',
@@ -43,7 +44,7 @@ export function createUpdateUI({ api, native, esc, icon, bytes, formatTime, redr
         ${['downloading', 'paused'].includes(status.phase) || retry ? `<button class="secondary" data-update="restart">${icon('rotate-ccw')}重新下载</button>` : ''}
         ${status.phase === 'downloaded' ? `<button class="primary" data-update="install">${icon('rotate-cw')}重启并更新</button><button class="secondary" data-update="later">稍后更新</button>` : ''}</div>
       <label class="check-row"><input id="update-auto-check" type="checkbox" ${status.autoCheck ? 'checked' : ''} ${disabled() || saving || busy ? 'disabled' : ''}>启动后检查更新</label>
-      ${status.releaseNotes ? `<details class="update-notes" open><summary>更新说明${status.releaseDate ? ` · ${formatTime(status.releaseDate)}` : ''}</summary><pre>${esc(status.releaseNotes)}</pre></details>` : ''}`;
+      ${status.releaseNotes ? `<details class="update-notes" open><summary>更新说明${status.releaseDate ? ` · ${formatTime(status.releaseDate)}` : ''}</summary><div class="update-notes-body">${updateNotesMarkup(status.releaseNotes)}</div></details>` : ''}`;
     host.querySelectorAll('[data-update]').forEach(button => {
       if (pending.has(button.dataset.update)) button.disabled = true;
       button.onclick = () => void action(button.dataset.update);

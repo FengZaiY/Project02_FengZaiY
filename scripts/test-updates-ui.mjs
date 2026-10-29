@@ -9,12 +9,13 @@ import { UpdateManager } from '../src/desktop/updates.mjs';
 const root = path.resolve('artifacts/ui-updates'); fs.mkdirSync(root, { recursive: true });
 const app = await createServer({ directory: fs.mkdtempSync(path.join(root, 'profile-')), port: 0 });
 let browser, page, finishDownload, failDownload, installs = 0, rejectSaves = false, downloads = 0, resets = 0;
-const errors = [];
+const errors = [], remoteRequests = [];
 try {
   try { browser = await chromium.launch({ headless: true }); }
   catch { browser = await chromium.launch({ channel: 'msedge', headless: true }); }
   page = await browser.newPage({ viewport: { width: 1304, height: 892 } });
   page.on('pageerror', error => errors.push(error.message));
+  page.on('request', request => { if (request.url().startsWith('https://updates.example.test/track')) remoteRequests.push(request.url()); });
   await page.goto(app.url); await page.locator('[data-nav=settings]').click();
   await page.locator('#upgrade-settings', { hasText: '浏览器开发预览' }).waitFor();
   assert.match(await page.locator('#upgrade-settings').innerText(), /github.com\/FengZaiY\/Project02_FengZaiY\/releases/);
@@ -28,7 +29,7 @@ try {
   const engine = new EventEmitter();
   engine.checkForUpdates = async () => {
     engine.emit('checking-for-update'); engine.emit('update-available');
-    return { updateInfo: { version: '0.2.0', releaseNotes: '更新笔记编辑体验\n<script>window.updateScriptExecuted=true</script>\n' + '更新说明 '.repeat(25) } };
+    return { updateInfo: { version: '0.2.0', releaseNotes: '<h1>FengZaiY 更新</h1><h2>本轮变化</h2><ul><li>更新笔记编辑体验</li></ul>\n\n**保留修改记录**\n<script>window.updateScriptExecuted=true</script>\n<img src="https://updates.example.test/track" onerror="window.updateScriptExecuted=true"><iframe src="https://updates.example.test/track"></iframe><a href="javascript:alert(1)">安全文本</a><style>body{display:none}</style>\n' + '更新说明 '.repeat(25) } };
   };
   engine.downloadUpdate = token => new Promise((resolve, reject) => {
     downloads++; failDownload = () => reject(new Error('isolated network failure'));
@@ -60,6 +61,11 @@ try {
   await page.locator('[data-update=download]').waitFor();
   assert.equal(await page.locator('#upgrade-settings script').count(), 0);
   assert.equal(await page.evaluate(() => window.updateScriptExecuted), undefined);
+  assert.equal(await page.locator('.update-notes-body h1').innerText(), 'FengZaiY 更新');
+  assert.equal(await page.locator('.update-notes-body li').innerText(), '更新笔记编辑体验');
+  assert.equal(await page.locator('.update-notes-body strong').innerText(), '保留修改记录');
+  assert.equal(await page.locator('.update-notes-body img,.update-notes-body iframe,.update-notes-body a,.update-notes-body style').count(), 0);
+  assert.doesNotMatch(await page.locator('.update-notes-body').innerText(), /<h1>|<li>|window.updateScriptExecuted/);
   await page.locator('#update-auto-check').uncheck();
   assert.equal(manager.status().autoCheck, false);
   await page.locator('#agent-preferences-form textarea').fill('不能被更新操作丢弃的偏好');
@@ -131,5 +137,6 @@ try {
     await page.screenshot({ path: path.join(root, `downloaded-${width}.png`) });
   }
   assert.deepEqual(errors, []);
+  assert.deepEqual(remoteRequests, [], 'release notes must not load remote resources');
   console.log('PASS: pause/resume/restart/failure recovery, preview restrictions, progress across navigation, unsaved preferences, explicit install and responsive layouts. No real installer executed.');
 } finally { await browser?.close(); await app.close(); }

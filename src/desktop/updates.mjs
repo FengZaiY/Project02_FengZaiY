@@ -1,5 +1,6 @@
 import { updateSource, sourceLabel } from './update-source.mjs';
 import { CancellationToken } from 'builder-util-runtime';
+import { updateFailure } from './update-errors.mjs';
 
 const requireState = (condition, message) => { if (!condition) throw new Error(message); };
 const releaseText = notes => (Array.isArray(notes) ? notes.map(note => `${note.version || ''}\n${note.note || ''}`).join('\n\n') : String(notes || '')).slice(0, 20000);
@@ -10,7 +11,7 @@ export class UpdateManager {
     this.notify = notify;
     this.saveAutoCheck = saveAutoCheck;
     this.state = { currentVersion: version, phase: 'idle', latestVersion: '', releaseNotes: '', releaseDate: null,
-      checkedAt: null, progress: null, error: '', autoCheck, source: '', supported: packaged && platform === 'win32' };
+      checkedAt: null, progress: null, error: '', errorCode: '', autoCheck, source: '', supported: packaged && platform === 'win32' };
     try { this.source = updateSource(source); this.state.source = sourceLabel(this.source); }
     catch (error) { this.state.error = error.message; this.state.phase = 'configuration-error'; return; }
     if (!this.state.supported) { this.state.phase = 'development'; return; }
@@ -36,11 +37,11 @@ export class UpdateManager {
     });
   }
   status() { return structuredClone(this.state); }
-  set(change) { Object.assign(this.state, change); this.notify(this.status()); return this.status(); }
+  set(change) { Object.assign(this.state, change, change.error === '' ? { errorCode: '' } : {}); this.notify(this.status()); return this.status(); }
   fail(error, failedOperation = '') {
     // Do not leak cache paths, request headers or raw remote responses into the renderer.
-    const code = String(error?.code || 'NETWORK_OR_FILE_ERROR').replace(/[^A-Z0-9_]/g, '').slice(0, 80);
-    return this.set({ phase: 'error', failedOperation, error: `更新操作未完成（${code || 'UNKNOWN'}）。请检查网络、磁盘空间与发布文件后重试。`,
+    const failure = updateFailure(error);
+    return this.set({ phase: 'error', failedOperation, errorCode: failure.code, error: failure.message,
       progress: failedOperation === 'download' ? this.state.progress : null });
   }
   configure({ autoCheck }) {

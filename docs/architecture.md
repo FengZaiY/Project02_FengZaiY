@@ -1,5 +1,11 @@
 # Architecture
 
+## Desktop update redirects and release notes (2026-10-29)
+
+Update checks remain with electron-updater. Installer bytes use `update-network.mjs`: Electron net.request exposes each manual redirect as a response and aborts that hop; UpdateDownload validates the next URL, bounds hops and strips authorization/cookies across origins before requesting it. Native streaming retains backpressure, abort and system network handling. This replaces net.fetch with redirect=manual, which cancelled redirects instead of returning a response in the tested Electron runtime. No automatic insecure or alternate-source fallback is used. Existing Range cache, SHA512, signature/install workflow and local exit gates are unchanged.
+
+`update-errors.mjs` maps safe identifiers for network, timeout, redirect, disk and integrity failures without returning raw messages/paths/remote responses. `web/update-notes.js` parses Markdown/HTML with existing marked/DOMPurify, allowing only text formatting and no attributes, scripts, embedded resources or links. Published installers retain their original code: this source fix requires a later release, and an affected updater needs a manual installation to acquire the fix. Evidence: [update verification](verification-update-download-2026-10-29.md).
+
 ## Read and file-work performance (2026-10-29)
 
 `read-index.mjs` builds a connection-local TEMP index of current-head metadata. TEMP triggers track head, revision JSON and delivery changes; rollback restores index state. Store list filtering/pagination selects entity IDs before loading bodies, retaining all matched branches and the original search/deletion semantics. Search remains a linear canonical-JSON substring match, not a full-text index. Library summaries and compact note navigation use cloned caches invalidated by the read epoch; transaction reads bypass caching and transaction completion clears it. No immutable history or shared schema is rewritten.

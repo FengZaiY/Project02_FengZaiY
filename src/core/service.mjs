@@ -125,7 +125,7 @@ export class Service {
     return { ...summary, readEpoch: `${this.store.readGeneration}:${this.store.readEpoch()}`, sync: this.transport.config(),
       ...(!light ? { libraries: this.store.directories.describe(this.store.libraries()),
         workspace: this.store.local('workspace') || { tabs: [], selectedTab: null } } : {}),
-      version: '0.1.16', uiProtocol: UI_PROTOCOL, localDataDirectory: this.store.directory, localHierarchy: this.localHierarchy.status(), deletion: deletionStatus(this.store),
+      version: '0.1.17', uiProtocol: UI_PROTOCOL, localDataDirectory: this.store.directory, localHierarchy: this.localHierarchy.status(), deletion: deletionStatus(this.store),
       skillInstallations: this.skillInstallations.summary(), agentPending: this.agentOperations.list().filter(item => item.state === 'pending').length };
   }
   async finishDeletion() {

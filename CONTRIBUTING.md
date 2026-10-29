@@ -36,6 +36,8 @@ Windows 预览的目录按钮通过已鉴权的界面接口调用系统文件夹
 
 ## 验证矩阵
 
+更新下载适配须运行 `node --test tests/updates.test.mjs tests/update-download.test.mjs tests/exit-check.test.mjs`、`npm run test:updates-desktop`，构建后运行 `test:updates`、`test:ui`、`test:desktop` 和 `test:exit`。真实 Electron 专项使用隔离 HTTP 服务覆盖 301/302、跨源凭据剥离、跳转后的 Range 续传、等待响应/跳转时取消、循环/异常地址、断流保留和损坏拒绝；生产仍仅 HTTPS。不要以 Node fetch 或直连下载成功替代 GitHub 跳转链验证，也不执行真实安装器。
+
 性能专项：`npm run test:performance` 验证分页/冲突/回滚、增量正文投影及同句柄工作线程；构建后 `npm run test:performance-ui` 与 `npm run test:performance-desktop` 验证编辑器/撤销保留、真实缩略图缓存及原件变化失效。`npm run benchmark` 为万条记录基准，`npm run benchmark:service` 为千条笔记服务冷/热读取基准；结果在 `artifacts/performance`。隔离样本不代表每台电脑的实际响应保证。底层索引/读取改动另运行完整核心及资料、层级、草稿、启动和桌面回归。
 
 删除笔记后的导航使用 `node scripts/test-note-delete-navigation.mjs`：覆盖取消、版本冲突、成功关闭标签、回退其他笔记与刷新恢复、最后一篇空状态、回收站恢复，以及延迟响应不替换新选择或破坏编辑撤销。测试仅使用隔离资料。

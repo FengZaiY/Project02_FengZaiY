@@ -9,6 +9,7 @@ import { check, prettyError, uuid, isId, noSymlink, atomicWrite } from '../core/
 import updaterPackage from 'electron-updater';
 import { UpdateManager, assertUpdateIdle } from './updates.mjs';
 import { attachUpdateDownload } from './update-download.mjs';
+import { createUpdateFetch } from './update-network.mjs';
 import { mediaResponse } from '../core/media.mjs';
 import { importClipboardImage } from './clipboard-import.mjs';
 import { ExitCheck, exitActivity } from './exit-check.mjs';
@@ -86,7 +87,7 @@ else {
     autoCheck: updateSettings.autoCheck !== false,
     saveAutoCheck: autoCheck => atomicWrite(updateSettingsFile, JSON.stringify({ autoCheck })),
     createUpdater: source => attachUpdateDownload(new updaterPackage.NsisUpdater(source), {
-      directory: path.join(app.getPath('userData'), 'update-downloads'), fetch: (url, options) => net.fetch(url, options)
+      directory: path.join(app.getPath('userData'), 'update-downloads'), fetch: createUpdateFetch(net)
     }),
     notify: status => {
       if (installingUpdate && status.phase === 'error') {

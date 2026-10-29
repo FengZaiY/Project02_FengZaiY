@@ -12,8 +12,26 @@ import updaterPackage from 'electron-updater';
 import { HttpExecutor } from 'builder-util-runtime';
 import { ElectronHttpExecutor } from 'electron-updater/out/electronHttpExecutor.js';
 import { attachUpdateDownload } from '../src/desktop/update-download.mjs';
+import { updateFailure } from '../src/desktop/update-errors.mjs';
 
 const source = { provider: 'generic', url: 'https://updates.example.test/fengzaiy/' };
+test('update failures classify native network, redirect, disk and integrity errors without disclosing raw details', () => {
+  const secret = 'https://private.example/?token=secret C:\\private\\path';
+  for (const [error, code, hint] of [
+    [new Error('Redirect was cancelled'), 'UPDATE_REDIRECT_FAILED', '跳转'],
+    [new Error(`net::ERR_CONNECTION_RESET ${secret}`), 'ERR_CONNECTION_RESET', '网络'],
+    [new Error(`net::ERR_CERT_DATE_INVALID ${secret}`), 'ERR_CERT_DATE_INVALID', '安全连接'],
+    [Object.assign(new Error(secret), { cause: { code: 'ENOSPC' } }), 'ENOSPC', '空间不足'],
+    [Object.assign(new Error(secret), { code: 'EPERM' }), 'EPERM', '占用'],
+    [Object.assign(new Error(secret), { code: 'ERR_CHECKSUM_MISMATCH' }), 'ERR_CHECKSUM_MISMATCH', '完整性'],
+    [Object.assign(new Error(secret), { code: 'UPDATE_TIMEOUT' }), 'UPDATE_TIMEOUT', '超时'],
+    [Object.assign(new Error(secret), { code: 'HTTP_404' }), 'HTTP_404', '不存在'],
+    [new Error(secret), 'NETWORK_OR_FILE_ERROR', '发布文件']
+  ]) {
+    const result = updateFailure(error); assert.equal(result.code, code); assert.ok(result.message.includes(hint));
+    assert.doesNotMatch(result.message, /private|secret|https:|token=/);
+  }
+});
 function setup(options = {}) {
   const engine = new EventEmitter();
   engine.checkForUpdates = async () => {
@@ -86,8 +104,10 @@ test('failed checks, failed integrity, concurrent clicks and outdated download e
   engine.checkForUpdates = async () => { throw Object.assign(new Error('private/path'), { code: 'ECONNRESET' }); };
   const failure = await manager.check();
   assert.equal(failure.phase, 'error'); assert.equal(failure.error.includes('private/path'), false);
+  assert.equal(failure.errorCode, 'ECONNRESET');
   engine.checkForUpdates = async () => { engine.emit('update-available'); return { updateInfo: { version: '0.2.0' } }; };
   await manager.check();
+  assert.equal(manager.status().errorCode, '');
   engine.downloadUpdate = async () => { engine.emit('update-downloaded', { version: '0.1.9' }); throw Object.assign(new Error('bad hash'), { code: 'ERR_CHECKSUM_MISMATCH' }); };
   assert.equal((await manager.download()).phase, 'error'); assert.throws(() => manager.install());
   engine.emit('update-downloaded', { version: '0.2.0' });

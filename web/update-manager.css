@@ -4,6 +4,9 @@
 .update-details dt,.update-note{color:var(--muted)}.update-details dd{margin:0;overflow-wrap:anywhere}
 .update-note{font-size:13px;line-height:1.7}.update-actions{margin:16px 0}.update-actions button{white-space:normal}
 .update-progress{display:grid;gap:8px;margin:16px 0;font-size:13px}.update-progress progress{width:100%;accent-color:#267d60}
-.update-notes{margin-top:16px}.update-notes pre{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;font-size:13px;line-height:1.7;max-height:280px;overflow:auto}
+.update-notes{margin-top:16px}.update-notes-body{font-size:13px;line-height:1.7;max-height:280px;overflow:auto;overflow-wrap:anywhere;margin-top:12px}
+.update-notes-body h1,.update-notes-body h2,.update-notes-body h3,.update-notes-body h4,.update-notes-body h5,.update-notes-body h6{font-size:15px;line-height:1.5;margin:12px 0 6px}
+.update-notes-body p{margin:6px 0}.update-notes-body ul,.update-notes-body ol{padding-left:24px;margin:6px 0}
+.update-notes-body pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px}.update-notes-body table{border-collapse:collapse;max-width:100%}.update-notes-body td,.update-notes-body th{padding:4px 8px;border:1px solid var(--line)}
 .nav-item.has-update::after{content:'';width:7px;height:7px;border-radius:50%;background:#b64a39;margin-left:auto;flex-shrink:0}
 .settings-shortcuts{display:flex;gap:8px;flex-wrap:wrap}

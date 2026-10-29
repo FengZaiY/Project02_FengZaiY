@@ -28,11 +28,11 @@ export class UpdateDownload {
     let target = new URL(url);
     for (let count = 0; count < 10; count++) {
       check((target.protocol === 'https:' || this.allowLoopback && target.protocol === 'http:' && target.hostname === '127.0.0.1')
-        && !target.username && !target.password, 'Invalid update download URL');
+        && !target.username && !target.password, 'Invalid update download URL', 'UPDATE_URL_INVALID');
       const response = await this.fetch(target.href, { headers, signal, redirect: 'manual', credentials: 'omit', cache: 'no-store' });
       if (![301, 302, 303, 307, 308].includes(response.status)) return response;
       await response.body?.cancel();
-      check(response.headers.get('location'), 'Missing update redirect');
+      check(response.headers.get('location'), 'Missing update redirect', 'UPDATE_REDIRECT_FAILED');
       const next = new URL(response.headers.get('location'), target);
       if (next.origin !== target.origin) { headers.delete('authorization'); headers.delete('cookie'); }
       target = next;
@@ -47,9 +47,9 @@ export class UpdateDownload {
     const file = this.file(key), token = options.cancellationToken, controller = new AbortController();
     const cancel = () => controller.abort();
     token.onCancel(cancel); this.running = true;
-    let handle, response, timeout;
+    let handle, response, timeout, timedOut = false;
     const active = () => { if (token.cancelled) throw new CancellationError(); };
-    const armTimeout = () => { clearTimeout(timeout); timeout = setTimeout(() => controller.abort(), 60000); timeout.unref?.(); };
+    const armTimeout = () => { clearTimeout(timeout); timeout = setTimeout(() => { timedOut = true; controller.abort(); }, 60000); timeout.unref?.(); };
     try {
       active(); await fs.promises.mkdir(this.directory, { recursive: true });
       if (this.fresh) { await fs.promises.rm(file, { force: true }); this.fresh = false; }
@@ -114,6 +114,7 @@ export class UpdateDownload {
       return await promote();
     } catch (error) {
       if (token.cancelled) throw new CancellationError();
+      if (timedOut) throw failure('Update download timed out', 'UPDATE_TIMEOUT');
       throw error;
     } finally {
       clearTimeout(timeout); controller.abort();
