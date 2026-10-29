@@ -139,7 +139,7 @@ try {
   await page.locator('[data-action="toggle-source"]').click();
   await page.locator(`#source-pane [data-record="${source.id}"]`).waitFor();
   await page.screenshot({ path: path.join(root, 'proposal-sources.png'), fullPage: true });
-  await page.locator(`#source-pane [data-record="${source.id}"]`).click();
+  await page.locator(`#source-pane [data-record="${source.id}"]`).click({ modifiers: ['Control'] });
   await page.locator('.source-url a').waitFor();
   assert.equal(await page.locator('.source-url a').getAttribute('href'), 'https://example.invalid/course');
   await page.locator('.work-tab', { hasText: '外部 Agent 整理方案' }).click();

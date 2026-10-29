@@ -21,7 +21,7 @@ try {
     return { url: status.mcpUrl, token: grant.token, preferencesVersion: status.preferences.version };
   });
   const env = { FENGZAIY_AGENT_URL: bootstrap.url, FENGZAIY_AGENT_TOKEN: bootstrap.token };
-  const request = operation => call('operation', { operation, input: {}, preferencesVersion: bootstrap.preferencesVersion }, uuid(), env);
+  const request = (operation, input = {}) => call('operation', { operation, input, preferencesVersion: bootstrap.preferencesVersion }, uuid(), env);
   const status = await request('updateStatus');
   await page.locator('[data-nav=agents]').click();
   await page.locator(`[data-review-request="${status.id}"]`).click();
@@ -30,6 +30,23 @@ try {
   await page.waitForFunction(id => document.querySelector(`[data-request="${id}"]`)?.textContent.includes('已完成'), status.id);
   const result = await call('operationResult', { id: status.id }, undefined, env);
   assert.equal(result.state, 'completed'); assert.equal(result.value.phase, 'development');
+  const source = path.join(fs.mkdtempSync(path.join(root, 'source-')), 'native-import.pdf'); fs.writeFileSync(source, 'isolated native import');
+  const library = await page.evaluate(() => window.desktop.call('librarySave', { title: '桌面导入目标' }));
+  const fileRequest = await request('assetImport', { path: source, domain: library.data.domain });
+  await page.evaluate(library => window.desktop.call('librarySave', { id: library.id, parents: library.heads, title: '新的桌面导入目标' }), library);
+  await page.locator('[data-refresh-requests]').click();
+  await page.locator(`[data-review-request="${fileRequest.id}"]`).click();
+  await page.locator('#agent-request-recheck').waitFor();
+  assert.equal(await page.locator('#agent-request-approve').isDisabled(), true);
+  await page.locator('#agent-request-recheck').click();
+  await page.waitForFunction(() => document.querySelector('#modal')?.open && !document.querySelector('#agent-request-recheck') && !document.querySelector('#agent-request-approve')?.disabled);
+  assert.equal((await call('operationResult', { id: fileRequest.id }, undefined, env)).state, 'pending');
+  assert.equal((await page.evaluate(() => window.desktop.call('assets', {}))).length, 0);
+  await page.screenshot({ path: path.join(root, 'native-import-rechecked.png') });
+  await page.locator('#agent-request-approve').click();
+  await page.waitForFunction(() => !document.querySelector('#modal').open);
+  assert.equal((await call('operationResult', { id: fileRequest.id }, undefined, env)).state, 'completed');
+  assert.equal((await page.evaluate(() => window.desktop.call('assets', {}))).length, 1);
   const install = await request('updateInstall');
   await page.locator('[data-refresh-requests]').click();
   await page.locator(`[data-review-request="${install.id}"]`).click();
@@ -40,5 +57,5 @@ try {
   assert.equal(await page.locator('[data-update=install]').count(), 0);
   await page.screenshot({ path: path.join(root, 'native-request-settings.png') });
   assert.deepEqual(errors, []);
-  console.log('PASS: actual Electron MCP -> native update status result; install request enters local settings without executing installation.');
+  console.log('PASS: actual Electron MCP, local import recheck before separate approval, update status and local-only installer workflow; no installation executed.');
 } finally { await app.close(); }

@@ -14,15 +14,32 @@
 
 MCP 配置示例不包含真实凭证，由受信任界面显示/复制。已连接 MCP 的 Agent 不需要脚本环境变量或 Node；凭证在宿主连接设置中管理。Skill 安装副本仍只是快照，bootstrap 返回的最新规则优先。
 
+## 工具路由与结果核验
+
+完整操作规则见 [SKILL.md 的工具路由与进度核验](../SKILL.md#fengzaiy-工具路由与进度核验)。宿主工具前缀以实际发现结果为准；Codex 的 `list_artifacts` 不查询 FengZaiY，返回空列表不能作为原件缺失证据。遇到无关工具或返回结构不匹配，停止同类重复并重新发现正确接口；无法发现则说明缺少的工具，不反复调用 bootstrap 代替业务操作。
+
+| 目标 | 实际 MCP 工具 | 完成依据 |
+| --- | --- | --- |
+| 查询既有原件 | `FengZaiY_search`，`type:asset`、`domain:__materials__`；或 `FengZaiY_operation(assetCatalog)` | `FengZaiY_record` 核对附件身份，旧归属可省略 domain 查询 |
+| 导入已知本机文件 | `FengZaiY_operation_catalog` 后 `FengZaiY_operation(assetImport)` | 返回操作 ID 只证明提交，须等待本机确认 |
+| 核对导入结果 | `FengZaiY_operation_result`，传返回的操作 ID | `completed` 且 `record` 能读取返回附件 ID；不是 requestId 或文件名 |
+| 补齐笔记附件 | `FengZaiY_record` → `FengZaiY_note_update` → `FengZaiY_record` | 合并 `data.assetIds`，完整保留正文等字段、传读取时 heads，回读核对保存内容 |
+
+`isError:true` 时读取实际错误码和消息；pending、local_action_required 及 bootstrap 成功不代表业务完成。一次请求重试保留 requestId 和正文；失败、过期或拒绝后重新核对，不通过换 ID 或上传方式跳过本机确认。只新增附件关联不调用 relation_create 代替 assetIds。源码验证、安装包升级、技能副本更新与已打开对话的重新加载分别核验，不能互相替代。
+
 ## 扩展操作
 
 - `operationCatalog {}`：返回固定操作目录，含 method、label、mode、允许的顶层 parameters；不是任意 Service 转发。
 - `operation {operation, input, requestId, preferencesVersion}`：所有调用先读取 bootstrap 最新偏好。`read` 当次返回 `{state:"completed",value}`；`secret` 每次检查密码库，锁定返回 VAULT_LOCKED，不缓存结果；`confirm` 与 `local` 返回 `{id,state:"pending",...}`。
 - `operationResult {id}`：仅发起凭证可查询。completed 才能认为服务操作成功；pending 等待用户在“外部 Agent → 操作请求”处理，local_action_required 需本机专用流程，不能当作已执行。失败/中断不能自动重跑，先核对实际状态。
 
-请求 30 分钟内有效；本机查看明确参数与影响预览后确认。确认重验凭证、偏好、全部版本头、同步/存储/授权配置及未保存内容。状态变化须重新读取、整理并发起新请求，不替换版本号规避检查。每次业务操作唯一 requestId；相同请求重试不会重复执行，同 ID 换参数报冲突。旧 trash 工具也返回待确认请求。一般业务具名写入仍沿用直接写入流程。
+请求 30 分钟内有效；本机查看明确参数与影响预览后确认。一般操作确认重验凭证、偏好、全部版本头、同步/存储/授权配置及未保存内容。状态变化须重新读取、整理并发起新请求，不替换版本号规避检查。每次业务操作唯一 requestId；相同请求重试不会重复执行，同 ID 换参数报冲突。旧 trash 工具也返回待确认请求。一般业务具名写入仍沿用直接写入流程。
 
-Skill 仅更新最近检查时间不使请求过期，实际安装状态或配置变化仍校验。旧版本已过期请求不能直接重置快照；读取最新状态后使用新 requestId 发起。用户拒绝后请求从本机列表隐藏，operationResult 仍返回 rejected；同 requestId 重试仍为拒绝，不会重新执行。
+`assetImport` 是范围明确的例外：新请求只绑定工作区/存储计划、目标知识库、发起凭证及偏好，多个独立导入可依次确认，无关笔记保存不使其失效。本机预览展示实际文件与归属，确认检查文件身份、大小和修改状态。未到期且偏好未变的待确认导入（含旧版全库快照请求）可由用户点击“重新核对”，检查当前文件和目标后再单独“确认执行”；参数和原到期时间不变，旧令牌失效。不向 Agent 提供 agentOperationRecheck 或确认执行能力。文件缺失、目标无效须先处理；偏好变化、到期、拒绝或执行结束不能靠重新核对重启旧请求。
+
+本机显示已知的失效原因（目标知识库、存储配置、授权或偏好），旧请求无法还原具体原因时不会猜测。确认时文件/状态变化会刷新预览，仍由用户再次确认，不自动重发导入；文件恢复后可“刷新预览”。请求已到期须重新读取 bootstrap 后新建请求，不重复提交旧 requestId。排查时区分安装版与源码预览，不能用预览修复成功推断安装版已经更新。
+
+Skill 仅更新最近检查时间不使一般请求过期，实际安装状态或配置变化仍校验。除上述导入的本机重新核对外，失效请求须读取最新状态后使用新 requestId 发起。用户拒绝后请求从本机列表隐藏，operationResult 仍返回 rejected；同 requestId 重试仍为拒绝，不会重新执行。
 
 操作参数 input 只接受目录声明的字段；嵌套业务 data 使用已有实体字段和基础 parents。示例：
 

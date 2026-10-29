@@ -72,6 +72,97 @@ try {
   assert.equal(await page.locator('#agent-request-approve').isDisabled(), true);
   await page.locator('#agent-request-reject').click();
   await page.waitForFunction(() => !document.querySelector('#modal').open);
+  const source = fs.mkdtempSync(path.join(root, 'source-'));
+  const first = path.join(source, 'first.pdf'), second = path.join(source, 'second.pdf');
+  fs.writeFileSync(first, 'isolated first pdf'); fs.writeFileSync(second, 'isolated second pdf');
+  const importA = await request('assetImport', { path: first, domain: '__materials__' });
+  const importB = await request('assetImport', { path: second, domain: '__materials__' });
+  for (const item of [importA, importB]) {
+    await page.locator('[data-refresh-requests]').click();
+    await page.locator(`[data-review-request="${item.id}"]`).click();
+    await page.locator('.agent-review').waitFor({ state: 'visible' });
+    assert.equal(await page.locator('#agent-request-approve').isEnabled(), true);
+    await page.locator('#agent-request-approve').click();
+    await page.waitForFunction(() => !document.querySelector('#modal').open);
+  }
+  assert.equal(app.service.store.list({ type: 'asset' }).length, 2);
+  const legacyImport = await request('assetImport', { path: second, domain: '__materials__' });
+  const queue = app.service.agentOperations.entries(), entry = queue.find(item => item.id === legacyImport.id);
+  const payload = app.service.agentOperations.open(entry.payload); delete payload.snapshotKind;
+  payload.snapshot = app.service.agentOperations.snapshot(); entry.payload = app.service.agentOperations.seal(payload); app.service.agentOperations.save(queue);
+  app.service.store.saveLibrary({ title: '旧请求后无关变化' });
+  await page.locator('[data-refresh-requests]').click();
+  await page.locator(`[data-review-request="${legacyImport.id}"]`).click();
+  await page.locator('#agent-request-recheck').waitFor();
+  assert.equal(await page.locator('#agent-request-approve').isDisabled(), true);
+  for (const width of [1220, 600]) {
+    await page.setViewportSize({ width, height: 892 });
+    await page.locator('#agent-request-recheck').scrollIntoViewIfNeeded();
+    const box = await page.locator('#agent-request-recheck').boundingBox(); assert.ok(box.x >= 0 && box.x + box.width <= width);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+    await page.screenshot({ path: path.join(root, `import-recheck-${width}.png`) });
+  }
+  await page.locator('#agent-request-recheck').click();
+  await page.waitForFunction(() => document.querySelector('#modal')?.open && !document.querySelector('#agent-request-recheck') && !document.querySelector('#agent-request-approve')?.disabled);
+  assert.equal((await call('operationResult', { id: legacyImport.id }, undefined, env)).state, 'pending');
+  assert.equal(app.service.store.list({ type: 'asset' }).length, 2);
+  await page.screenshot({ path: path.join(root, 'import-reviewed-600.png') });
+  await page.locator('#agent-request-approve').click();
+  await page.waitForFunction(() => !document.querySelector('#modal').open);
+  assert.equal((await call('operationResult', { id: legacyImport.id }, undefined, env)).state, 'completed');
+  assert.equal(app.service.store.list({ type: 'asset' }).length, 2, 'rechecking must not duplicate imported material');
+  const changingFile = path.join(source, 'changing.pdf'); fs.writeFileSync(changingFile, 'initial content');
+  const changing = await request('assetImport', { path: changingFile, domain: '__materials__' });
+  await page.locator('[data-refresh-requests]').click();
+  await page.locator(`[data-review-request="${changing.id}"]`).click();
+  await page.locator('#agent-request-refresh').waitFor();
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const oldPreview = await page.locator('.agent-review').elementHandle();
+    fs.writeFileSync(changingFile, `changed after review ${'x'.repeat(attempt + 1)}`);
+    await page.locator('#agent-request-approve').click();
+    await page.waitForFunction(element => !element.isConnected, oldPreview);
+    await page.locator('.agent-review [role="status"]').waitFor();
+    assert.equal(await page.locator('#agent-request-approve').isEnabled(), true);
+    assert.equal((await call('operationResult', { id: changing.id }, undefined, env)).state, 'pending');
+    assert.equal(app.service.store.list({ type: 'asset' }).length, 2, 'refreshing a failed confirmation must never retry the import');
+  }
+  await page.screenshot({ path: path.join(root, 'import-changed-refresh-600.png') });
+  await page.locator('#agent-request-approve').click();
+  await page.waitForFunction(() => !document.querySelector('#modal').open);
+  assert.equal(app.service.store.list({ type: 'asset' }).length, 3);
+  const missingFile = path.join(source, 'missing.pdf'); fs.writeFileSync(missingFile, 'temporary source');
+  const missing = await request('assetImport', { path: missingFile, domain: '__materials__' });
+  await page.locator('[data-refresh-requests]').click();
+  await page.locator(`[data-review-request="${missing.id}"]`).click();
+  await page.locator('#agent-request-refresh').waitFor();
+  fs.unlinkSync(missingFile);
+  await page.locator('#agent-request-approve').click();
+  await page.locator('.agent-review [role="alert"]', { hasText: '原文件不存在' }).waitFor();
+  assert.equal(await page.locator('#agent-request-approve').isDisabled(), true);
+  fs.writeFileSync(missingFile, 'restored source');
+  await page.locator('#agent-request-refresh').click();
+  await page.waitForFunction(() => !document.querySelector('#agent-request-approve')?.disabled);
+  assert.equal(app.service.store.list({ type: 'asset' }).length, 3);
+  let releaseDetail;
+  const delayed = new Promise(resolve => { releaseDetail = resolve; });
+  let detailRequested;
+  const requested = new Promise(resolve => { detailRequested = resolve; });
+  const delayDetail = async route => {
+    if (route.request().postDataJSON()?.method !== 'agentOperationDetail') return route.continue();
+    detailRequested(); await delayed; await route.continue();
+  };
+  await page.route('**/api', delayDetail);
+  await page.locator('#agent-request-refresh').click(); await requested;
+  await page.locator('#modal [data-modal-close]').click();
+  const completedDetail = page.waitForResponse(response => response.url().endsWith('/api') && response.request().postDataJSON()?.method === 'agentOperationDetail');
+  releaseDetail(); await completedDetail; await page.unroute('**/api', delayDetail);
+  await page.waitForTimeout(100);
+  assert.equal(await page.locator('#modal').evaluate(element => element.open), false, 'late refresh cannot reopen a closed review');
+  assert.equal((await call('operationResult', { id: missing.id }, undefined, env)).state, 'pending');
+  await page.locator(`[data-review-request="${missing.id}"]`).click();
+  await page.locator('#agent-request-approve').click();
+  await page.waitForFunction(() => !document.querySelector('#modal').open);
+  assert.equal(app.service.store.list({ type: 'asset' }).length, 4);
   const unlock = await request('vaultUnlock');
   await page.locator('[data-refresh-requests]').click();
   await page.locator(`[data-review-request="${unlock.id}"]`).click();
@@ -89,5 +180,5 @@ try {
   await page.locator('[data-refresh-requests]').click();
   await page.screenshot({ path: path.join(root, 'requests-600.png') });
   assert.deepEqual(errors, []);
-  console.log('PASS: approval after Skill checks, hidden rejected requests with retained receipts, stale review, preserved input, vault workflow and 1220/931/600 layouts.');
+  console.log('PASS: independent imports, repeated review changes, missing/restored files, closed-dialog late responses, local recheck without auto-execution, idempotency, vault workflow and responsive layouts.');
 } finally { await browser?.close(); await app.close(); }

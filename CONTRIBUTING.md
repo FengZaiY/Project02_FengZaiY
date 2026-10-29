@@ -58,6 +58,7 @@ MCP 适配使用生产依赖 `@modelcontextprotocol/sdk` 和 `zod`，是唯一�
 
 | 改动类型 | 至少执行 |
 |---|---|
+| Agent 本机文件导入确认 | `node --test tests/agent-operations.test.mjs`、完整核心、`test:agent-operations`、`test:agent-operations-desktop`、`test:agents`、`test:skills`、`test:ui`、`test:startup`、`test:desktop`；验证多个导入互不失效、旧请求显式重新核对后单独确认、文件/目标变化、旧令牌拒绝、连续预览变化、缺失文件恢复、失效原因、关闭弹窗迟到响应、偏好/到期/授权保护和 MCP 不可重新核对。只用隔离文件，不导入用户截图中的真实资料 |
 | 文档和目录约定 | `npm run check:project` |
 | `src/core/` | `npm test` |
 | 清空回收站、永久删除凭据 | 另运行 `node --test tests/permanent-deletion.test.mjs tests/trash.test.mjs tests/current-sync.test.mjs tests/storage.test.mjs`、`npm run test:trash`、`npm run test:libraries`、`npm run test:assets`、`npm run test:agents`、`npm run test:storage`；覆盖正文历史实际删除、原件/共用保护、可重试文件任务、数据库压缩失败、替换索引失败、旧副本确认、重复/乱序同步及未知并发版本阻断；不得用正式回收内容测试 |

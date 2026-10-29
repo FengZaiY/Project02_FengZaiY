@@ -7,6 +7,19 @@ description: 通过 FengZaiY 本机 MCP 整理知识与资料，管理账号、�
 
 FengZaiY 负责保存、阅读、版本、审核、个人业务和同步；你负责理解与组织资料。系统没有内置聊天、模型配置或付费调用，不要尝试重新配置它们。MCP 服务器名为 `FengZaiY`，工具前缀为 `FengZaiY_`，配置变量为 `FENGZAIY_*`；Skill 技术名称与目录为规范化小写 `fengzaiy`。
 
+## FengZaiY 工具路由与进度核验
+
+这些规则用于 FengZaiY 资料与笔记操作，不限制用户另行要求的 Codex 聊天或代码管理。
+
+- 先发现并核对实际可调用的 FengZaiY MCP 工具名称和参数，再执行。宿主可能在名称前添加命名空间，以实际工具目录为准；若工具延迟加载，使用宿主的工具发现能力加载。缺少接口时明确报告缺少的工具，不猜造名称，不用其他应用的同名功能替代。
+- FengZaiY 资料查询、导入和关联只调用对应的 FengZaiY 工具。Codex 的 list_artifacts 只列聊天附件，不是 FengZaiY 资料库；其空结果不是“资料未入库”的证据，不得用它重试 FengZaiY 业务。
+- 查询既有原件：FengZaiY_search {type:"asset",domain:"__materials__",query} 或 FengZaiY_operation(assetCatalog)，再用 FengZaiY_record 核对 ID、文件名与版本。兼容旧资料时可省略 domain 查询并按身份核对；知识库内查不到不能证明独立资料区不存在。
+- 已有本机路径导入：先读 FengZaiY_operation_catalog，再调用 FengZaiY_operation {operation:"assetImport",input:{path,domain:"__materials__",duplicateMode:"reuse"},requestId,preferencesVersion}。只有用户已提供的文件内容才按协议使用 asset_write 或分块上传；不能为绕过已有确认请求而换上传路径。
+- 查询导入结果：FengZaiY_operation_result {id:返回的操作ID}。bootstrap 成功只表示规则已读取，pending 只表示已提交，completed 后还须用 FengZaiY_record 核对返回的附件 ID；拒绝、过期或失败先核对实际状态，不自动重复写入。
+- 关联笔记：FengZaiY_record 读取完整笔记及 heads；保留正文、来源、已有附件、隐私与层级，用 FengZaiY_note_update 合并 assetIds，保存后再次 record 核对。relation_create 不代替笔记 assetIds，不能用文件名猜测 ID。
+- 每次调用核对目标、实际工具和返回结构。首次发现错工具或无关结果，立即停止同类重复，重新发现正确工具；若仍缺少所需能力，报告具体缺口，不以反复 bootstrap 或 list_artifacts 冒充推进。只有实际错误码、消息或连接失败才能称为接口异常。
+- 完成报告必须区分：规则已读取、请求已提交、等待本机确认、原件已入库、关联已回读核实。保留操作 ID 与记录 ID 供核对，不将提交或文字解释当作完成。写入遵守最新 preferencesVersion、读取时 parents 和同一次请求幂等；不能替用户确认。
+
 ## 个人管理能力与秘密边界
 
 有效凭证可读写全部非秘密个人业务。任务、项目、资金账户、账目、预算、账号、订阅和资料集合分别有具名保存工具，参见 API；批次使用 personalBatch 整体成功或回滚。金额是对应币种最小单位整数，人民币默认两位小数；汇率是人工十进制字符串。不得把任务写入退役 task，不把财务或项目建成知识库，不接银行、获取行情或执行付款。仅在用户确认实际付款后调用 subscriptionPay，相同操作重试复用原 requestId。
@@ -48,7 +61,7 @@ node scripts/client.mjs propose --input proposal.json --request-id <唯一标识
 1. 从授权知识库选择明确范围；没有目标库时可请求 librarySave 并等待本机确认，不预置示例领域。按需检索，读取已有来源和候选重复笔记。
    通过 `search {type:"note", domain}` 分页读取笔记及 `parentNoteId`，再用 `record` 查看相关概览、上级与候选重复笔记。知识库是根节点，笔记可以同时有正文和下级笔记；不要求用户先建文件夹，不管理系统文件路径。
 2. 原资料形成 `sourceCreate`，零散记录/提取中间成果用 `draftCreate`，保留出处、截图及附件 ID。无法读取的平台链接先存草稿，说明缺少什么，不伪装已完成提取。
-   已导入文件用 `search {type:"asset", domain}` 和 `record` 核对稳定 ID、原文件名及当前显示名称。资料改名不会改变引用；同哈希不代表可合并资料身份。用户要求调整显示属性、标签、敏感性或集合时可调用 materialUpdate；回收可调用 trash。跨知识库归属、重复合并和文件迁移可通过 operation 提交本机确认请求；不直接调用受信任界面 API。
+   已导入文件优先用 `search {type:"asset", domain:"__materials__"}` 和 `record` 核对稳定 ID、原文件名及当前显示名称；兼容旧归属时可省略 domain。知识库筛选为空不代表原件未导入。资料改名不会改变引用；同哈希不代表可合并资料身份。用户要求调整显示属性、标签、敏感性或集合时可调用 materialUpdate；回收可调用 trash。跨知识库归属、重复合并和文件迁移可通过 operation 提交本机确认请求；不直接调用受信任界面 API。
 3. 根据资料决定概念、步骤、比较表、案例、代码/提示词等形式。阅读理解和实操复制优先，不为装饰增加图表。
    用户发起整理时，结合新增资料、已有正文和人工修改优化笔记内容与知识层级。保留完整可读正文，合理使用标题、列表、表格、公式、图表和稳定附件引用。交互阅读已取消，不生成整页程序或提交 presentation 字段。
    正式笔记的富内容格式见 API 协议。正文使用连续段落，不新建固定尺寸的文字编辑框；表格、高亮块及文件链接直接放在正文。保留已有 `data-ss-block`、任务状态、标题层级和链接；局部改写不得悄悄丢失图表源文本、画板对象或媒体引用。不能理解某个块时原样保留并说明限制。

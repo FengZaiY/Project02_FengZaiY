@@ -27,34 +27,67 @@ export function createAgentOperationsUI({ api, esc, icon, formatTime, openModal,
       redrawIcons();
     } finally { loading = false; }
   }
-  async function review(id) {
+  async function review(id, notice = '', stillCurrent = () => true) {
     const detail = await api('agentOperationDetail', { id });
+    if (!stillCurrent()) return;
     const pending = detail.state === 'pending';
+    const importing = detail.operation === 'assetImport';
+    const needsRecheck = detail.stale && detail.canRecheck;
     const dialog = openModal(detail.label, `<div class="agent-review"><dl><dt>请求来源</dt><dd>${esc(detail.agent)}</dd><dt>状态</dt><dd>${esc(labels[detail.state])}</dd>${detail.target ? `<dt>目标</dt><dd>${esc(detail.target)}</dd>` : ''}<dt>有效期至</dt><dd>${formatTime(detail.expiresAt)}</dd></dl>
-      ${detail.stale ? '<p class="notice amber">资料或配置已变化，请让 Agent 读取最新状态后重新发起。</p>' : ''}
+      ${notice ? `<p class="notice amber" role="status">${esc(notice)}</p>` : ''}
+      ${detail.stale ? `<p class="notice amber">${esc(detail.staleReason || '资料或配置已变化。')}${needsRecheck ? '重新核对当前文件和导入位置后，再确认执行。' : '请让 Agent 读取最新状态后重新发起。'}</p>` : ''}
       ${detail.blocked || detail.message ? `<p role="alert">${esc(detail.blocked || detail.message)}</p>` : ''}
       ${detail.mode === 'local' ? '<p>此项需要接续本机操作；进入页面不代表已经完成。</p>' : ''}
       ${pending ? `<details open><summary>请求参数</summary><pre>${esc(JSON.stringify(detail.input, null, 2))}</pre></details>` : ''}
       ${detail.preview ? `<details open><summary>影响预览</summary><pre>${esc(JSON.stringify(detail.preview, null, 2))}</pre></details>` : ''}<p class="agent-request-error" role="alert"></p></div>`,
-    pending ? `<button class="secondary" id="agent-request-reject">${icon('x')}拒绝请求</button><button class="primary" id="agent-request-approve" ${detail.stale || detail.blocked ? 'disabled' : ''}>${icon('check')}${detail.mode === 'local' ? '继续本机操作' : '确认执行'}</button>` : '');
+    pending ? `<button class="secondary" id="agent-request-reject">${icon('x')}拒绝请求</button>${importing ? `<button class="secondary" id="${needsRecheck ? 'agent-request-recheck' : 'agent-request-refresh'}">${icon('refresh-cw')}${needsRecheck ? '重新核对' : '刷新预览'}</button>` : ''}<button class="primary" id="agent-request-approve" ${detail.stale || detail.blocked ? 'disabled' : ''}>${icon('check')}${detail.mode === 'local' ? '继续本机操作' : '确认执行'}</button>` : '');
     if (!pending) return;
+    const content = dialog.querySelector('.agent-review');
+    const current = () => dialog.open && content.isConnected && dialog.contains(content);
+    const recheck = dialog.querySelector('#agent-request-recheck, #agent-request-refresh');
+    if (recheck) recheck.onclick = async () => {
+      const controls = [...dialog.querySelectorAll('.modal-footer button')]; controls.forEach(button => { button.disabled = true; });
+      const approve = dialog.querySelector('#agent-request-approve');
+      try {
+        if (needsRecheck) await api('agentOperationRecheck', { id, token: detail.token });
+        await review(id, '', current);
+      } catch (error) {
+        if (current() && error.code === 'CONFLICT') {
+          try { await review(id, '核对期间状态发生变化，已刷新当前预览。', current); }
+          catch (refreshError) { if (current()) content.querySelector('.agent-request-error').textContent = refreshError.message; }
+        } else if (current()) content.querySelector('.agent-request-error').textContent = error.message;
+      } finally {
+        controls.forEach(button => { button.disabled = false; });
+        approve.disabled = true;
+      }
+    };
     for (const approved of [true, false]) {
       const control = dialog.querySelector(approved ? '#agent-request-approve' : '#agent-request-reject');
       control.onclick = async () => {
         const controls = [...dialog.querySelectorAll('.modal-footer button')];
+        const approve = dialog.querySelector('#agent-request-approve');
+        let invalidReview = false;
         controls.forEach(button => { button.disabled = true; });
         try {
           if (approved) await beforeApprove();
+          if (!current()) return;
           const result = await api('agentOperationDecide', { id, token: detail.token, approved });
-          dialog.close(); await refresh();
+          if (current()) dialog.close();
+          await refresh();
           if (result.localAction) await localAction(id, result.localAction);
           else toast(approved ? 'Agent 请求已执行' : '已拒绝请求');
         } catch (error) {
-          if (dialog.open) dialog.querySelector('.agent-request-error').textContent = error.message;
+          if (importing && ['CONFLICT', 'UNAUTHORIZED'].includes(error.code)) {
+            invalidReview = true;
+            if (current()) {
+              try { await review(id, '导入前检查发现状态变化，已刷新当前预览。请核对后再操作。', current); }
+              catch (refreshError) { if (current()) content.querySelector('.agent-request-error').textContent = `${refreshError.message}；请刷新预览`; }
+            }
+          } else if (current()) content.querySelector('.agent-request-error').textContent = error.message;
           else toast(error.message, true);
         } finally {
           controls.forEach(button => { button.disabled = false; });
-          if (detail.stale || detail.blocked) dialog.querySelector('#agent-request-approve').disabled = true;
+          approve.disabled = invalidReview || detail.stale || !!detail.blocked;
         }
       };
     }

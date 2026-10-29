@@ -1,5 +1,8 @@
 import { agentOperations, secretResults, localOnlyInputs } from './agent-operation-catalog.mjs';
-import { canonical, check, sha, uuid, now } from './util.mjs';
+import { canonical, check, sha, uuid, now, noSymlink } from './util.mjs';
+import fs from 'node:fs';
+import path from 'node:path';
+import { MATERIAL_SCOPE } from './personal-schema.mjs';
 
 const storageKey = 'agentOperationQueue';
 const terminal = new Set(['completed', 'rejected', 'failed', 'expired', 'interrupted', 'local_action_required']);
@@ -27,7 +30,7 @@ export class AgentOperations {
         entry.message = '已有永久删除，旧请求内容及结果不再提供'; changed = true;
       }
       if (entry.state === 'pending' && Date.parse(entry.expiresAt) <= Date.now()) {
-        entry.state = 'expired'; delete entry.payload; changed = true;
+        entry.state = 'expired'; delete entry.payload; entry.message = '请求已到期，请让 Agent 重新发起'; changed = true;
       }
     }
     if (changed) this.save(entries);
@@ -66,6 +69,41 @@ export class AgentOperations {
       skills: this.service.skillInstallations.list().map(({ checkedAt, ...installation }) => installation), grants: this.service.agents.grants(),
       preferences: this.service.agents.preferences().version }));
   }
+  importContext(input, grantId) {
+    const domain = input.domain || '通用';
+    const library = domain === MATERIAL_SCOPE ? null : this.store.libraries().find(item => item.data.domain === domain);
+    return { directory: this.store.directory, storage: this.service.storage?.status() || null, domain,
+      library: library ? { id: library.id, heads: library.heads, deleted: library.deleted, conflict: library.conflict, title: library.data.title } : null,
+      grant: this.service.agents.grants().find(item => item.id === grantId) || null,
+      preferences: this.service.agents.preferences().version };
+  }
+  requestSnapshot(entry, payload) {
+    return entry.operation === 'assetImport' && payload.snapshotKind === 'asset-import-v1'
+      ? sha(canonical(this.importContext(payload.input, entry.grantId))) : this.snapshot();
+  }
+  importSnapshot(input, grantId) {
+    const context = this.importContext(input, grantId);
+    return { snapshot: sha(canonical(context)), snapshotParts: Object.fromEntries(
+      Object.entries(context).map(([key, value]) => [key, sha(canonical(value))])) };
+  }
+  importStaleReason(entry, payload) {
+    if (payload.snapshotKind !== 'asset-import-v1') return '此请求使用旧版全库检查，无关资料变化也会使其失效。请重新核对本次导入。';
+    const labels = { directory: '工作区', storage: '本地存储配置', domain: '导入范围', library: '目标知识库', grant: '发起 Agent 的授权', preferences: '整理偏好' };
+    const current = this.importSnapshot(payload.input, entry.grantId).snapshotParts;
+    const changed = payload.snapshotParts && Object.keys(labels).filter(key => payload.snapshotParts[key] !== current[key]);
+    return changed?.length ? `${changed.map(key => labels[key]).join('、')}已变化。` : '导入目标、工作区或授权状态已变化。';
+  }
+  importPreview(input, grantId) {
+    const context = this.importContext(input, grantId);
+    check(['reuse', 'separate'].includes(input.duplicateMode || 'reuse'), '重复资料处理方式无效');
+    check(context.domain === MATERIAL_SCOPE || context.library && !context.library.deleted && !context.library.conflict, '导入目标知识库不存在、已回收或存在冲突');
+    check(typeof input.path === 'string' && input.path.trim(), '请选择要导入的本机文件');
+    const file = path.resolve(input.path); noSymlink(file);
+    const stat = fs.statSync(file, { bigint: true }); check(stat.isFile(), '请选择普通文件');
+    return { stamp: sha(canonical([file, String(stat.dev), String(stat.ino), String(stat.size), String(stat.mtimeNs), String(stat.ctimeNs)])),
+      value: { 文件: path.basename(file), 大小字节: String(stat.size), 实际路径: file,
+        导入到: context.library?.title || '资料管理', 工作区: context.directory, 重复资料: input.duplicateMode === 'separate' ? '另建独立资料' : '复用同库相同文件' } };
+  }
   summary(entry) {
     return { id: entry.id, operation: entry.operation, label: agentOperations[entry.operation].label,
       agent: entry.agent, state: entry.state, at: entry.at, expiresAt: entry.expiresAt, message: entry.message,
@@ -80,8 +118,36 @@ export class AgentOperations {
     if (entry.operation === 'vaultSave') input.value = '[密码内容已加密，仅保存到所选账号]';
     if (entry.operation === 'syncConfigure' && input.key) input.key = `[密钥指纹 ${sha(input.key).slice(0, 16)}]`;
     const target = input.id || input.accountId || input.targetId;
+    let fileStamp, preview, blocked;
+    if (entry.operation === 'assetImport' && entry.state === 'pending') {
+      try { this.authorize(entry.grantId); const file = this.importPreview(payload.input, entry.grantId); fileStamp = file.stamp; preview = file.value; }
+      catch (error) { blocked = error.code === 'ENOENT' ? '原文件不存在或已移动，请重新选择文件' : error.message; }
+    }
+    const preferences = this.service.agents.preferences();
+    if (entry.operation === 'assetImport' && entry.state === 'pending' && !blocked) {
+      if (preferences.conflict) blocked = '整理偏好存在冲突，请先处理冲突，再让 Agent 读取最新偏好并重新发起';
+      else if (preferences.version !== payload.preferencesVersion) blocked = '整理偏好已变化，请让 Agent 读取最新偏好并重新发起';
+    }
+    const canRecheck = entry.operation === 'assetImport' && entry.state === 'pending' && !blocked
+      && !preferences.conflict && preferences.version === payload.preferencesVersion;
+    const stale = payload.snapshot !== this.requestSnapshot(entry, payload);
     return { ...this.summary(entry), input, target: target ? this.store.get(target)?.data.title || this.service.agents.grants().find(grant => grant.id === target)?.name || target : null,
-      token: sha(canonical({ id, snapshot: payload.snapshot, digest: entry.digest })), stale: payload.snapshot !== this.snapshot() };
+      token: sha(canonical({ id, snapshot: payload.snapshot, digest: entry.digest, reviewId: payload.reviewId, fileStamp })),
+      stale, canRecheck, ...(stale && entry.operation === 'assetImport' ? { staleReason: this.importStaleReason(entry, payload) } : {}),
+      ...(preview ? { preview } : {}), ...(blocked ? { blocked } : {}) };
+  }
+  async recheck({ id, token }) {
+    const entries = this.entries(), entry = entries.find(item => item.id === id);
+    check(entry?.operation === 'assetImport' && entry.state === 'pending', '只有尚未到期的待确认导入请求可以重新核对', 'CONFLICT');
+    this.authorize(entry.grantId);
+    const detail = this.detail(id);
+    check(token === detail.token, '文件或核对内容已变化，请重新打开请求', 'CONFLICT');
+    check(detail.canRecheck, detail.blocked || '整理偏好已变化，请让 Agent 读取最新状态后重新发起', 'CONFLICT');
+    const payload = this.open(entry.payload);
+    payload.snapshotKind = 'asset-import-v1'; payload.reviewId = uuid();
+    Object.assign(payload, this.importSnapshot(payload.input, entry.grantId));
+    entry.payload = this.seal(payload); this.save(entries);
+    return this.review(id);
   }
   async review(id) {
     const detail = this.detail(id);
@@ -142,9 +208,12 @@ export class AgentOperations {
     const receipt = this.store.db.prepare('SELECT digest,result FROM agent_requests WHERE grant_id=? AND request_id=?').get(grant.id, requestId);
     if (receipt) { check(receipt.digest === digest, '相同 requestId 已用于其他操作', 'CONFLICT'); return { ...JSON.parse(receipt.result), message: '历史请求已处理，不会重跑；详细结果已过保留期' }; }
     check(entries.filter(entry => !terminal.has(entry.state)).length < 100, '待处理请求过多，请先在本机处理');
+    const payload = { input, preferencesVersion, ...(operation === 'assetImport' ? { snapshotKind: 'asset-import-v1' } : {}) };
+    if (operation === 'assetImport') Object.assign(payload, this.importSnapshot(input, grant.id));
+    else payload.snapshot = this.snapshot();
     const entry = { id: uuid(), grantId: grant.id, agent: grant.name, requestId, operation, digest, state: 'pending', at: now(), erasureRevision: this.erasureRevision(),
       expiresAt: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
-      payload: this.seal({ input, preferencesVersion, snapshot: this.snapshot() }) };
+      payload: this.seal(payload) };
     const active = entries.filter(item => !terminal.has(item.state));
     const recent = entries.filter(item => terminal.has(item.state) && Date.parse(item.at) > Date.now() - 86400000)
       .slice(-(499 - active.length));
@@ -168,13 +237,14 @@ export class AgentOperations {
     const entries = this.entries(), entry = entries.find(item => item.id === id); check(entry, '操作请求不存在');
     check(!this.running || entry.operation === 'syncPause' || approved === false, '另一项 Agent 请求正在执行', 'BUSY');
     check(entry.state === 'pending', '操作已处理，不会重复执行', 'CONFLICT');
-    const detail = this.detail(id); check(token === detail.token, '确认内容已变化', 'CONFLICT');
+    const detail = this.detail(id); check(token === detail.token, entry.operation === 'assetImport' ? '原文件或预览已变化，请刷新预览后重新确认' : '确认内容已变化', 'CONFLICT');
     check(typeof approved === 'boolean', '请选择同意或拒绝');
     if (!approved) { entry.state = 'rejected'; delete entry.payload; this.save(entries); return this.summary(entry); }
     this.authorize(entry.grantId);
     check(Date.parse(entry.expiresAt) > Date.now(), '请求已过期，请让 Agent 重新发起', 'CONFLICT');
     const payload = this.open(entry.payload);
-    check(!detail.stale, '资料、授权或配置已变化，请让 Agent 重新预览并发起', 'CONFLICT');
+    check(!detail.stale, detail.staleReason || '资料、授权或配置已变化，请让 Agent 重新预览并发起', 'CONFLICT');
+    check(!detail.blocked, detail.blocked || '当前请求无法执行', 'CONFLICT');
     check((!this.service.transport.running || entry.operation === 'syncPause') && !this.service.localTask && !this.service.imports.size, '请等待同步、导入或资料维护结束', 'BUSY');
     check(!(this.store.local('workspace')?.tabs || []).some(tab => tab.dirty)
       && !Object.keys(this.store.local('personalDrafts') || {}).length, '请先保存或放弃未保存的笔记和业务表单', 'UNSAVED');

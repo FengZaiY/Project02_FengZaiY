@@ -65,6 +65,106 @@ test('routine Skill checks do not expire proposal approvals or their resubmissio
   await decide(fresh);
 });
 
+test('independent file import requests survive other imports, note edits and background configuration checks', async t => {
+  const { service, request, decide } = await setup(t);
+  const source = fs.mkdtempSync(path.join(root, 'import-sources-'));
+  const first = path.join(source, 'first.pdf'), second = path.join(source, 'second.pdf');
+  fs.writeFileSync(first, 'first isolated source'); fs.writeFileSync(second, 'second isolated source');
+  const library = service.store.saveLibrary({ title: '其他笔记' });
+  const a = await request('assetImport', { path: first, domain: '__materials__' });
+  const requestId = uuid(), input = { path: second, domain: '__materials__' };
+  const b = await request('assetImport', input, requestId);
+  const before = await service.call('agentOperationDetail', { id: b.id });
+  assert.equal(before.stale, false); assert.equal(before.preview.文件, 'second.pdf');
+  await decide(a);
+  service.store.write({ type: 'note', data: { title: '无关内容', content: '新编辑', domain: library.data.domain } });
+  service.skillInstallations.check(); service.store.local('v3Control', { receivedAt: 'background' });
+  const after = await service.call('agentOperationDetail', { id: b.id });
+  assert.equal(after.stale, false); assert.equal(after.token, before.token);
+  await decide(b); assert.equal(service.store.list({ type: 'asset' }).length, 2);
+  assert.equal((await request('assetImport', input, requestId)).state, 'completed');
+  assert.equal(service.store.list({ type: 'asset' }).length, 2);
+});
+
+test('legacy import requests can be rechecked only locally without executing, changing input or extending expiry', async t => {
+  const { service, request, decide } = await setup(t);
+  const file = path.join(fs.mkdtempSync(path.join(root, 'legacy-import-')), 'source.pdf'); fs.writeFileSync(file, 'isolated legacy source');
+  const input = { path: file, domain: '__materials__' }, pending = await request('assetImport', input);
+  const queue = service.agentOperations.entries(), entry = queue.find(item => item.id === pending.id);
+  const payload = service.agentOperations.open(entry.payload); delete payload.snapshotKind;
+  payload.snapshot = service.agentOperations.snapshot(); entry.payload = service.agentOperations.seal(payload); service.agentOperations.save(queue);
+  service.store.saveLibrary({ title: '另一个操作改变全局状态' });
+  const before = await service.call('agentOperationDetail', { id: pending.id }); assert.equal(before.stale, true);
+  assert.match(before.staleReason, /旧版全库检查/);
+  await assert.rejects(decide(pending), { code: 'CONFLICT' });
+  await assert.rejects(request('agentOperationRecheck', { id: pending.id, token: before.token }), /INVALID|FORBIDDEN/);
+  const after = await service.call('agentOperationRecheck', { id: pending.id, token: before.token });
+  assert.equal(after.stale, false); assert.notEqual(after.token, before.token); assert.deepEqual(after.input, input);
+  assert.equal(after.expiresAt, before.expiresAt); assert.equal(after.state, 'pending');
+  assert.equal(service.store.list({ type: 'asset' }).length, 0);
+  await assert.rejects(service.call('agentOperationDecide', { id: pending.id, token: before.token, approved: true }), { code: 'CONFLICT' });
+  await decide(pending); assert.equal(service.store.list({ type: 'asset' }).length, 1);
+  await assert.rejects(service.call('agentOperationRecheck', { id: pending.id, token: after.token }), { code: 'CONFLICT' });
+});
+
+test('import approval protects source identity, missing files, target changes, preferences, expiry and unsaved work', async t => {
+  const { service, request, decide } = await setup(t);
+  const file = path.join(fs.mkdtempSync(path.join(root, 'protected-import-')), 'source.pdf'); fs.writeFileSync(file, 'before');
+  const library = service.store.saveLibrary({ title: '导入目标' });
+  const pending = await request('assetImport', { path: file, domain: library.data.domain });
+  let detail = await service.call('agentOperationDetail', { id: pending.id });
+  fs.writeFileSync(file, 'different bytes');
+  await assert.rejects(service.call('agentOperationDecide', { id: pending.id, token: detail.token, approved: true }), { code: 'CONFLICT' });
+  fs.unlinkSync(file); detail = await service.call('agentOperationDetail', { id: pending.id });
+  assert.match(detail.blocked, /不存在/); assert.equal(detail.canRecheck, false);
+  await assert.rejects(decide(pending), { code: 'CONFLICT' });
+  fs.writeFileSync(file, 'restored');
+  service.store.saveLibrary({ id: library.id, parents: library.heads, title: '目标已改名' });
+  detail = await service.call('agentOperationDetail', { id: pending.id }); assert.equal(detail.stale, true);
+  assert.match(detail.staleReason, /目标知识库/);
+  await assert.rejects(decide(pending), { code: 'CONFLICT' });
+  const reviewed = await service.call('agentOperationRecheck', { id: pending.id, token: detail.token });
+  assert.equal(reviewed.preview.导入到, '目标已改名');
+  service.store.local('workspace', { tabs: [{ dirty: true }] });
+  await assert.rejects(decide(pending), { code: 'UNSAVED' }); service.store.local('workspace', { tabs: [] });
+  service.agents.savePreferences({ content: 'new preference', parents: service.agents.preferences().heads });
+  detail = await service.call('agentOperationDetail', { id: pending.id });
+  assert.equal(detail.stale, true); assert.equal(detail.canRecheck, false);
+  assert.match(detail.blocked, /整理偏好已变化/);
+  await assert.rejects(service.call('agentOperationRecheck', { id: pending.id, token: detail.token }), { code: 'CONFLICT' });
+  const queue = service.agentOperations.entries(), entry = queue.find(item => item.id === pending.id);
+  entry.expiresAt = '2000-01-01T00:00:00Z'; service.agentOperations.save(queue);
+  await assert.rejects(service.call('agentOperationRecheck', { id: pending.id, token: detail.token }), { code: 'CONFLICT' });
+  assert.equal(service.store.list({ type: 'asset' }).length, 0);
+});
+
+test('import review explains storage and authorization changes while unrelated grants and restart remain harmless', async t => {
+  const { service, request, grant } = await setup(t);
+  const file = path.join(fs.mkdtempSync(path.join(root, 'import-diagnostics-')), 'source.pdf'); fs.writeFileSync(file, 'isolated source');
+  let storage = { directory: service.store.directory, pending: null };
+  service.storage = { status: () => storage };
+  const pending = await request('assetImport', { path: file, domain: '__materials__' });
+  let before = await service.call('agentOperationDetail', { id: pending.id });
+  service.agents.createGrant({ name: '无关新授权' });
+  const reopened = new AgentOperations(service);
+  assert.equal(reopened.detail(pending.id).token, before.token);
+  assert.equal(reopened.detail(pending.id).stale, false);
+  storage = { ...storage, pending: { mode: 'migrate', directory: path.join(root, 'new-target') } };
+  let detail = reopened.detail(pending.id);
+  assert.match(detail.staleReason, /本地存储配置/); assert.equal(detail.canRecheck, true);
+  const reviewed = await reopened.recheck({ id: pending.id, token: detail.token });
+  assert.equal(reviewed.stale, false); assert.equal(reviewed.expiresAt, before.expiresAt);
+  const grants = service.agents.grants(); grants.find(item => item.id === grant.id).expiresAt = '2000-01-01T00:00:00Z';
+  service.store.local('agentGrants', grants);
+  detail = reopened.detail(pending.id);
+  assert.match(detail.staleReason, /授权/); assert.match(detail.blocked, /授权已撤销或过期/); assert.equal(detail.canRecheck, false);
+  await assert.rejects(reopened.recheck({ id: pending.id, token: detail.token }), { code: 'UNAUTHORIZED' });
+  const queue = reopened.entries(); queue.find(item => item.id === pending.id).expiresAt = '2000-01-01T00:00:00Z'; reopened.save(queue);
+  detail = reopened.detail(pending.id);
+  assert.equal(detail.state, 'expired'); assert.match(detail.message, /请求已到期/); assert.equal(detail.token, '');
+  assert.equal(service.store.list({ type: 'asset' }).length, 0);
+});
+
 test('fixed MCP catalog executes only after local approval and returns credential-owned results', async t => {
   const { service, rpc, request, decide } = await setup(t);
   const catalog = await rpc('operationCatalog');
