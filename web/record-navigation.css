@@ -13,5 +13,9 @@
 .record-scope { max-width:100%; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
 .record-details .processing-status { color:var(--green); }
 .draft-filter { flex-shrink:0; }
+.proposal-confirmation-status{display:flex;align-items:center;flex-wrap:wrap;gap:6px 10px;margin:10px 0;font-size:11px;color:var(--muted)}
+.proposal-confirmation-status .pill{font-size:11px;flex-shrink:0}
+.record-row .proposal-confirmation-status{margin:6px 0}
 .document-actions [data-action=toggle-navigation] { margin-right:3px; }
 .library-layout.navigation-hidden>.record-list { display:none; }
+.note-open-hint { flex-shrink:0; padding:8px 10px; font-size:10px; color:var(--muted); border-top:1px solid var(--line); }

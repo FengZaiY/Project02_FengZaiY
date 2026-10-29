@@ -197,10 +197,13 @@ try {
   assert.ok(concurrent.versions.some(version => version.data.content.includes('Local concurrent text.')));
   assert.ok(concurrent.versions.some(version => version.data.content.includes('Arriving version')));
   await page.locator('[data-nav="settings"]').click();
-  await page.getByText(/内置 AI 历史：已移除/).waitFor();
+  await page.locator('[data-storage-scan]').click();
+  await page.locator('[data-storage-results] [role="status"]').waitFor();
+  assert.equal(app.service.store.get(legacy.id), null);
+  assert.equal(app.service.state().deletion.retiredAI.pending, false);
   for (const width of [1165, 600]) {
     await page.setViewportSize({ width, height: 892 });
-    await page.getByText(/内置 AI 历史：已移除/).scrollIntoViewIfNeeded();
+    await page.getByText(/永久删除收尾：无需处理/).scrollIntoViewIfNeeded();
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
     await page.screenshot({ path: path.join(root, `retired-ai-cleanup-${width}.png`) });
   }

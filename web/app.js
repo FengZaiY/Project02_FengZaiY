@@ -26,6 +26,7 @@ import { createDraftUI, processingLabels } from './draft-workflow.js';
 import './asset-preview.css';
 import './draft-workflow.css';
 import { recordRows } from './record-navigation.js';
+import { proposalProgress } from '../src/core/proposal-status.mjs';
 import './record-navigation.css';
 import { copyText, copyVisibleText } from './editor-text.js';
 import { mountStorageMaintenance } from './storage-maintenance.js';
@@ -70,11 +71,18 @@ Object.assign(typeLabel, businessLabels);
 const libraryViews = ['notes', 'drafts', 'conflicts', 'trash', 'proposals'];
 const GLOBAL_SCOPE = '__all_libraries__';
 const state = { view: 'notes', domain: '', query: '', snapshot: null, rows: [], tabs: [], selectedTab: null,
-  selected: null, editor: null, sourceVisible: false, listLimit: 150, knowledgeTree: [], collapsedNotes: [], noteView: 'tree', draftFilter: 'active', listSummary: false, navigationHidden: false };
-let persistTimer, queryTimer, refreshTimer, modalCleanup, sourcePreviewUrl, editorExperience;
+  selected: null, editor: null, sourceVisible: false, listLimit: 150, knowledgeTree: [], collapsedNotes: [], noteView: 'tree', draftFilter: 'active', proposalFilter: 'active', listSummary: false, navigationHidden: false };
+let persistTimer, queryTimer, refreshTimer, modalCleanup, sourcePreviewUrl, editorExperience, treeEpoch;
 let sourceLoadSerial = 0;
 let previewSerial = 0, pendingPreview, sourcePreviewController;
 let persistQueue = Promise.resolve(), importingFiles = 0;
+let navigationQueue = Promise.resolve();
+const recordPositions = new Map();
+function queueNavigation(action) {
+  const pending = navigationQueue.catch(() => {}).then(action);
+  navigationQueue = pending;
+  return pending;
+}
 const noteSaver = createNoteAutosave({
   capture: id => {
     const tab = state.tabs.find(item => item.id === id);
@@ -117,7 +125,7 @@ const noteSaver = createNoteAutosave({
         $('time', element).textContent = formatTime(saved.updatedAt);
       }
     }
-    void api('noteTree').then(nodes => {
+    if (saved.type === 'note') void api('noteTree').then(nodes => {
       state.knowledgeTree = nodes;
       if (state.view === 'notes') {
         if (state.query) return refreshRows().then(renderRecordList);
@@ -250,6 +258,9 @@ function stash() {
   const tab = currentTab();
   if (tab && state.editor && state.selected?.id === tab.recordId) {
     tab.scroll = $('.editor-scroll')?.scrollTop || 0;
+    recordPositions.delete(tab.recordId);
+    recordPositions.set(tab.recordId, tab.scroll);
+    if (recordPositions.size > 200) recordPositions.delete(recordPositions.keys().next().value);
     if (tab.dirty) {
       tab.draft = { ...state.selected.data, title: $('#note-title')?.value || state.selected.data.title,
         content: state.editor.getHTML(), format: 'html',
@@ -263,7 +274,7 @@ async function persist() {
   stash();
   await personalUI.flush();
   try { localStorage.setItem('fengzai-last-view', state.view); } catch {}
-  const snapshot = JSON.parse(JSON.stringify({ tabs: state.tabs, selectedTab: state.selectedTab, domain: state.domain, collapsedNotes: state.collapsedNotes, noteView: state.noteView, sourceVisible: state.sourceVisible }));
+  const snapshot = JSON.parse(JSON.stringify({ tabs: state.tabs, selectedTab: state.selectedTab, domain: state.domain, collapsedNotes: state.collapsedNotes, noteView: state.noteView, sourceVisible: state.sourceVisible, recordPositions: [...recordPositions] }));
   persistQueue = persistQueue.catch(() => {}).then(() => api('workspaceSave', snapshot));
   await persistQueue;
 }
@@ -301,9 +312,15 @@ function changed() {
 async function loadState() {
   state.snapshot = await api('state');
   assertUiProtocol(state.snapshot);
-  state.knowledgeTree = await api('noteTree');
+  if (libraryViews.includes(state.view) && treeEpoch !== state.snapshot.readEpoch) {
+    state.knowledgeTree = await api('noteTree'); treeEpoch = state.snapshot.readEpoch;
+  }
 }
 async function restoreWorkspaceTabs(workspace) {
+  recordPositions.clear();
+  for (const entry of (Array.isArray(workspace.recordPositions) ? workspace.recordPositions : []).slice(-200)) {
+    if (Array.isArray(entry) && typeof entry[0] === 'string' && Number.isFinite(entry[1]) && entry[1] >= 0) recordPositions.set(entry[0], entry[1]);
+  }
   const tabs = workspace.tabs || [];
   const records = await Promise.all(tabs.map(tab => tab.recordId ? api('record', { id: tab.recordId }) : null));
   // Keep unresolved references and unsaved note drafts; only retire known conversation tabs.
@@ -312,9 +329,11 @@ async function restoreWorkspaceTabs(workspace) {
   state.selectedTab = state.tabs.some(tab => tab.id === workspace.selectedTab) ? workspace.selectedTab : null;
 }
 async function refreshRows() {
+  if (!libraryViews.includes(state.view)) { state.rows = []; return; }
   const type = ({ notes: 'note', drafts: 'draft', proposals: 'proposal' })[state.view];
   state.rows = await api('records', { type, domain: state.domain || undefined, query: state.query || undefined,
     ...(type === 'draft' ? { processing: state.query ? 'all' : state.draftFilter } : {}),
+    ...(type === 'proposal' ? { proposalStatus: state.proposalFilter } : {}),
     trash: state.view === 'trash', limit: state.listLimit, preview: true });
   if (state.view === 'conflicts') state.rows = state.rows.filter(row => row.conflict);
 }
@@ -351,7 +370,7 @@ function shell() {
       <footer class="statusbar"><span>${icon('hard-drive')}本地保存</span><span>修改历史自动保留</span><span class="status-right">云端上传状态：由客户端确认</span></footer>
     </div>`;
   updateUI.refreshNotice();
-  if (state.domain && knowledge) $('#domain-filter').insertAdjacentHTML('afterend', button(state.view === 'drafts' ? 'list' : 'list-tree', 'knowledge-browse', state.view === 'drafts' ? '浏览草稿列表' : '浏览知识体系'));
+  if ((state.domain || state.view === 'proposals') && knowledge) $('#domain-filter').insertAdjacentHTML('afterend', button(['drafts', 'proposals'].includes(state.view) ? 'list' : 'list-tree', 'knowledge-browse', state.view === 'proposals' ? '浏览整理方案' : state.view === 'drafts' ? '浏览草稿列表' : '浏览知识体系'));
   $('.tab-add').title = newLabel; $('.tab-add').setAttribute('aria-label', newLabel);
   $('#domain-filter')?.addEventListener('change', e => run(() => selectLibrary(e.target.value)));
   $('#search').addEventListener('input', e => {
@@ -369,6 +388,21 @@ async function render() {
   assetUI.dispose();
   stash(); state.editor?.destroy(); state.editor = null;
   await loadState(); await refreshRows(); shell(); await renderView(); redrawIcons();
+  $('.work-tab.selected')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+}
+async function refreshCurrentView() {
+  const editor = state.editor, record = state.selected, view = state.view, tab = currentTab();
+  if (!editor || !record || !libraryViews.includes(view)) return render();
+  await persist();
+  const latest = await api('record', { id: record.id });
+  if (state.editor !== editor || state.selected?.id !== record.id || state.view !== view || currentTab() !== tab) return;
+  if (!latest || latest.deleted || latest.conflict || JSON.stringify(latest.heads) !== JSON.stringify(state.selected.heads)) return render();
+  await loadState(); await refreshRows();
+  if (state.editor !== editor || state.view !== view || currentTab() !== tab) return;
+  renderRecordList();
+  await renderAnnotations(latest); void renderBacklinks(latest);
+  if (state.sourceVisible) await renderSources(latest);
+  updateSaveStatus(); redrawIcons();
 }
 async function renderView() {
   if (importingFiles) return;
@@ -397,7 +431,8 @@ async function navigateView(view) {
   const prior = navigationPositions.get(view);
   state.view = view; state.query = prior?.query || '';
   state.domain = prior?.domain || '';
-  state.selected = prior?.selected || null; state.selectedTab = prior?.selectedTab || null;
+  const retained = state.tabs.some(tab => tab.id === prior?.selectedTab);
+  state.selected = retained ? prior.selected : null; state.selectedTab = retained ? prior.selectedTab : null;
   try { localStorage.setItem('fengzai-last-view', view); } catch {}
   await render();
 }
@@ -422,7 +457,7 @@ function renderRecordList() {
   const panel = $('.record-list');
   if (!panel || !libraryViews.includes(state.view)) return;
   const isNotes = state.view === 'notes', tree = isNotes && state.noteView === 'tree';
-  const context = JSON.stringify([state.view, state.domain, state.query, tree]);
+  const context = JSON.stringify([state.view, state.domain, state.query, tree, state.proposalFilter]);
   const scrollTop = panel.dataset.context === context ? $('.folder-tree,.list-rows', panel)?.scrollTop || 0 : 0;
   const sharedList = isNotes || state.view === 'drafts';
   const title = sharedList ? libraryName(state.domain) : `${libraryName(state.domain)} · ${navs.find(n => n[0] === state.view)[2]}`;
@@ -432,21 +467,29 @@ function renderRecordList() {
     ? '<button class="text-button load-more" data-action="load-more">加载更多</button>' : '';
   panel.innerHTML = `<div class="list-heading" ${tree && state.domain ? `data-note-drop-root="${esc(state.domain)}"` : ''}><strong title="${esc(title)}">${esc(title)}</strong><span>${count}</span>${state.view === 'trash' ? '' : button('plus', state.view === 'proposals' ? 'proposal-new' : 'new', isNotes ? '新建顶层笔记' : state.view === 'drafts' ? '新建草稿' : '新建')}</div>
     ${state.view === 'drafts' ? `<label class="draft-filter">处理状态<select id="draft-filter" aria-label="草稿处理状态" ${state.query ? 'disabled' : ''}>${Object.entries({ active: '待处理 / 部分处理', all: '全部草稿', ...processingLabels }).map(([value, title]) => `<option value="${value}" ${(state.query ? 'all' : state.draftFilter) === value ? 'selected' : ''}>${title}</option>`).join('')}</select></label>` : ''}
+    ${state.view === 'proposals' ? `<label class="draft-filter">确认状态<select id="proposal-filter" aria-label="方案确认状态">${Object.entries({ active: '待处理', accepted: '已确认', all: '全部方案' }).map(([value, title]) => `<option value="${value}" ${state.proposalFilter === value ? 'selected' : ''}>${title}</option>`).join('')}</select></label>` : ''}
     ${isNotes ? `<div class="note-view-switch" role="group" aria-label="笔记视图">
       <button data-action="note-view" data-mode="tree" aria-pressed="${tree}">${icon('list-tree')}知识体系</button>
       <button data-action="note-view" data-mode="list" aria-pressed="${!tree}">${icon('list')}笔记列表</button></div>` : ''}
     ${sharedList && !tree ? `<div class="record-navigation-tools"><span>${isNotes ? '笔记列表' : '草稿列表'}</span>${button('list', 'list-summary', state.listSummary ? '切换为紧凑列表' : '显示正文摘要', `aria-pressed="${state.listSummary}"`)}</div>` : ''}
     ${tree ? hierarchyUI.tree() : `<div class="list-rows">${state.rows.length ? sharedList ? recordRows({ rows: state.rows, selectedId: state.selected?.id, domain: state.domain, summary: state.listSummary, esc, icon, libraryName, formatTime, excerpt, processingLabels, deliveryLabels: label }) : state.rows.map(row => `<button class="record-row ${state.selected?.id === row.id ? 'selected' : ''}" data-record="${row.id}">
     <div class="row-kicker"><span>${esc(libraryName(row.data.domain))}</span><time>${formatTime(row.updatedAt)}</time></div><strong>${row.conflict ? icon('git-merge') : ''}${esc(row.data.title)}</strong>
-    <p>${esc(excerpt(row))}</p><div class="row-tags">${row.processing ? `<span class="processing-status">${processingLabels[row.processing.status]}</span>` : ''}${(row.data.tags || []).slice(0, 2).map(tag => `<span>${esc(tag)}</span>`).join('')}<small class="delivery ${row.status}">${label[row.status]}</small></div></button>`).join('') : `<div class="list-empty">${state.query ? '没有匹配的笔记' : '暂无内容'}</div>`}${more}</div>`}
-    ${tree ? more : ''}`;
+    <p>${esc(excerpt(row))}</p>${row.type === 'proposal' ? proposalStatusMarkup(row) : ''}<div class="row-tags">${row.processing ? `<span class="processing-status">${processingLabels[row.processing.status]}</span>` : ''}${(row.data.tags || []).slice(0, 2).map(tag => `<span>${esc(tag)}</span>`).join('')}<small class="delivery ${row.status}">${row.type === 'proposal' ? '同步：' : ''}${label[row.status]}</small></div></button>`).join('') : `<div class="list-empty">${state.view === 'proposals' ? state.query ? '当前确认状态下没有匹配的方案' : state.proposalFilter === 'active' ? '没有待处理方案' : state.proposalFilter === 'accepted' ? '暂无已确认方案' : '暂无整理方案' : state.query ? '没有匹配的笔记' : '暂无内容'}</div>`}${more}</div>`}
+    ${tree ? more : ''}${sharedList ? '<div class="note-open-hint">单击切换 · Ctrl+单击或右键在新标签打开</div>' : ''}`;
   panel.dataset.context = context;
   if ($('#draft-filter')) $('#draft-filter').onchange = event => run(async () => {
     state.draftFilter = event.target.value; state.listLimit = 150; await refreshRows(); renderRecordList();
   });
+  if ($('#proposal-filter')) $('#proposal-filter').onchange = event => run(async () => {
+    state.proposalFilter = event.target.value; state.listLimit = 150; await refreshRows(); renderRecordList();
+  });
   const scroll = $('.folder-tree,.list-rows', panel);
   if (scroll) scroll.scrollTop = scrollTop;
   redrawIcons();
+}
+function proposalStatusMarkup(record) {
+  const progress = proposalProgress(record);
+  return `<div class="proposal-confirmation-status" data-confirmation="${progress.status}"><span class="pill ${progress.status === 'accepted' ? 'green' : 'amber'}">${progress.label}</span><span>${progress.accepted} / ${progress.total} 项已确认</span></div>`;
 }
 async function renderDocument(record) {
   const tab = currentTab();
@@ -509,12 +552,12 @@ async function renderDocument(record) {
   } else if (record.type === 'conversation') {
     $('#editor-content').innerHTML = '<p class="muted">内置 AI 对话已取消，旧对话已清理。</p>';
   } else if (record.type === 'proposal') {
-    const complete = data.items.length + (data.materialItems?.length || 0) > 0 && [...data.items, ...(data.materialItems || [])].every(item => item.status === 'accepted');
+    const complete = proposalProgress({ ...record, data }).status === 'accepted';
     const actionable = !record.deleted && !record.conflict;
     const proposalActions = !actionable ? '' : complete
       ? `<div class="sticky-actions proposal-complete-actions"><span class="pill green">全部已确认</span><button class="secondary" data-action="proposal-cleanup">${icon('archive')}清理已确认方案</button></div>`
       : '<div class="sticky-actions"><button class="primary" data-action="approve">确认选中部分</button><button class="secondary" data-action="proposal-edit">修改待确认部分</button></div>';
-    $('#editor-content').innerHTML = `${data.content ? `<section class="proposal-summary prose">${safeHtml(data.content)}</section>` : ''}<div class="proposal-items">${data.items.map(item => `<section class="proposal-item"><label class="check-row"><input type="checkbox" data-proposal-item="${item.id}" ${item.status === 'accepted' ? 'disabled checked' : actionable ? '' : 'disabled'}><strong>${esc(item.data.title)}</strong><span class="pill ${item.status === 'accepted' ? 'green' : ''}">${item.status === 'accepted' ? '已确认' : '待确认'}</span></label><div class="proposal-destination">${icon('folder')}目标：${esc(libraryName(item.data.domain))}<span>出处 ${item.data.sourceIds?.length || 0} · 附件 ${item.data.assetIds?.length || 0}</span></div><div class="prose">${safeHtml(item.data.content, item.data.format)}</div></section>`).join('')}</div>${proposalActions}`;
+    $('#editor-content').innerHTML = `${proposalStatusMarkup({ ...record, data })}${data.content ? `<section class="proposal-summary prose">${safeHtml(data.content)}</section>` : ''}<div class="proposal-items">${data.items.map(item => `<section class="proposal-item"><label class="check-row"><input type="checkbox" data-proposal-item="${item.id}" ${item.status === 'accepted' ? 'disabled checked' : actionable ? '' : 'disabled'}><strong>${esc(item.data.title)}</strong><span class="pill ${item.status === 'accepted' ? 'green' : ''}">${item.status === 'accepted' ? '已确认' : '待确认'}</span></label><div class="proposal-destination">${icon('folder')}目标：${esc(libraryName(item.data.domain))}<span>出处 ${item.data.sourceIds?.length || 0} · 附件 ${item.data.assetIds?.length || 0}</span></div><div class="prose">${safeHtml(item.data.content, item.data.format)}</div></section>`).join('')}</div>${proposalActions}`;
     $$('.proposal-item').forEach((element, index) => {
       const item = data.items[index];
       $('.proposal-destination', element).insertAdjacentHTML('afterend', `<div class="proposal-operation">上级笔记：${esc(hierarchyUI.proposalPath(data.items, item))}</div>${item.reason ? `<div class="proposal-reason">${esc(item.reason)}</div>` : ''}`);
@@ -1061,18 +1104,44 @@ function bindFileDrop(editor, tab, record) {
     })();
   }
 }
-async function openRecord(id) {
+function openRecord(id, options = {}) {
+  return queueNavigation(() => openRecordNow(id, options));
+}
+async function openRecordNow(id, { newTab = false } = {}) {
   if (importingFiles) { toast('文件仍在导入，请完成后切换笔记'); return; }
+  if (state.editor?.view.composing) throw new Error('请先完成输入法输入，再切换笔记');
+  const record = await api('record', { id });
+  if (!record) throw new Error('此内容不存在或尚未到达，已保留当前页面');
+  if (state.editor && currentTab()?.recordId === id && state.selected?.id === id
+    && JSON.stringify(state.selected.heads) === JSON.stringify(record.heads)) return;
   await persist();
-  state.editor?.destroy(); state.editor = null;
-  const record = await api('record', { id }); if (!record) return;
   if (businessLabels[record.type]) { await personalUI.select(record); return; }
   if (record.type === 'asset') { await assetUI.detail(id); return; }
   if (record.type === 'folder') return;
   if (record.type === 'library') { state.view = 'libraries'; state.selected = null; await render(); return; }
-  state.selected = record;
   let tab = state.tabs.find(t => t.recordId === id);
-  if (!tab) { tab = { id: uid(), recordId: id, title: record.data.title, domain: record.data.domain, scroll: 0 }; state.tabs.push(tab); }
+  const previous = currentTab();
+  if (!tab) {
+    if (previous && !newTab) {
+      // Drain the existing writer, including input received while saving. Never branch on navigation.
+      do {
+        if (['error', 'conflict'].includes(noteSaver.state(previous.id))) throw new Error('请先保存或处理当前笔记的版本冲突，再切换页面；编辑内容已保留');
+        await noteSaver.flush(previous.id);
+        await persist();
+      } while (previous.dirty);
+      if (importingFiles || state.editor?.view.composing || currentTab() !== previous) throw new Error('当前页面正在变化，请完成操作后重新切换');
+      await noteSaver.forget(previous.id);
+    }
+    tab = { id: uid(), recordId: id, title: record.data.title, domain: record.data.domain, scroll: recordPositions.get(id) || 0 };
+    if (previous && !newTab) {
+      state.tabs.splice(state.tabs.indexOf(previous), 1, tab);
+      for (const [view, position] of navigationPositions) {
+        if (position.selectedTab === previous.id) navigationPositions.delete(view);
+      }
+    } else state.tabs.push(tab);
+  }
+  stash(); state.editor?.destroy(); state.editor = null;
+  state.selected = record;
   tab.recordType = record.type;
   state.selectedTab = tab.id;
   state.domain = record.data.domain === GLOBAL_SCOPE ? '' : record.data.domain;
@@ -1268,7 +1337,7 @@ async function previewAsset(id, { modal = false } = {}) {
     sourcePreviewController = controller;
     sourceTarget.dataset.asset = id;
   }
-  const assets = await api('assets'), asset = assets.find(a => a.id === id);
+  const assets = await api('assets', { id }), asset = assets.find(a => a.id === id);
   if (!current() || !sourceTarget && $('#modal')?.firstElementChild !== previousModalBody) return;
   if (!asset?.available) {
     const accepted = await confirmBox('原文件尚未就绪', '<p>本机尚未收到完整原文件。请检查来源电脑和网盘客户端的传输进度；分块到齐并校验后会自动关联。也可关联已有的本机文件。</p>', '关联本机文件');
@@ -1454,13 +1523,13 @@ const actions = {
     await persist();
   },
   'knowledge-browse': async () => {
-    if (['notes', 'drafts'].includes(state.view) && state.selected && $('.record-list')) {
+    if (['notes', 'drafts', 'proposals'].includes(state.view) && state.selected && $('.record-list')) {
       state.navigationHidden = false;
       $('#main').classList.remove('navigation-hidden');
       if (matchMedia('(max-width:900px)').matches) $('#main').classList.toggle('browse-folders');
       return;
     }
-    await persist(); state.selected = null; state.selectedTab = null; state.view = state.view === 'drafts' ? 'drafts' : 'notes'; await render();
+    await persist(); state.selected = null; state.selectedTab = null; state.view = ['drafts', 'proposals'].includes(state.view) ? state.view : 'notes'; await render();
   },
   'library-storage-retry': async target => { await api('libraryDirectory', { id: target.dataset.library }); await render(); },
   'storage-copy': async () => {
@@ -1509,7 +1578,7 @@ const actions = {
     clearTimeout(persistTimer); await persist(); await api('storageRestart');
   },
   'note-link': editNoteLink,
-  'refresh-view': render,
+  'refresh-view': refreshCurrentView,
   'agent-export': () => skillUI.export(),
   'skill-manage': () => $('#skill-management')?.scrollIntoView({ block: 'start', behavior: 'smooth' }),
   'update-manage': () => $('#upgrade-settings')?.scrollIntoView({ block: 'start', behavior: 'smooth' }),
@@ -1525,7 +1594,7 @@ const actions = {
     const create = async domain => {
       const record = await api('save', { type, data: { title: type === 'draft' ? '未命名草稿' : '未命名笔记', domain,
         ...(type === 'note' ? { parentNoteId: null } : {}), content: '', format: 'html', tags: [] } });
-      await openRecord(record.id); $('#note-title')?.focus(); $('#note-title')?.select();
+      await openRecord(record.id, { newTab: true }); $('#note-title')?.focus(); $('#note-title')?.select();
     };
     if (state.domain) { requireLibrary(); await create(state.domain); return; }
     const dialog = openModal(type === 'draft' ? '新建草稿' : '新建笔记', `<form id="new-record-form" class="settings-form"><label>知识库<select name="domain" required><option value="">选择知识库</option>${libraries().filter(item => !item.deleted && !item.conflict).map(item => `<option value="${esc(item.data.domain)}">${esc(item.data.title)}</option>`).join('')}</select></label><button class="primary" type="submit">创建</button></form>`);
@@ -1575,11 +1644,35 @@ const actions = {
   delete: async () => {
     if (!state.selected) return;
     await saveNote();
+    const record = state.selected;
+    if (!record) return;
     if (await confirmBox('移入回收站', '<p>删除记录会同步到其他电脑，正文与历史仍可恢复。</p>', '移入回收站')) {
-      state.selected = await api('delete', { id: state.selected.id, parents: state.selected.heads });
-      const tab = currentTab(); if (tab) { tab.dirty = false; delete tab.draft; }
-      if (tab) await noteSaver.forget(tab.id);
-      await render();
+      await api('delete', { id: record.id, parents: record.heads });
+      const tabs = state.tabs.filter(tab => tab.recordId === record.id);
+      for (const tab of tabs) await noteSaver.forget(tab.id);
+      state.tabs = state.tabs.filter(tab => tab.recordId !== record.id);
+      for (const [view, position] of navigationPositions) {
+        if (position.selected?.id === record.id) navigationPositions.delete(view);
+      }
+      if (state.selected?.id === record.id) {
+        state.editor?.destroy(); state.editor = null;
+        state.selected = null; state.selectedTab = null;
+        for (const tab of [...state.tabs].reverse()) {
+          const next = await api('record', { id: tab.recordId });
+          if (!next || next.deleted) continue;
+          state.selected = next; state.selectedTab = tab.id;
+          state.domain = next.data.domain === GLOBAL_SCOPE ? '' : next.data.domain;
+          state.view = ({ draft: 'drafts', proposal: 'proposals' })[next.type] || 'notes';
+          state.query = '';
+          break;
+        }
+        await persist(); await render();
+      } else {
+        // A delayed deletion response must not replace the user's new selection or editor.
+        for (const tab of tabs) $(`.work-tab[data-tab="${tab.id}"]`)?.remove();
+        await persist(); await loadState(); await refreshRows(); renderRecordList();
+      }
+      toast('已移入回收站');
     }
   },
   restore: async () => {
@@ -1658,7 +1751,7 @@ const actions = {
     await persist();
     const saved = await api('approve', { id: record.id, parents: record.heads, itemIds });
     if (state.selected?.id === record.id) { state.selected = saved; await render(); }
-    toast('选定部分已入库，关联草稿处理状态已更新');
+    toast(proposalProgress(saved).status === 'accepted' ? '全部已确认，可在“已确认”列表查看；已入库内容保留' : '选定部分已入库，其余内容仍待确认');
   },
   'proposal-cleanup': async () => {
     const record = state.selected;
@@ -1743,7 +1836,7 @@ document.addEventListener('click', event => {
       if (link?.kind === 'note') {
         const record = await api('record', { id: link.id });
         if (!record || !['note', 'draft', 'source'].includes(record.type)) throw new Error('链接目标尚未到达或不是笔记资料');
-        if ($('#modal').open) $('#modal').close(); await openRecord(link.id); return;
+        if ($('#modal').open) $('#modal').close(); await openRecord(link.id, { newTab: event.ctrlKey || event.metaKey }); return;
       }
       if (link?.kind === 'asset') { await previewAsset(link.id); return; }
       if (link?.kind === 'local') {
@@ -1764,12 +1857,12 @@ document.addEventListener('click', event => {
     return;
   }
   const nav = event.target.closest('[data-nav],[data-subnav]');
-  if (nav) { run(() => navigateView(nav.dataset.nav || nav.dataset.subnav)); return; }
+  if (nav) { run(() => queueNavigation(() => navigateView(nav.dataset.nav || nav.dataset.subnav))); return; }
   const row = event.target.closest('[data-record]');
-  if (row) { run(() => openRecord(row.dataset.record)); return; }
+  if (row) { event.preventDefault(); run(() => openRecord(row.dataset.record, { newTab: event.ctrlKey || event.metaKey })); return; }
   const close = event.target.closest('[data-close-tab]');
   if (close) {
-    run(async () => {
+    run(() => queueNavigation(async () => {
       const tab = state.tabs.find(t => t.id === close.dataset.closeTab);
       if (tab?.dirty && !(await confirmBox('关闭未保存标签', '<p>此标签含未保存修改。关闭将丢弃这部分编辑，已保存版本不受影响。</p>', '丢弃并关闭'))) return;
       if (tab) await noteSaver.forget(tab.id);
@@ -1781,7 +1874,7 @@ document.addEventListener('click', event => {
         if (state.selected) state.domain = state.selected.data.domain === GLOBAL_SCOPE ? '' : state.selected.data.domain;
       }
       await persist(); await render();
-    }); return;
+    })); return;
   }
   const tab = event.target.closest('[data-tab]');
   if (tab) { const item = state.tabs.find(t => t.id === tab.dataset.tab); if (item) run(() => openRecord(item.recordId)); return; }
@@ -1803,7 +1896,25 @@ document.addEventListener('click', event => {
   }
   if (actions[action]) run(() => actions[action](target));
 });
+document.addEventListener('contextmenu', event => {
+  const row = event.target.closest('.folder-node[data-record],.record-row[data-record]');
+  if (!row || importingFiles) return;
+  event.preventDefault();
+  const id = row.dataset.record;
+  const dialog = openModal('打开方式', '<p>普通单击会切换当前标签。也可按住 Ctrl 单击，或使用鼠标中键。</p><button class="primary" data-open-new-tab>在新标签打开</button>');
+  $('[data-open-new-tab]', dialog).onclick = () => { dialog.close(); run(() => openRecord(id, { newTab: true })); };
+});
+document.addEventListener('auxclick', event => {
+  const row = event.target.closest('.folder-node[data-record],.record-row[data-record]');
+  if (event.button !== 1 || !row) return;
+  event.preventDefault(); run(() => openRecord(row.dataset.record, { newTab: true }));
+});
+window.addEventListener('resize', () => $('.work-tab.selected')?.scrollIntoView({ block: 'nearest', inline: 'nearest' }));
 document.addEventListener('keydown', event => {
+  const recordRow = event.target.closest('.folder-node[data-record],.record-row[data-record]');
+  if (recordRow && event.key === 'Enter' && (event.ctrlKey || event.metaKey) && !event.isComposing) {
+    event.preventDefault(); run(() => openRecord(recordRow.dataset.record, { newTab: true })); return;
+  }
   if (event.key === 'Escape') {
     const menu = $('.source-attachment-actions[open]');
     if (menu) { event.preventDefault(); menu.open = false; $('summary', menu).focus(); return; }
@@ -1844,7 +1955,7 @@ async function init() {
   }
   refreshTimer = setInterval(async () => {
     try {
-      const snapshot = await api('state'); state.snapshot = snapshot;
+      const snapshot = await api('state', { light: true }); state.snapshot = { ...state.snapshot, ...snapshot };
       await skillUI.refreshInstallations();
       const settings = $('[data-nav=settings]');
       if (settings) {

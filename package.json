@@ -1,6 +1,6 @@
 {
   "name": "fengzaiy",
-  "version": "0.1.15",
+  "version": "0.1.16",
   "private": true,
   "license": "UNLICENSED",
   "description": "FengZaiY personal management system with local encrypted synchronization",
@@ -9,7 +9,7 @@
   "fengzaiyUpdateSource": {
     "provider": "github",
     "owner": "FengZaiY",
-    "repo": "Project02_StudySelf",
+    "repo": "Project02_FengZaiY",
     "private": false,
     "releaseType": "release"
   },
@@ -34,6 +34,7 @@
     "test:readable-storage": "node scripts/test-readable-storage-ui.mjs",
     "test:hierarchy": "node scripts/test-hierarchy-ui.mjs",
     "test:note-drag": "node scripts/test-note-tree-drag.mjs",
+    "test:note-tabs": "node scripts/test-note-tab-navigation.mjs",
     "test:agents": "node scripts/test-agents-ui.mjs",
     "test:agent-operations": "node scripts/test-agent-operations-ui.mjs",
     "test:agent-operations-desktop": "node scripts/test-agent-operations-desktop.mjs",
@@ -65,6 +66,10 @@
     "test:sync-ui": "node scripts/test-sync-ui.mjs",
     "test:packaged": "node scripts/test-desktop.mjs --packaged",
     "benchmark": "node scripts/benchmark.mjs",
+    "benchmark:service": "node scripts/benchmark-performance.mjs",
+    "test:performance": "node --test tests/performance.test.mjs",
+    "test:performance-ui": "node scripts/test-performance-ui.mjs",
+    "test:performance-desktop": "node scripts/test-performance-ui.mjs --desktop",
     "dist": "npm run build && electron-builder --config scripts/release-config.mjs --win nsis --x64 --publish never"
   },
   "devDependencies": {

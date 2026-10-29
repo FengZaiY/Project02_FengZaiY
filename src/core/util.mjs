@@ -1,6 +1,7 @@
 import { createHash, randomUUID, createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { readFileWork } from './file-work.mjs';
 
 export const uuid = () => randomUUID();
 export const now = () => new Date().toISOString();
@@ -62,9 +63,15 @@ export function decrypt(box, key, aad = '') {
   return Buffer.concat([cipher.update(Buffer.from(box.data, 'base64')), cipher.final()]);
 }
 export async function hashFile(file) {
-  const hash = createHash('sha256');
-  for await (const chunk of fs.createReadStream(file)) hash.update(chunk);
-  return hash.digest('hex');
+  const handle = await fs.promises.open(file, 'r');
+  try {
+    const before = await handle.stat({ bigint: true });
+    check(before.isFile() && before.size <= BigInt(Number.MAX_SAFE_INTEGER), '文件读取范围无效');
+    const result = await readFileWork(handle, Number(before.size));
+    const after = await handle.stat({ bigint: true });
+    check(before.size === after.size && before.mtimeNs === after.mtimeNs && before.ctimeNs === after.ctimeNs, '文件在校验期间发生变化');
+    return result.hash;
+  } finally { await handle.close(); }
 }
 export function prettyError(error) {
   return { message: error.message || String(error), code: error.code || 'ERROR' };

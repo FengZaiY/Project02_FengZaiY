@@ -173,14 +173,14 @@ try {
     await page.setViewportSize({ width, height });
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false);
     await page.screenshot({ path: path.join(root, `settings-${width}.png`), fullPage: true });
-    await page.locator('#main details summary').click();
+    await page.getByText('需求基线', { exact: true }).click();
     await page.locator('#main').evaluate(element => { element.scrollTop = element.scrollHeight; });
     const save = await page.locator('#agent-preferences-form button[type=submit]').boundingBox();
     const footer = await page.locator('.statusbar').boundingBox();
     await page.screenshot({ path: path.join(root, `settings-bottom-${width}.png`), fullPage: true });
     assert.ok(save.y >= 0 && save.y + save.height <= footer.y, `settings save remains reachable below baseline: ${JSON.stringify({ width, save, footer })}`);
     assert.ok(footer.y + footer.height <= height + 1);
-    await page.locator('#main details summary').click();
+    await page.getByText('需求基线', { exact: true }).click();
   }
   await page.setViewportSize({ width: 1165, height: 892 });
   const download = page.waitForEvent('download');

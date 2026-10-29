@@ -6,6 +6,7 @@ import { Service } from '../src/core/service.mjs';
 import { AgentOperations } from '../src/core/agent-operations.mjs';
 import { call } from '../skills/fengzaiy/scripts/client.mjs';
 import { uuid } from '../src/core/util.mjs';
+import { skillExportFiles } from '../web/skill-export.js';
 
 const root = path.resolve('artifacts/agent-operation-tests');
 fs.mkdirSync(root, { recursive: true });
@@ -25,6 +26,44 @@ async function setup(t) {
   };
   return { service, grant, rpc, request, decide };
 }
+
+test('routine Skill checks do not expire proposal approvals or their resubmissions', async t => {
+  const { service, rpc, request, decide } = await setup(t);
+  const directory = fs.mkdtempSync(path.join(root, 'installation-'));
+  const installed = path.join(directory, 'fengzaiy');
+  for (const [name, content] of Object.entries(skillExportFiles(service.agents.skillPackage()))) {
+    const file = path.join(installed, name);
+    fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, content);
+  }
+  const manager = service.skillInstallations;
+  const linked = manager.confirm({ token: manager.preview({ directory: installed }).token, confirmed: true });
+  const library = service.store.saveLibrary({ title: '隔离方案' });
+  const plan = await rpc('propose', { title: '等待本机确认', domain: library.data.domain,
+    preferencesVersion: service.agents.preferences().version,
+    items: [{ data: { title: '待入库笔记', domain: library.data.domain, content: '测试正文' } }] }, uuid());
+  const input = { id: plan.id, parents: plan.heads, itemIds: [plan.data.items[0].id] };
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const requestId = uuid(), pending = await request('approve', input, requestId);
+    const before = await service.call('agentOperationDetail', { id: pending.id });
+    const checkedAt = manager.list()[0].checkedAt;
+    await new Promise(resolve => setTimeout(resolve, 5));
+    manager.nextCheck = 0; manager.tick();
+    assert.notEqual(manager.list()[0].checkedAt, checkedAt);
+    const after = await service.call('agentOperationDetail', { id: pending.id });
+    assert.equal(after.stale, false, '检查时间变化不能使请求过期');
+    assert.equal(after.token, before.token);
+    await decide(pending, attempt === 1);
+    assert.equal((await rpc('operationResult', { id: pending.id })).state, attempt === 1 ? 'completed' : 'rejected');
+    assert.equal((await request('approve', input, requestId)).state, attempt === 1 ? 'completed' : 'rejected');
+  }
+  assert.equal(service.store.list({ type: 'note' }).length, 1);
+  const pending = await request('librarySave', { title: '真实配置变化' });
+  manager.configure({ id: linked.id, mode: 'auto', confirmed: true });
+  await assert.rejects(decide(pending), { code: 'CONFLICT' });
+  const fresh = await request('librarySave', { title: '重新核对后' });
+  manager.check();
+  await decide(fresh);
+});
 
 test('fixed MCP catalog executes only after local approval and returns credential-owned results', async t => {
   const { service, rpc, request, decide } = await setup(t);

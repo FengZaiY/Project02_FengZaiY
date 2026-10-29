@@ -62,7 +62,8 @@ export class AgentOperations {
     return sha(canonical({ heads: this.store.db.prepare('SELECT entity_id,event_id FROM heads ORDER BY entity_id,event_id').all(),
       control: this.store.local('v3Control'), binding: this.store.local('syncBindingRevision'),
       folder: this.store.local('syncFolder'), storage: this.service.storage?.status() || null,
-      skills: this.service.skillInstallations.list(), grants: this.service.agents.grants(),
+      // Background inspection updates checkedAt even when the installation is unchanged.
+      skills: this.service.skillInstallations.list().map(({ checkedAt, ...installation }) => installation), grants: this.service.agents.grants(),
       preferences: this.service.agents.preferences().version }));
   }
   summary(entry) {

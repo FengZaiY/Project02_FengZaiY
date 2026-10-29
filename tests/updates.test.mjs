@@ -36,7 +36,7 @@ test('online source requires explicit HTTPS directory or public GitHub repositor
   assert.throws(() => updateSource({ provider: 'github', owner: '../x', repo: 'repo' }));
   assert.throws(() => updateSource({ provider: 's3' }));
   assert.deepEqual(releaseConfig({}).extraMetadata.fengzaiyUpdateSource,
-    { provider: 'github', owner: 'FengZaiY', repo: 'Project02_StudySelf', private: false, releaseType: 'release' });
+    { provider: 'github', owner: 'FengZaiY', repo: 'Project02_FengZaiY', private: false, releaseType: 'release' });
   assert.throws(() => releaseConfig({ FENGZAIY_UPDATE_URL: source.url, FENGZAIY_UPDATE_GITHUB: 'owner/repo' }));
   for (const env of [{ FENGZAIY_UPDATE_URL: source.url }, { FENGZAIY_UPDATE_GITHUB: 'owner/repo' }]) {
     const config = releaseConfig(env);

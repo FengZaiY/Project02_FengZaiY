@@ -1,5 +1,19 @@
 # Architecture
 
+## Read and file-work performance (2026-10-29)
+
+`read-index.mjs` builds a connection-local TEMP index of current-head metadata. TEMP triggers track head, revision JSON and delivery changes; rollback restores index state. Store list filtering/pagination selects entity IDs before loading bodies, retaining all matched branches and the original search/deletion semantics. Search remains a linear canonical-JSON substring match, not a full-text index. Library summaries and compact note navigation use cloned caches invalidated by the read epoch; transaction reads bypass caching and transaction completion clears it. No immutable history or shared schema is rewritten.
+
+UI protocol 4 exposes a connection generation plus read epoch. Periodic light state omits libraries/workspace, unrelated pages skip note list/tree requests, and unchanged navigation reuses its tree. Refreshing an unchanged current note preserves its editor and undo; actual content changes/conflicts still reload through existing protection. Editors are not cached across arbitrary tab changes.
+
+Local hierarchy projection tracks per-record heads, parent paths, references/bindings and original file identity in local configuration. Background passes reuse unchanged generated files; explicit verification still hashes and protects external edits. Parent renames and reference changes invalidate dependents, failed passes remain retryable, and permanent erasure removes affected projection-cache entries. The pass still reads current metadata/records to identify changes; material organization may also scan attachments. This is incremental file generation, not elimination of every workspace scan.
+
+`file-work.mjs` owns one reusable worker with a 64-job waiting limit. Callers open, retain and close file handles; workers receive only descriptors and bounded requests, read/hash in at most 1 MiB chunks, and transfer bounded inline bytes. Error rejection waits for worker exit before caller cleanup. Same-handle size, identity, state and post-read checks remain in asset-reader; no failure fallback skips verification. Database/business/encryption work has not all moved off the main thread.
+
+Material thumbnails retain at most 48 PNGs/12 MiB in session memory, each at most 320 by 240 pixels/1 MiB. They are captured from actual images/video frames after lazy loading. Identity includes expected content hash, heads, binding and nanosecond file stats; changes/missing originals invalidate reuse. Leaving a view revokes its Blob URLs and media reads. First viewing still decodes the original; no persistent thumbnail files are created. The desktop media scheme enables canvas access for the local file renderer origin while preserving verified media reads, not a public cross-origin API.
+
+Evidence and remaining limits: [performance verification](verification-performance-2026-10-29.md).
+
 ## FengZaiY personal management (2026-10-27)
 
 The Windows local workspace has five business areas: knowledge/notes, materials, accounts/subscriptions, finance, and tasks. Product, MCP server and Skill names are FengZaiY. Package identity is `fengzaiy`, appId is `cn.fengzaiy.desktop`, tools use `FengZaiY_`, and environment variables use `FENGZAIY_*`. The Skill name and directory use the standard lowercase `fengzaiy`; the ZIP display name is `FengZaiY.zip`. The explicit NSIS GUID preserves the prior installer identity. Existing userData/workspace anchors, immutable ID seeds and links remain readable through compatibility handling; newly generated links use `fengzaiy://`. New profiles use FengZaiY, while existing profiles remain at their verified location. This change does not update installed applications or external Skill copies.
@@ -366,6 +380,8 @@ The user's revised boundary permits app-wide capabilities with local vault unloc
 
 Requests carry immutable parameters, a grant ID, request ID, preference version and snapshot of heads/management/storage/installation/grant state. UI-only review and decision APIs display concrete parameters and available domain previews. Decision rechecks grant expiry, snapshot, unsaved drafts and maintenance state, then calls the existing Service validation path. A request's supplied `confirmed` flag cannot approve it. Pause can interrupt an active publish; other concurrent administrative execution is serialized. Exit/install guards include active requests.
 
+Installation snapshots exclude only `checkedAt`: a periodic Skill inspection changes that timestamp even when no content or configuration changes. Installation state, version, mode and other existing snapshot fields remain checked. Old pending hashes are not rewritten or silently accepted; callers must issue a fresh reviewed request if they no longer match. Rejected requests are hidden from the UI list before its display limit, while owned result lookup and idempotency receipts retain their rejected state.
+
 Payloads and results use device-local encryption in local_config; operation receipts in agent_requests contain only request summaries, never password read results. Adding a request prunes terminal details older than one day and caps the queue at 500 records, preserving all active requests (at most 100). Durable request IDs prevent replay after details are pruned. Revocation removes owned requests/receipts without expiry processing recreating them; startup drops orphaned requests. Interrupted execution clears the queued input and is reported without automatic retry. This is not a distributed transaction with filesystem or native UI operations: callers must inspect failed/interrupted effects before requesting again.
 
 Password read/history/generate require local unlock on every call and do not cache results. Password writes require unlock at submission and execution plus local approval. Master and recovery credentials never enter MCP. Native file dialogs and update calls run from the trusted UI after approval; multi-step master, install, restart and PDF flows remain local_action_required until separately verified by the user. Browser preview never reports a native action as completed. Shared events/encryption/sync formats are unchanged; the trusted UI protocol is now 3.
@@ -389,6 +405,10 @@ Tools are named and schema-validated. Valid credentials discover all existing Ag
 预览令牌绑定文件快照、关联设置和内置/偏好版本，五分钟有效，确认重验。每文件原子替换，manifest 最后写；不承诺整个目录对第三方读取原子可见，更新时应暂停使用该 Skill。变更前持久化 before/after，失败/启动时只对仍匹配这两份内容的文件回滚，遇到外部新修改保留现场。上一份受管文件可恢复，恢复后关闭自动更新。应用运行期间每分钟检查，只有明确开启自动更新且文件摘要未被手改时才更新；设置导航显示待处理数。成功仅证明安装文件已写入，不证明宿主已重载，连接/授权配置不改。解除关联不删除安装文件。
 
 ## Verification
+
+### Local Note Tab Navigation
+
+Ordinary note/draft navigation activates an existing tab or replaces the selected tab. Explicit Ctrl-click, middle-click, the context action, Ctrl+Enter and note creation retain other tabs. Before replacement, the renderer drains the old tab's serial autosave, persists local drafts, and rechecks input received during the request. Failure or conflict leaves the editor intact; navigation never authorizes a branch. The old autosave job is retired before a fresh tab identity is assigned. Open, tab-close and sidebar navigation requests are serialized. Reopening an unchanged selected note preserves the editor and undo history; reading positions for up to 200 records live only in local workspace metadata and are not included in shared workspace records.
 
 ### Desktop Exit Check
 

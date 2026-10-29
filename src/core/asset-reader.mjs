@@ -1,6 +1,6 @@
 import fs from 'node:fs';
-import { createHash } from 'node:crypto';
-import { check, noSymlink, sha } from './util.mjs';
+import { check, noSymlink } from './util.mjs';
+import { readFileWork } from './file-work.mjs';
 
 const caches = new WeakMap();
 const stamp = stat => [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].join(':');
@@ -42,9 +42,8 @@ export async function openAssetReader(store, id, { maxBytes = Infinity, mimeType
       const key = `${local.path}\0${record.data.sha256}`, cacheable = stat.ino !== 0n && stat.mtimeNs !== undefined && stat.ctimeNs !== undefined;
       if (!cacheable || cache.get(key) !== identity) {
         cache.delete(key);
-        const hash = createHash('sha256');
-        if (stat.size > 0n) for await (const chunk of handle.createReadStream({ autoClose: false, start: 0, end: Number(stat.size) - 1 })) hash.update(chunk);
-        check(hash.digest('hex') === record.data.sha256, '附件完整性校验失败');
+        const result = await readFileWork(handle, Number(stat.size));
+        check(result.hash === record.data.sha256, '附件完整性校验失败');
       }
       await assertUnchanged();
       if (cacheable) {
@@ -61,14 +60,10 @@ export async function readAssetContent(store, id, maxBytes = 24 * 1024 * 1024) {
   try {
     // Bound allocation and reads by the checked size, even if another program grows
     // the file during the read. Verify the exact bytes returned to the renderer.
-    const data = Buffer.alloc(reader.size);
-    let offset = 0;
-    while (offset < data.length) {
-      const { bytesRead } = await reader.handle.read(data, offset, data.length - offset, offset);
-      check(bytesRead > 0, '附件读取不完整'); offset += bytesRead;
-    }
+    const result = await readFileWork(reader.handle, reader.size, { content: true });
+    const data = Buffer.from(result.data.buffer, result.data.byteOffset, result.data.byteLength);
     await reader.assertUnchanged();
-    check(sha(data) === reader.record.data.sha256, '附件完整性校验失败');
+    check(result.hash === reader.record.data.sha256, '附件完整性校验失败');
     return { mime: reader.record.data.mime, data: data.toString('base64'), filename: reader.record.data.filename };
   } finally { await reader.close(); }
 }

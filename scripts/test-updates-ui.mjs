@@ -17,7 +17,7 @@ try {
   page.on('pageerror', error => errors.push(error.message));
   await page.goto(app.url); await page.locator('[data-nav=settings]').click();
   await page.locator('#upgrade-settings', { hasText: '浏览器开发预览' }).waitFor();
-  assert.match(await page.locator('#upgrade-settings').innerText(), /github.com\/FengZaiY\/Project02_StudySelf\/releases/);
+  assert.match(await page.locator('#upgrade-settings').innerText(), /github.com\/FengZaiY\/Project02_FengZaiY\/releases/);
   assert.equal(await page.locator('[data-update=check]').isDisabled(), true);
   for (const method of ['updateStatus', 'updateCheck', 'updateDownload', 'updatePause', 'updateResume', 'updateRestartDownload', 'updateInstall', 'updateConfigure']) {
     const result = await page.evaluate(async ({ method, token }) => (await fetch('/api', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-FengZaiY-Token': token }, body: JSON.stringify({ method }) })).json(), { method, token: app.token });

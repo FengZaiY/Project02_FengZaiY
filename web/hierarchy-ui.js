@@ -68,7 +68,7 @@ export function createHierarchyUI({ state, api, esc, icon, button, render, persi
       const record = await api('save', { type: 'note', data: { title: '未命名笔记', domain: parent.data.domain,
         parentNoteId: parent.id, content: '', format: 'html', sensitive: parent.data.sensitive } });
       state.collapsedNotes = (state.collapsedNotes || []).filter(id => id !== parent.id);
-      await openRecord(record.id); $('#note-title')?.focus(); $('#note-title')?.select();
+      await openRecord(record.id, { newTab: true }); $('#note-title')?.focus(); $('#note-title')?.select();
     },
     'note-parent': move,
     'storage-retry': async () => { await api('localHierarchyRefresh'); await render(); toast('本地文件维护状态已更新'); }

@@ -106,7 +106,7 @@ try {
   await page.locator(`[data-action="tree-open"][data-note="${child.id}"]`).waitFor();
   // View switches and search replace only navigation, preserving the live editor and undo history.
   await page.locator(`[data-record="${child.id}"]`).click();
-  await page.locator('.tiptap').waitFor();
+  await page.waitForFunction(title => document.querySelector('#note-title')?.value === title, child.data.title);
   await page.evaluate(() => { window.editorBeforeViewSwitch = document.querySelector('.tiptap'); });
   await page.locator('.tiptap').press('Control+End');
   await page.keyboard.insertText(' 视图切换中的编辑');

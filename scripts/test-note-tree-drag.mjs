@@ -105,7 +105,12 @@ try {
   assert.equal(fs.existsSync(extra), true);
   assert.equal(fs.existsSync(original), true);
   assert.equal(store.assetLocation(shared.id).path, sharedPath);
-  assert.ok(Object.keys(store.local('hierarchyFiles')).some(file => file.includes(parent.id) && file.includes(child.id) && file.endsWith(`${leaf.id}.md`)));
+  const directories = store.local('readableDirectories');
+  assert.equal(path.dirname(directories[`note:${child.id}`]), directories[`note:${parent.id}`]);
+  assert.equal(path.dirname(directories[`note:${leaf.id}`]), directories[`note:${child.id}`]);
+  const leafBody = path.join(store.directory, directories[`note:${leaf.id}`], '正文.md');
+  assert.equal(store.local('projectionOwners')[path.relative(store.directory, leafBody)], leaf.id);
+  assert.match(fs.readFileSync(leafBody, 'utf8'), /实践案例的原正文/);
   assert.equal(store.history(leaf.id).length, leafHistory);
   assert.deepEqual(store.get(asset.id).heads, assetHeads);
   await page.screenshot({ path: path.join(root, 'moved-1304.png') });
@@ -160,7 +165,7 @@ try {
     await route.continue();
   });
   await page.locator('.tiptap').press('Control+End'); await page.keyboard.insertText(' 后台标签输入');
-  await node(parent.id).click();
+  await node(parent.id).click({ modifiers: ['Control'] });
   await page.waitForFunction(() => document.querySelector('#note-title')?.value === '主题概览');
   await Promise.race([backgroundStarted, delay(15000).then(() => { throw new Error('Background autosave did not start'); })]);
   await page.evaluate(() => { window.foregroundEditor = document.querySelector('.tiptap').editor; });

@@ -36,6 +36,10 @@ Windows 预览的目录按钮通过已鉴权的界面接口调用系统文件夹
 
 ## 验证矩阵
 
+性能专项：`npm run test:performance` 验证分页/冲突/回滚、增量正文投影及同句柄工作线程；构建后 `npm run test:performance-ui` 与 `npm run test:performance-desktop` 验证编辑器/撤销保留、真实缩略图缓存及原件变化失效。`npm run benchmark` 为万条记录基准，`npm run benchmark:service` 为千条笔记服务冷/热读取基准；结果在 `artifacts/performance`。隔离样本不代表每台电脑的实际响应保证。底层索引/读取改动另运行完整核心及资料、层级、草稿、启动和桌面回归。
+
+删除笔记后的导航使用 `node scripts/test-note-delete-navigation.mjs`：覆盖取消、版本冲突、成功关闭标签、回退其他笔记与刷新恢复、最后一篇空状态、回收站恢复，以及延迟响应不替换新选择或破坏编辑撤销。测试仅使用隔离资料。
+
 命名兼容专项：`node --test tests/branding.test.mjs tests/naming-format.test.mjs`，构建后运行 `node scripts/test-naming-ui.mjs` 和 `node scripts/test-naming-startup.mjs`。覆盖旧链接与身份、新 MCP 配置/Skill 导出、旧安装迁移提示和新启动变量优先级；格式专项只做单工作区清单预检，不替代多电脑同步验收。证据见 [命名验证](docs/verification-fengzaiy-naming-2026-10-27.md)。
 
 用户明确排除多电脑同步时，使用 `node scripts/test-local-audit.mjs core` 选择本机用例，不直接运行含同步的 `npm test` 或 `test:ui`；检查生成的 `artifacts/local-audit/core-selection.json`，新增参数化测试须补充选择。这个选择器只服务限定范围审查，不能替代同步改动所需的完整验证。其他本机界面和源码桌面脚本按下表选择，测试须使用隔离目录。
@@ -83,6 +87,7 @@ MCP 适配使用生产依赖 `@modelcontextprotocol/sdk` 和 `zod`，是唯一�
 | 资料本机目录展示 | 另运行 `npm run test:asset-storage`；检查真实目录与文件绑定、笔记层级/共享/回收、待下载/缺失/外部绑定、路径复制、目录及跨库筛选、分页总数、多窗口截图和只读不改知识记录；本机路径不得进入外部 Agent 返回 |
 | 笔记知识体系与后台文件 | 另运行 `npm run test:hierarchy`、`node --test tests/note-hierarchy.test.mjs tests/hierarchy.test.mjs`；覆盖上下级、提案依赖/部分确认/授权、旧分类幂等转换、新机同步、并发循环、磁盘失败、文件保护和截图 |
 | 笔记树拖动 | 另运行 `npm run test:note-drag`、`node --test tests/note-order.test.mjs`；真实鼠标验证下级/顶层/同级前后、整条子树、排序重开/同步/并发、循环/跨库阻止、取消/长树滚动、当前及后台标签保存竞态、失败重试、源及目标过期、编辑器/预览/撤销保留，以及层级目录跟随和单纯排序不搬原件 |
+| 笔记标签切换 | `npm run test:note-tabs`；隔离浏览器验证普通点击替换、Ctrl/中键/右键/键盘新标签、重复激活、保存期间输入与失败/冲突保护、读取失败、连续点击、草稿、阅读位置及重开恢复；`node scripts/test-note-delete-navigation.mjs` 检查关闭/删除后的回退 |
 | 根目录与知识库文件夹 | `npm test` 含 `library-directories.test.mjs`；另测 `test:storage`、`test:libraries` 和 `test:desktop`，核对真实目录、旧库兼容、创建失败回退及跨库新附件位置 |
 | 本地存储与启动目录 | 另运行 `npm run test:storage`、`npm run test:desktop`；覆盖非空/占用/丢失/损坏目录、复制失败、配置写入失败、WAL 和重启持久化 |
 | 同步接收目录 | `node --test tests/received-objects.test.mjs`、`node scripts/test-received-objects-ui.mjs`；覆盖空目录、绑定/链接保护、未知文件、异常路径、失败重试、重启续传、分页及未保存偏好保留。相关同步和目录维护回归继续执行 |
@@ -115,7 +120,7 @@ MCP 适配使用生产依赖 `@modelcontextprotocol/sdk` 和 `zod`，是唯一�
 
 `npm run dist` 生成 `release/FengZaiY-<版本>-Setup.exe`。`npm run test:packaged` 验证 `release/win-unpacked/FengZaiY.exe`，不等于验证安装向导、卸载或跨版本升级。
 
-在线更新源码已接入 electron-updater，默认共用 `FengZaiY/Project02_StudySelf` 的公开 GitHub Releases（package metadata 保存来源）。独立打包任务可通过 `FENGZAIY_UPDATE_GITHUB=owner/repo` 或 `FENGZAIY_UPDATE_URL=https://.../` 二选一覆盖来源，`scripts/release-config.mjs` 同时生成发布配置和安装包内来源。`npm run dist` 使用 `--publish never`，只构建、不上传。详细流程见 [在线发布说明](docs/online-updates.md)。版本号涉及 `package.json`、锁文件、业务状态和界面显示；发布时搜索所有版本引用，避免只改其中一个。交付说明保留实际签名状态及本轮测试范围，不把百度产品能力验证列为交付门槛。
+在线更新源码已接入 electron-updater，默认共用更名后的 `FengZaiY/Project02_FengZaiY` 的公开 GitHub Releases（package metadata 保存来源）。独立打包任务可通过 `FENGZAIY_UPDATE_GITHUB=owner/repo` 或 `FENGZAIY_UPDATE_URL=https://.../` 二选一覆盖来源，`scripts/release-config.mjs` 同时生成发布配置和安装包内来源。`npm run dist` 使用 `--publish never`，只构建、不上传。详细流程见 [在线发布说明](docs/online-updates.md)。版本号涉及 `package.json`、锁文件、业务状态和界面显示；发布时搜索所有版本引用，避免只改其中一个。交付说明保留实际签名状态及本轮测试范围，不把百度产品能力验证列为交付门槛。
 
 日常修改后保留旧安装包，不把它宣称为包含最新源码。进入独立打包任务时，再基于指定源码构建并验证新安装包，不能沿用旧产物冒充本次交付。
 

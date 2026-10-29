@@ -68,6 +68,9 @@ export function draftWorkflows(store) {
   const stamp = store.db.prepare('SELECT id FROM events ORDER BY rowid DESC LIMIT 1').get()?.id;
   const cached = workflowCache.get(store);
   if (cached && cached.stamp === stamp) return cached.entries;
+  if (!store.db.prepare("SELECT 1 FROM heads h JOIN events e ON e.id=h.event_id WHERE e.type='draft' LIMIT 1").get()) {
+    const entries = new Map(); workflowCache.set(store, { stamp, entries }); return entries;
+  }
   const records = [...store.list(), ...store.list({ trash: true })];
   const byId = new Map(records.map(record => [record.id, record]));
   const entries = new Map();

@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { Store, validateEvent } from './store.mjs';
+import { matchesProposalStatus } from './proposal-status.mjs';
 import { migrateRetiredAI, cleanRetiredTabs, retiredAI } from './retired-ai.mjs';
 import { makePairingKey, importAttachment } from './transport.mjs';
 import { CurrentSync } from './current-sync.mjs';
@@ -114,16 +115,17 @@ export class Service {
     if (this.readyPending || this.localTask || this.imports.size || this.agentOperationTask || this.agents.uploadTasks?.size) return Promise.allSettled([this.ready, this.localTask, ...this.imports, this.agentOperationTask, ...(this.agents.uploadTasks || [])]).finally(finish);
     finish();
   }
-  state() {
+  state({ light = false } = {}) {
     const legacy = [...this.store.list({ type: 'folder' }), ...this.store.list({ type: 'folder', trash: true })];
     const summary = this.store.summary();
     const workflows = draftWorkflows(this.store);
     summary.counts.draft = this.store.list({ type: 'draft' }).filter(record => workflows.get(record.id)?.status !== 'processed').length;
     summary.conflicts -= legacy.filter(item => item.conflict).length;
     summary.trash -= legacy.filter(item => item.deleted).length;
-    return { ...summary, libraries: this.store.directories.describe(this.store.libraries()), sync: this.transport.config(),
-      workspace: this.store.local('workspace') || { tabs: [], selectedTab: null },
-      version: '0.1.15', uiProtocol: UI_PROTOCOL, localDataDirectory: this.store.directory, localHierarchy: this.localHierarchy.status(), deletion: deletionStatus(this.store),
+    return { ...summary, readEpoch: `${this.store.readGeneration}:${this.store.readEpoch()}`, sync: this.transport.config(),
+      ...(!light ? { libraries: this.store.directories.describe(this.store.libraries()),
+        workspace: this.store.local('workspace') || { tabs: [], selectedTab: null } } : {}),
+      version: '0.1.16', uiProtocol: UI_PROTOCOL, localDataDirectory: this.store.directory, localHierarchy: this.localHierarchy.status(), deletion: deletionStatus(this.store),
       skillInstallations: this.skillInstallations.summary(), agentPending: this.agentOperations.list().filter(item => item.state === 'pending').length };
   }
   async finishDeletion() {
@@ -171,7 +173,7 @@ export class Service {
       case 'storageCancel':
         check(this.storage, '请重新启动应用以启用本地存储设置');
         return this.storage[({ storageInspect: 'inspect', storageSchedule: 'schedule', storageCancel: 'cancel' })[method]](input);
-      case 'state': return this.state();
+      case 'state': return this.state(input);
       case 'personalList': return this.personal.list(input);
       case 'personalSave': return this.personal.save(input);
       case 'personalBatch': return this.personal.batch(input);
@@ -263,8 +265,8 @@ export class Service {
       case 'skillInstallConfigure': return this.skillInstallations.configure(input);
       case 'skillInstallUnlink': return this.skillInstallations.unlink(input);
       case 'librarySave': return this.store.change('保存知识库', '用户', () => this.store.saveLibrary(input));
-      case 'noteTree': return this.store.noteTree(input.domain).map(({ data, versions, ...node }) =>
-        ({ ...node, data: { title: data.title, domain: data.domain, parentNoteId: data.parentNoteId, noteOrder: data.noteOrder } }));
+      case 'noteTree': return this.store.memoRead(`navigation:${input.domain || ''}`, () => this.store.noteTree(input.domain).map(({ data, versions, ...node }) =>
+        ({ ...node, data: { title: data.title, domain: data.domain, parentNoteId: data.parentNoteId, noteOrder: data.noteOrder } })));
       case 'noteMove': return this.store.change('移动笔记', '用户', () => this.store.moveNote(input));
       case 'folders': return this.store.folders(input.domain);
       case 'folderSave': {
@@ -284,12 +286,18 @@ export class Service {
         return { directory: this.store.directories.ensure(record) };
       }
       case 'records': {
-        let records = this.store.list({ ...input, limit: undefined }).filter(record => !['model', 'provider', 'usage', 'task', 'agentPreferences', 'folder', 'changeBatch', ...SECRET_TYPES].includes(record.type));
+        const derivedFilter = input.type === 'draft' || input.type === 'proposal' && input.proposalStatus;
+        let records = this.store.list({ ...input, limit: derivedFilter ? undefined : input.limit,
+          excludedTypes: ['model', 'provider', 'usage', 'task', 'agentPreferences', 'folder', 'changeBatch', ...SECRET_TYPES] });
         if (input.type === 'draft') {
           const workflows = draftWorkflows(this.store);
           records = records.map(record => ({ ...record, processing: workflows.get(record.id) }));
           if (input.processing && input.processing !== 'all') records = records.filter(record => input.processing === 'active'
             ? record.processing.status !== 'processed' : record.processing.status === input.processing);
+        }
+        if (input.type === 'proposal' && input.proposalStatus) {
+          check(['active', 'accepted', 'all'].includes(input.proposalStatus), '请选择有效的方案确认状态');
+          records = records.filter(record => matchesProposalStatus(record, input.proposalStatus));
         }
         if (input.limit) records = records.slice(0, input.limit);
         return input.preview ? records.map(record => ({ ...record, versions: [],
@@ -408,7 +416,7 @@ export class Service {
       case 'assetDetail': return this.materials.detail(input.id);
       case 'assetUpdate': return this.store.change('修改资料', '用户', () => this.materials.update(input));
       case 'assetBatch': return this.store.change('批量修改资料', '用户', () => this.materials.batch(input));
-      case 'assets': return this.store.list({ type: 'asset' }).map(record => {
+      case 'assets': return (input.id ? [this.store.get(input.id)].filter(record => record?.type === 'asset' && !record.deleted) : this.store.list({ type: 'asset' })).map(record => {
         const local = this.store.assetLocation(record.id);
         return { ...record, available: !!local && fs.existsSync(local.path), pinned: local?.pinned === 1 };
       });

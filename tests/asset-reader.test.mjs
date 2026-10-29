@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { Service } from '../src/core/service.mjs';
 import { mediaResponse } from '../src/core/media.mjs';
+import { fileWorkStatus } from '../src/core/file-work.mjs';
 
 async function fixture(t, name = 'document.txt', bytes = Buffer.from('original content')) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fengzaiy-reader-'));
@@ -36,11 +37,11 @@ test('preview rejects changes during a read and releases its original-file guard
   const open = fs.promises.open;
   t.after(() => { fs.promises.open = open; });
   fs.promises.open = async (...args) => {
-    const handle = await open(...args), read = handle.read.bind(handle);
-    if (args[0] === file) handle.read = async (...input) => {
+    const handle = await open(...args), stat = handle.stat.bind(handle); let checks = 0;
+    if (args[0] === file) handle.stat = async (...input) => {
       assert.equal(store.activeAssetReads.get(asset.id), 1);
-      const result = await read(...input);
-      fs.appendFileSync(file, 'changed after read'); return result;
+      if (++checks === 3) fs.appendFileSync(file, 'changed after worker read');
+      return stat(...input);
     };
     return handle;
   };
@@ -60,6 +61,7 @@ test('preview rejects a binding through a directory link without retaining a rea
 test('media ranges and HEAD reuse verification, but same-size changes invalidate the cache', async t => {
   const { store, asset, file, bytes } = await fixture(t, 'clip.mp4', Buffer.alloc(8 * 1024 * 1024, 7));
   const open = fs.promises.open; let readBytes = 0;
+  const verifiedBytes = fileWorkStatus().completedBytes;
   t.after(() => { fs.promises.open = open; });
   fs.promises.open = async (...args) => {
     const handle = await open(...args), stream = handle.createReadStream.bind(handle);
@@ -75,7 +77,8 @@ test('media ranges and HEAD reuse verification, but same-size changes invalidate
     assert.equal(response.status, 206); assert.equal((await response.arrayBuffer()).byteLength, 1024);
   }
   assert.equal((await mediaResponse(store, asset.id, null, 'HEAD')).headers.get('content-length'), String(bytes.length));
-  assert.equal(readBytes, bytes.length + 3072);
+  assert.equal(readBytes, 3072);
+  assert.equal(fileWorkStatus().completedBytes - verifiedBytes, bytes.length);
   const stat = fs.statSync(file);
   fs.writeFileSync(file, Buffer.alloc(bytes.length, 8)); fs.utimesSync(file, stat.atime, stat.mtime);
   await assert.rejects(mediaResponse(store, asset.id, 'bytes=0-1023'), /完整性/);

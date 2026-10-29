@@ -19,7 +19,7 @@ export function createAgentOperationsUI({ api, esc, icon, formatTime, openModal,
         badge.textContent = String(pending); badge.hidden = !pending; badge.title = 'Agent 请求待本机确认';
       }
       if (!target?.isConnected || target !== host) return;
-      const sorted = [...rows].sort((a, b) => (a.state === 'pending' ? -1 : 0) - (b.state === 'pending' ? -1 : 0) || b.at.localeCompare(a.at));
+      const sorted = rows.filter(row => row.state !== 'rejected').sort((a, b) => (a.state === 'pending' ? -1 : 0) - (b.state === 'pending' ? -1 : 0) || b.at.localeCompare(a.at));
       target.innerHTML = `<div class="agent-request-heading"><h2>操作请求${pending ? ` · ${pending} 待确认` : ''}</h2><button class="icon-button" data-refresh-requests title="刷新操作请求" aria-label="刷新操作请求">${icon('refresh-cw')}</button></div>
         <div class="agent-requests">${sorted.slice(0, 100).map(row => `<div class="agent-request" data-request="${esc(row.id)}"><div><strong>${esc(row.label)}</strong><small>${esc(row.agent)} · ${formatTime(row.at)}</small></div><span class="agent-request-state">${esc(labels[row.state] || row.state)}</span><button class="secondary" data-review-request="${esc(row.id)}">${icon(row.state === 'pending' ? 'clipboard-check' : 'eye')}${row.state === 'pending' ? '查看并处理' : '详情'}</button></div>`).join('') || '<p class="muted">暂无操作请求</p>'}</div>`;
       target.querySelector('[data-refresh-requests]').onclick = () => refresh().catch(error => toast(error.message, true));

@@ -10,6 +10,7 @@ import { isReadableAsset, readableDirectory } from './readable-storage.mjs';
 import { readableMarkdown } from './readable-markdown.mjs';
 import { richReferences } from './rich-content.mjs';
 import { workspaceInternalPath } from './workspace-layout.mjs';
+import { setImmediate as yieldTask } from 'node:timers/promises';
 
 const names = { note: '笔记', draft: '草稿', source: '来源', annotation: '备注', relation: '关联', proposal: '整理方案', asset: '资料' };
 const safeName = title => String(title).normalize('NFKC').replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').replace(/[. ]+$/g, '').slice(0, 24) || '未命名';
@@ -54,11 +55,12 @@ export class LocalHierarchy {
   write(file, data, files) {
     const relative = path.relative(this.store.directory, file), digest = sha(data);
     noSymlink(file);
+    let current;
     if (fs.existsSync(file)) {
-      const current = sha(fs.readFileSync(file));
+      current = sha(fs.readFileSync(file));
       check(current === digest || files[relative] === current, '本地目录文件被其他程序修改，已保留；请先移开修改副本后重试');
     }
-    if (!fs.existsSync(file) || sha(fs.readFileSync(file)) !== digest) atomicWrite(file, data);
+    if (current !== digest) atomicWrite(file, data);
     files[relative] = digest;
     // Persist ownership immediately so interruption can resume without overwriting unknown files.
     this.store.local('hierarchyFiles', files);
@@ -144,34 +146,64 @@ export class LocalHierarchy {
     if (enable) this.store.local('hierarchyEnabled', true);
     this.running = true;
     const files = this.store.local('hierarchyFiles') || {}, used = new Set();
-    const report = { at: now(), records: 0, missing: 0, errors: [] };
-    const initial = this.store.db.prepare('SELECT COUNT(*) AS n FROM events').get().n;
+    const report = { at: now(), records: 0, missing: 0, errors: [], updated: 0, reused: 0, incremental: !verify };
+    const projection = this.store.local('hierarchyProjectionState') || {}, nextProjection = {};
+    const allRecords = [...this.store.list(), ...this.store.list({ trash: true })];
+    const byId = new Map(allRecords.map(record => [record.id, record]));
+    const bindings = new Map(this.store.db.prepare('SELECT id,path FROM assets').all().map(row => [row.id, row.path]));
+    const initial = this.store.readEpoch();
     try {
       for (const library of this.store.libraries()) {
         const root = this.root(library), notes = this.store.noteTree(library.data.domain), dirs = new Map();
+        const nodes = new Map(notes.map(node => [node.id, node]));
+        const nameLimit = Math.max(8, Math.floor((210 - root.length) / Math.max(1, ...notes.map(item => item.depth + 1))));
         const noteDirectory = node => {
           if (dirs.has(node.id)) return dirs.get(node.id);
-          const parent = node.parentNoteId ? notes.find(item => item.id === node.parentNoteId) : null;
+          const parent = node.parentNoteId ? nodes.get(node.parentNoteId) : null;
           const directory = this.store.personalSystem
-            ? readableDirectory(this.store, parent ? noteDirectory(parent) : root, node.data.title, `note:${node.id}`, true, Math.max(8, Math.floor((210 - root.length) / Math.max(1, ...notes.map(item => item.depth + 1)))))
+            ? readableDirectory(this.store, parent ? noteDirectory(parent) : root, node.data.title, `note:${node.id}`, true, nameLimit)
             : path.join(parent ? noteDirectory(parent) : root, `${safeName(node.data.title)}-${node.id}`);
           noSymlink(directory); fs.mkdirSync(directory, { recursive: true });
           dirs.set(node.id, directory);
           return directory;
         };
-        const records = [...this.store.list({ domain: library.data.domain }), ...this.store.list({ domain: library.data.domain, trash: true })]
-          .filter(record => placedTypes.includes(record.type));
+        const records = allRecords.filter(record => placedTypes.includes(record.type) && record.versions.some(version => version.data.domain === library.data.domain));
         const owners = new Map();
         for (const note of notes.filter(item => !item.conflict)) for (const id of [...(note.data.assetIds || []), ...(note.data.sourceIds || [])]) {
           if (!owners.has(id)) owners.set(id, new Set());
           owners.get(id).add(note.id);
         }
         for (const record of records) {
+          if ((report.updated + report.reused) % 20 === 0) await yieldTask();
           try {
             const ownerIds = owners.get(record.id);
             const ownerId = ownerIds?.size === 1 ? [...ownerIds][0] : record.data.noteId
               || (record.data.folderId ? legacyNoteId(record.data.folderId) : null);
-            const node = notes.find(item => item.id === (record.type === 'note' ? record.id : ownerId));
+            const node = nodes.get(record.type === 'note' ? record.id : ownerId);
+            const cached = projection[record.id];
+            let dependencies = cached?.heads === record.heads.join() ? cached.dependencies : null;
+            if (!dependencies) dependencies = [...new Set([...(record.data.assetIds || []), ...(record.data.sourceIds || []), ...richReferences(record.data).refs])];
+            const dependencyState = ids => ids.map(id => [id, byId.get(id)?.heads, bindings.get(id)]);
+            if (cached && canonical(dependencyState(dependencies)) !== cached.dependencyState) dependencies = null;
+            if (!dependencies) dependencies = [...new Set([...(record.data.assetIds || []), ...(record.data.sourceIds || []), ...richReferences(record.data).refs])];
+            const expanded = new Set(dependencies);
+            for (const id of dependencies) {
+              const source = byId.get(id);
+              if (source?.type === 'source') for (const ref of [...(source.data.assetIds || []), ...richReferences(source.data).refs]) expanded.add(ref);
+            }
+            dependencies = [...expanded];
+            const dependencyStamp = canonical(dependencyState(dependencies));
+            let originalStamp;
+            if (record.type === 'asset' && bindings.has(record.id)) {
+              try { const stat = fs.statSync(bindings.get(record.id), { bigint: true }); originalStamp = [String(stat.size), String(stat.mtimeNs), String(stat.ctimeNs), String(stat.ino)]; } catch { originalStamp = 'missing'; }
+            }
+            const fingerprint = sha(canonical(['projection-cache-v1', record.heads, record.deleted, record.conflict, root, library.heads,
+              node?.path, node?.parentNoteId, nameLimit, ownerIds ? [...ownerIds].sort() : [], dependencyStamp, bindings.get(record.id), !!this.store.personalSystem]));
+            if (!verify && !cached?.missing && cached?.fingerprint === fingerprint && canonical(cached.originalStamp) === canonical(originalStamp) && cached.files.every(relative => files[relative] && fs.existsSync(inside(this.store.directory, relative)))) {
+              cached.files.forEach(relative => used.add(relative)); nextProjection[record.id] = cached;
+              report.records++; report.reused++; report.missing += cached.missing || 0; continue;
+            }
+            const recordFiles = [];
             const base = record.deleted ? path.join(root, '回收站') : record.conflict ? path.join(root, '待处理冲突')
               : ownerIds?.size > 1 ? path.join(root, '共享资料') : node ? noteDirectory(node) : root;
             const directory = this.store.personalSystem && record.type === 'asset' ? root : record.type === 'note' && !record.deleted && !record.conflict ? base : !this.store.personalSystem ? path.join(base, names[record.type])
@@ -187,7 +219,7 @@ export class LocalHierarchy {
             const internal = this.store.personalSystem ? path.join(managedRoot(this.store, true), 'metadata', 'records') : directory; noSymlink(internal); fs.mkdirSync(internal, { recursive: true });
             const projectionOwners = this.store.local('projectionOwners') || {};
             const fullFile = path.join(internal, this.store.personalSystem ? `${record.id}.json` : `${stem}.json`);
-            used.add(this.write(fullFile, JSON.stringify({ format: 1, id: record.id, type: record.type,
+            recordFiles.push(this.write(fullFile, JSON.stringify({ format: 1, id: record.id, type: record.type,
               data: record.data, heads: record.heads, versions: record.versions, deleted: record.deleted, original }, null, 2), files));
             projectionOwners[path.relative(this.store.directory, fullFile)] = record.id;
             if (typeof record.data.content === 'string') {
@@ -196,7 +228,7 @@ export class LocalHierarchy {
                 const local = this.store.assetLocation(id);
                 return local && fs.existsSync(local.path) ? path.relative(directory, local.path).split(path.sep).map(encodeURIComponent).join('/') : `fengzaiy://asset/${id}`;
               };
-              used.add(this.write(bodyFile, `# ${record.data.title}\n\n${readableMarkdown(record.data, assetLink)}\n`, files));
+              recordFiles.push(this.write(bodyFile, `# ${record.data.title}\n\n${readableMarkdown(record.data, assetLink)}\n`, files));
               const ids = new Set([...(record.data.assetIds || []), ...(record.data.sourceIds || []), ...richReferences(record.data).refs]);
               for (const id of ids) {
                 const source = this.store.get(id);
@@ -207,11 +239,15 @@ export class LocalHierarchy {
                 const title = (ref?.data.title || id).replace(/[\[\]\\]/g, '\\$&');
                 return local && fs.existsSync(local.path) ? `- [${title}](<${path.relative(directory, local.path).split(path.sep).map(encodeURIComponent).join('/')}>)` : `- ${title}（${ref?.type === 'asset' ? '原件待下载' : '来源记录'}，ID: ${id}）`;
               });
-              if (this.store.personalSystem) used.add(this.write(refsFile, `# 资料引用\n\n${links.join('\n') || '暂无关联资料'}\n`, files));
+              if (this.store.personalSystem) recordFiles.push(this.write(refsFile, `# 资料引用\n\n${links.join('\n') || '暂无关联资料'}\n`, files));
               projectionOwners[path.relative(this.store.directory, bodyFile)] = record.id;
               if (this.store.personalSystem) projectionOwners[path.relative(this.store.directory, refsFile)] = record.id;
             }
             this.store.local('projectionOwners', projectionOwners);
+            recordFiles.forEach(relative => used.add(relative));
+            nextProjection[record.id] = { fingerprint, heads: record.heads.join(), dependencies, dependencyState: dependencyStamp,
+              files: recordFiles, ...(originalStamp ? { originalStamp } : {}), missing: original && !original.available ? 1 : 0 };
+            report.updated++;
             report.records++;
           } catch (error) { report.errors.push({ id: record.id, message: error.message }); }
         }
@@ -231,7 +267,8 @@ export class LocalHierarchy {
       await this.cleanOriginals();
       report.receivedDirectory = pruneReceivedDirectory(this.store);
       this.store.local('hierarchyFiles', files);
-      this.store.local('hierarchyDirty', report.errors.length > 0 || initial !== this.store.db.prepare('SELECT COUNT(*) AS n FROM events').get().n);
+      this.store.local('hierarchyProjectionState', nextProjection);
+      this.store.local('hierarchyDirty', report.errors.length > 0 || initial !== this.store.readEpoch());
     } catch (error) { report.errors.push({ message: error.message }); this.store.local('hierarchyDirty', true); }
     finally { this.running = false; this.store.local('hierarchyReport', report); }
     return this.status();

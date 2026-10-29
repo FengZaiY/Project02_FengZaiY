@@ -20,6 +20,7 @@ import { PERSONAL_TYPES, MATERIAL_SCOPE, cleanPersonal } from './personal-schema
 import { validatePersonalWrite } from './personal-records.mjs';
 import { cleanMaterialItems, validateManagedFilename, validateMaterialPlacement, approveMaterialItems } from './material-organization.mjs';
 import { databasePath, deviceKeyPath } from './workspace-layout.mjs';
+import { createReadIndex, selectRecordIds } from './read-index.mjs';
 const GLOBAL_SCOPE = '__all_libraries__';
 
 const COMMON = ['title', 'domain', 'tags', 'sensitive'];
@@ -205,9 +206,21 @@ export class Store {
         open: value => decrypt(JSON.parse(value), key, 'local-device-vault').toString()
       };
     }
+    createReadIndex(this.db);
+    this.db.function('fengzaiy_search', { deterministic: true }, (json, term) => Number(canonical(JSON.parse(json).data).toLocaleLowerCase().includes(term)));
+    this.readCache = new Map();
+    this.readGeneration = uuid();
     try { migratePresentation(this, validateEvent); } catch (error) { this.db.close(); throw error; }
   }
   close() { this.db.close(); }
+  readEpoch() { return this.db.prepare('SELECT value FROM read_epoch').get().value; }
+  memoRead(key, compute) {
+    if (this.transactionDepth) return compute();
+    const epoch = this.readEpoch();
+    if (this.readCacheEpoch !== epoch) { this.readCache.clear(); this.readCacheEpoch = epoch; }
+    if (!this.readCache.has(key)) this.readCache.set(key, compute());
+    return structuredClone(this.readCache.get(key));
+  }
   getMeta(key) { return this.db.prepare('SELECT value FROM meta WHERE key=?').get(key)?.value; }
   setMeta(key, value) { this.db.prepare('INSERT OR REPLACE INTO meta VALUES(?,?)').run(key, String(value)); }
   local(key, value) {
@@ -226,7 +239,7 @@ export class Store {
       this.db.exec(depth ? `ROLLBACK TO ${savepoint}; RELEASE ${savepoint}` : 'ROLLBACK');
       if (changes && this.changeContext) { this.changeContext.clear(); for (const [id, entry] of changes) this.changeContext.set(id, entry); }
       throw error;
-    } finally { this.transactionDepth = depth; }
+    } finally { this.transactionDepth = depth; this.readCache?.clear(); }
   }
   change(title, actor, fn, reversalOf) {
     if (this.changeContext) return this.transaction(fn);
@@ -258,10 +271,13 @@ export class Store {
       versions: heads, conflict: heads.length > 1, deleted: heads.every(e => e.deleted),
       updatedAt: heads.map(e => e.createdAt).sort().at(-1), status: this.delivery(id) };
   }
-  list({ type, domain, query, trash = false, limit, folderId } = {}) {
+  list({ type, domain, query, trash = false, limit, folderId, excludedTypes = [] } = {}) {
+    const ids = selectRecordIds(this.db, { type, domain, query, trash, excludedTypes,
+      limit: folderId !== undefined ? undefined : limit });
+    if (!ids.length) return [];
     const sql = `SELECT e.json,e.exported,e.received,EXISTS(SELECT 1 FROM receipts r WHERE r.event_id=e.id AND r.device_id<>?) AS acknowledged
-      FROM heads h JOIN events e ON e.id=h.event_id ${type ? 'WHERE e.type=?' : ''} ORDER BY e.id`;
-    const rows = this.db.prepare(sql).all(...(type ? [this.deviceId, type] : [this.deviceId]));
+      FROM heads h JOIN events e ON e.id=h.event_id WHERE h.entity_id IN (SELECT value FROM json_each(?)) ORDER BY e.id`;
+    const rows = this.db.prepare(sql).all(this.deviceId, JSON.stringify(ids));
     const grouped = new Map();
     for (const row of rows) {
       const event = JSON.parse(row.json);
@@ -281,10 +297,6 @@ export class Store {
       const usable = new Set(folderTree(this, domain).filter(folder => !folder.issue).map(folder => folder.id));
       records = records.filter(record => record.type !== 'folder' && record.versions.some(version =>
         folderId ? version.data.folderId === folderId : !version.data.folderId || !usable.has(version.data.folderId)));
-    }
-    if (query) {
-      const term = query.toLocaleLowerCase();
-      records = records.filter(record => record.versions.some(version => canonical(version.data).toLocaleLowerCase().includes(term)));
     }
     records.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
     return Number.isSafeInteger(limit) && limit > 0 ? records.slice(0, Math.min(limit, 10000)) : records;
@@ -413,13 +425,18 @@ export class Store {
     return this.write({ id, type: record.type, data: record.data, parents, deleted: true });
   }
   libraries() {
-    const records = [...this.list(), ...this.list({ trash: true })];
-    const libraries = records.filter(record => record.type === 'library');
+    return this.memoRead('libraries', () => this.librarySummary());
+  }
+  librarySummary() {
+    const libraries = [...this.list({ type: 'library' }), ...this.list({ type: 'library', trash: true })];
+    const records = this.db.prepare(`SELECT entity_id AS id,type,domain,MIN(MIN(deleted)) OVER (PARTITION BY entity_id) AS deleted
+      FROM head_read_index WHERE entity_id IN (SELECT entity_id FROM head_read_index GROUP BY entity_id HAVING MIN(purged)=0)
+      GROUP BY entity_id,type,domain`).all();
     const scopes = new Map();
     const noteIds = new Set(records.filter(record => record.type === 'note').map(record => record.id));
     for (const record of records.filter(record => CONTENT_TYPES.includes(record.type))) {
       if (record.type === 'folder' && noteIds.has(legacyNoteId(record.id))) continue;
-      for (const scope of new Set(record.versions.map(version => version.data.domain))) {
+      for (const scope of [record.domain]) {
         if (scope === GLOBAL_SCOPE || scope === MATERIAL_SCOPE) continue;
         const count = scopes.get(scope) || { active: 0, total: 0 };
         count.total++;
@@ -593,6 +610,12 @@ export class Store {
       this.db.prepare('DELETE FROM events WHERE entity_id=?').run(receipt.entityId);
       for (const table of ['pending', 'rejected']) this.db.prepare(`DELETE FROM ${table} WHERE json_extract(json,'$.entityId')=?`).run(receipt.entityId);
     }
+    const projection = this.local('hierarchyProjectionState');
+    if (projection && receipts.length) {
+      const erased = new Set(receipts.map(receipt => receipt.entityId));
+      this.local('hierarchyProjectionState', Object.fromEntries(Object.entries(projection).filter(([id, entry]) =>
+        !erased.has(id) && !(entry.dependencies || []).some(ref => erased.has(ref)))));
+    }
     this.local('hierarchyDirty', true);
   }
   allEvents() { return this.db.prepare('SELECT json FROM events ORDER BY rowid').all().map(row => JSON.parse(row.json)); }
@@ -669,16 +692,15 @@ export class Store {
   }
   summary() {
     const stats = this.db.prepare(`WITH current AS (
-      SELECT e.type,h.entity_id,COUNT(*) AS branches,MIN(json_extract(e.json,'$.deleted')) AS deleted,
-        MIN(COALESCE(json_extract(e.json,'$.purged'),0)) AS purged
-      FROM heads h JOIN events e ON e.id=h.event_id GROUP BY h.entity_id,e.type)
+      SELECT type,entity_id,COUNT(*) AS branches,MIN(deleted) AS deleted,MIN(purged) AS purged
+      FROM head_read_index GROUP BY entity_id,type)
       SELECT type,SUM(deleted=0) AS active,SUM(deleted=1) AS trash,SUM(branches>1) AS conflicts FROM current WHERE purged=0 GROUP BY type`).all();
     return { deviceId: this.deviceId, deviceName: this.getMeta('deviceName'),
       counts: Object.fromEntries(TYPES.map(type => [type, stats.find(s => s.type === type)?.active || 0])),
       conflicts: stats.reduce((sum, s) => sum + s.conflicts, 0),
       trash: stats.reduce((sum, s) => sum + s.trash, 0), pendingParents: this.db.prepare('SELECT COUNT(*) AS n FROM pending').get().n,
       unexported: this.db.prepare('SELECT COUNT(*) AS n FROM events WHERE exported=0').get().n,
-      domains: this.db.prepare("SELECT DISTINCT json_extract(e.json,'$.data.domain') AS name FROM heads h JOIN events e ON e.id=h.event_id").all().map(row => row.name),
+      domains: this.db.prepare('SELECT DISTINCT domain AS name FROM head_read_index').all().map(row => row.name),
       lastReceiptAt: this.getMeta('lastReceiptAt') || null };
   }
 }

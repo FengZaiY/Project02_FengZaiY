@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { richReferences } from './rich-content.mjs';
-import { canonical, check, isId, outside } from './util.mjs';
+import { canonical, check, isId, outside, sha } from './util.mjs';
 import { personalReferences, MATERIAL_SCOPE } from './personal-schema.mjs';
 import { isReadableAsset, materialLocation } from './readable-storage.mjs';
 
@@ -85,11 +85,14 @@ export class AssetManagement {
     } else if (parts[0] === '.fengzai-y' && parts[1] === 'materials') { kind = 'central'; label = '集中原件'; }
     else if (parts.length === 3 && parts[1] === 'attachments') { kind = 'import'; label = '导入存放位置'; }
     else if (parts[0] === 'received-objects') { kind = 'received'; label = '接收存放位置'; }
+    let previewIdentity;
     try {
-      const stat = fs.statSync(file);
-      state = stat.isFile() && stat.size === record.data.size ? 'available' : 'changed';
+      const stat = fs.statSync(file, { bigint: true });
+      state = stat.isFile() && stat.size === BigInt(record.data.size) ? 'available' : 'changed';
+      if (state === 'available' && stat.ino !== 0n) previewIdentity = sha(canonical([file, record.heads, record.data.sha256,
+        ...[stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].map(String)]));
     } catch {}
-    return { state, kind, label, path: file, directory, filename: path.basename(file), withinRoot,
+    return { state, kind, label, path: file, directory, filename: path.basename(file), withinRoot, previewIdentity,
       relativeDirectory: withinRoot ? path.relative(this.store.directory, directory) : null };
   }
   rows(trash = false) {

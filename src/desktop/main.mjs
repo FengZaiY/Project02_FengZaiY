@@ -16,7 +16,7 @@ import { SecretClipboard } from './secret-clipboard.mjs';
 import { userExportPath } from '../core/material-center.mjs';
 import { activateDesktopWindow } from './window-activation.mjs';
 
-protocol.registerSchemesAsPrivileged([{ scheme: 'fengzaiy-media', privileges: { standard: true, secure: true, stream: true } }]);
+protocol.registerSchemesAsPrivileged([{ scheme: 'fengzaiy-media', privileges: { standard: true, secure: true, stream: true, corsEnabled: true } }]);
 
 const base = path.resolve(fileURLToPath(new URL('../../', import.meta.url)));
 const profileArg = process.argv.find(arg => arg.startsWith('--data-dir='));
@@ -49,7 +49,10 @@ else {
       check(!allowClose, '正在退出，请稍候');
       const url = new URL(request.url);
       check(url.hostname === 'asset' && isId(url.pathname.slice(1)), 'Invalid media reference');
-      return await mediaResponse(service.store, url.pathname.slice(1), request.headers.get('range'), request.method);
+      const response = await mediaResponse(service.store, url.pathname.slice(1), request.headers.get('range'), request.method);
+      // Only the local file renderer may read pixels for its in-memory thumbnail cache.
+      if (request.headers.get('origin') === 'null') response.headers.set('Access-Control-Allow-Origin', 'null');
+      return response;
     } catch { return new Response('Media unavailable', { status: 404 }); }
   });
   await service.agents.resume();

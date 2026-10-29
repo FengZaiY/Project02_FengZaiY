@@ -15,7 +15,7 @@
 
 ## 当前发布仓库
 
-用户提供并选择共用现有公开仓库 `FengZaiY/Project02_StudySelf`。默认来源已写入 `package.json` 的 `fengzaiyUpdateSource`；源码仍按原方式管理，安装包放在 `https://github.com/FengZaiY/Project02_StudySelf/releases`。本轮只读取公开页面确认仓库属性，不修改远端 Git 配置、不推送、不发布。
+用户提供并选择共用公开仓库，现已更名为 `FengZaiY/Project02_FengZaiY`。从 0.1.16 起，`package.json` 的 `fengzaiyUpdateSource` 及新安装包使用新地址；安装包放在 `https://github.com/FengZaiY/Project02_FengZaiY/releases`。历史版本附件及构建来源记录保留，不追改。
 
 如以后需要将分发与源码分开：
 
