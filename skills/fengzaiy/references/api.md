@@ -24,8 +24,12 @@ MCP 配置示例不包含真实凭证，由受信任界面显示/复制。已连
 | 导入已知本机文件 | `FengZaiY_operation_catalog` 后 `FengZaiY_operation(assetImport)` | 返回操作 ID 只证明提交，须等待本机确认 |
 | 核对导入结果 | `FengZaiY_operation_result`，传返回的操作 ID | `completed` 且 `record` 能读取返回附件 ID；不是 requestId 或文件名 |
 | 补齐笔记附件 | `FengZaiY_record` → `FengZaiY_note_update` → `FengZaiY_record` | 合并 `data.assetIds`，完整保留正文等字段、传读取时 heads，回读核对保存内容 |
+| 提交整理方案 | `FengZaiY_propose` → `FengZaiY_record {id:返回的方案ID}` | 方案正文、目标、项数和状态回读一致；待确认不等于正式笔记已更新 |
+| 修改待确认方案 | `FengZaiY_record` → `FengZaiY_proposal_revise` → `FengZaiY_record` | 保留已确认项，使用方案 heads 与项 ID；不重建已确认方案 |
 
 `isError:true` 时读取实际错误码和消息；pending、local_action_required 及 bootstrap 成功不代表业务完成。一次请求重试保留 requestId 和正文；失败、过期或拒绝后重新核对，不通过换 ID 或上传方式跳过本机确认。只新增附件关联不调用 relation_create 代替 assetIds。源码验证、安装包升级、技能副本更新与已打开对话的重新加载分别核验，不能互相替代。
+
+方案提交的中断恢复及结束前核验见 [提交整理方案](../SKILL.md#提交整理方案)。propose 返回 `type:proposal` 的记录，业务 ID 在 `structuredContent.value.id`；各项状态在 `data.items` / `data.materialItems`。`requestId` 只作幂等身份，不能传给 record；operation_result 只查询 operation 请求。没有调用 propose 是未提交，不能伪报接口错误；响应丢失或回读失败时先核对已有结果，不盲目新建。
 
 ## 扩展操作
 

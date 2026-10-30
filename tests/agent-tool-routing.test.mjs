@@ -120,3 +120,47 @@ test('confirmed routing preferences reach new connections and exported skill whi
   const draft = value(await fresh.write('draftCreate', { data }));
   assert.equal(value(await fresh.call('record', { id: draft.id })).data.content, data.content);
 });
+
+test('proposal submission survives a lost response and fresh connection without duplicating or applying notes', async t => {
+  const { service, library, connect } = await setup(t);
+  const source = service.store.write({ type: 'source', data: { title: '原始出处', domain: library.data.domain, content: '隔离来源' } });
+  const parent = service.store.write({ type: 'note', data: { title: '上级笔记', domain: library.data.domain, content: '上级正文' } });
+  const original = service.store.write({ type: 'note', data: {
+    title: '待补充笔记', domain: library.data.domain, parentNoteId: parent.id, format: 'html',
+    content: '<p>原文与<strong>人工修改</strong></p>', sourceIds: [source.id], assetIds: [], sensitive: true
+  } });
+  const first = await connect();
+  const read = value(await first.call('record', { id: original.id }));
+  assert.equal(value(await first.call('search', { type: 'proposal', domain: library.data.domain })).total, 0);
+  assert.deepEqual(service.store.get(original.id).heads, original.heads);
+
+  const requestId = uuid(), input = { title: '补充既有内容', domain: library.data.domain,
+    items: [{ targetId: read.id, parents: read.heads,
+      data: { ...read.data, content: read.data.content + '<h2>补充</h2><p>待确认的新内容</p>' } }] };
+  // The write reaches the server, but the next session has no proposal ID from its response.
+  await first.write('propose', input, requestId);
+  await first.client.close();
+  const second = await connect();
+  const replay = value(await second.call('propose', {
+    ...input, requestId, preferencesVersion: first.boot.preferences.version
+  }));
+  assert.equal(replay.type, 'proposal');
+  const verified = value(await second.call('record', { id: replay.id }));
+  assert.equal(verified.data.items.length, 1);
+  const item = verified.data.items[0];
+  assert.equal(item.status, 'pending');
+  assert.equal(item.targetId, original.id);
+  assert.deepEqual(item.parents, original.heads);
+  assert.deepEqual(item.data, input.items[0].data);
+  assert.deepEqual(value(await second.call('record', { id: original.id })).data, read.data);
+  const proposals = value(await second.call('search', { type: 'proposal', domain: library.data.domain }));
+  assert.equal(proposals.total, 1);
+  assert.equal(proposals.records[0].id, replay.id);
+  assert.equal(errorCode(await second.write('propose', { ...input, title: '同请求换正文' }, requestId)), 'CONFLICT');
+
+  const edited = service.store.write({ id: original.id, type: 'note', parents: original.heads,
+    data: { ...read.data, content: '<p>用户后来修改</p>' } });
+  assert.equal(errorCode(await second.write('propose', input)), 'CONFLICT');
+  assert.deepEqual(value(await second.call('record', { id: original.id })).heads, edited.heads);
+  assert.equal(value(await second.call('search', { type: 'proposal', domain: library.data.domain })).total, 1);
+});
