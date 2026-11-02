@@ -186,9 +186,20 @@ try {
   await page.locator('#toast', { hasText: '笔记已变化' }).waitFor();
   assert.deepEqual(store.get(closed.id).heads, remote.heads);
   assert.equal(store.get(closed.id).data.parentNoteId, null);
-  await page.evaluate(() => { window.beforeRefresh = document.querySelector('.tiptap'); });
+  await page.evaluate(id => {
+    window.beforeRefresh = document.querySelector('.tiptap');
+    window.beforeRefreshNode = document.querySelector(`[data-note="${id}"][data-note-drag]`);
+  }, closed.id);
+  const refreshedTree = page.waitForResponse(response => response.url().endsWith('/api') && response.ok()
+    && response.request().postDataJSON()?.method === 'noteTree');
   await page.locator('[data-action=refresh-view]').click();
-  await page.waitForFunction(() => document.querySelector('.tiptap') && document.querySelector('.tiptap') !== window.beforeRefresh);
+  assert.deepEqual((await (await refreshedTree).json()).value.find(item => item.id === closed.id).heads, remote.heads);
+  await page.waitForFunction(id => {
+    const current = document.querySelector(`[data-note="${id}"][data-note-drag]`);
+    return current && current !== window.beforeRefreshNode;
+  }, closed.id);
+  assert.equal(await page.evaluate(() => document.querySelector('.tiptap') === window.beforeRefresh), true,
+    'Refreshing another note must preserve the unchanged foreground editor and undo history');
   await node(closed.id).waitFor();
   await drag(closed.id, node(parent.id));
   await until(() => store.get(closed.id).data.parentNoteId === parent.id);
@@ -199,12 +210,16 @@ try {
   await node(parent.id).click();
   await page.waitForFunction(() => document.querySelector('#note-title')?.value === '主题概览' && document.querySelector('.tiptap')?.editor);
   await page.evaluate(() => { window.orderEditor = document.querySelector('.tiptap').editor; });
-  await page.locator('.tiptap').press('Control+End'); await page.keyboard.insertText(' 排序期间的父笔记输入');
+  await page.locator('.tiptap').press('Control+End');
   const rootIds = () => store.noteTree(library.id).filter(item => item.parentNoteId === null).map(item => item.id);
   const beforeOrderFile = store.assetLocation(asset.id).path;
   await startDrag(child.id); await hover(node(parent.id), 0.9);
   await page.locator('.note-drop-after').waitFor();
   await page.screenshot({ path: path.join(root, 'sibling-after-1304.png') });
+  // Keep this sibling edit queued until drop. Typing before the drag/screenshot can
+  // fire autosave first and legitimately invalidate the observed sibling versions.
+  await page.locator('.tiptap').evaluate(element => element.editor.commands.insertContent(' 排序期间的父笔记输入'));
+  assert.equal(await page.locator('[data-action=save]').getAttribute('data-status'), 'queued');
   await page.mouse.up();
   await until(() => rootIds().indexOf(child.id) === rootIds().indexOf(parent.id) + 1);
   await saved();

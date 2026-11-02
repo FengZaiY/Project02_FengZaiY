@@ -125,7 +125,7 @@ export class Service {
     return { ...summary, readEpoch: `${this.store.readGeneration}:${this.store.readEpoch()}`, sync: this.transport.config(),
       ...(!light ? { libraries: this.store.directories.describe(this.store.libraries()),
         workspace: this.store.local('workspace') || { tabs: [], selectedTab: null } } : {}),
-      version: '0.1.19', uiProtocol: UI_PROTOCOL, localDataDirectory: this.store.directory, localHierarchy: this.localHierarchy.status(), deletion: deletionStatus(this.store),
+      version: '0.1.20', uiProtocol: UI_PROTOCOL, localDataDirectory: this.store.directory, localHierarchy: this.localHierarchy.status(), deletion: deletionStatus(this.store),
       skillInstallations: this.skillInstallations.summary(), agentPending: this.agentOperations.list().filter(item => item.state === 'pending').length };
   }
   async finishDeletion() {
@@ -266,8 +266,7 @@ export class Service {
       case 'skillInstallConfigure': return this.skillInstallations.configure(input);
       case 'skillInstallUnlink': return this.skillInstallations.unlink(input);
       case 'librarySave': return this.store.change('保存知识库', '用户', () => this.store.saveLibrary(input));
-      case 'noteTree': return this.store.memoRead(`navigation:${input.domain || ''}`, () => this.store.noteTree(input.domain).map(({ data, versions, ...node }) =>
-        ({ ...node, data: { title: data.title, domain: data.domain, parentNoteId: data.parentNoteId, noteOrder: data.noteOrder } })));
+      case 'noteTree': return this.store.memoRead(`navigation:${input.domain || ''}`, () => this.store.noteNavigation(input.domain));
       case 'noteMove': return this.store.change('移动笔记', '用户', () => this.store.moveNote(input));
       case 'folders': return this.store.folders(input.domain);
       case 'folderSave': {

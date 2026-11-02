@@ -12,7 +12,7 @@ import { cleanDraftRefs, requireSaved, validateDraftRefs } from './draft-workflo
 import { validateAssetChange } from './asset-management.mjs';
 import { LibraryDirectories, legacyLibraryId } from './library-directories.mjs';
 import { folderTree, folderEmpty, placedTypes, validatePlacement } from './hierarchy.mjs';
-import { noteTree, hasNoteChildren, validateNotePlacement, validateProposalHierarchy, orderedProposalItems, migrateLegacyHierarchy, legacyNoteId } from './note-hierarchy.mjs';
+import { noteTree, buildNoteTree, hasNoteChildren, validateNotePlacement, validateProposalHierarchy, orderedProposalItems, migrateLegacyHierarchy, legacyNoteId } from './note-hierarchy.mjs';
 import { compareNoteOrder, orderBetween, validNoteOrder } from './note-order.mjs';
 import { uuid, now, sha, canonical, check, isId, isHash, atomicWrite, encrypt, decrypt } from './util.mjs';
 import { persistentRevisionData, revisionChecksum } from './revision-integrity.mjs';
@@ -20,7 +20,7 @@ import { PERSONAL_TYPES, MATERIAL_SCOPE, cleanPersonal } from './personal-schema
 import { validatePersonalWrite } from './personal-records.mjs';
 import { cleanMaterialItems, validateManagedFilename, validateMaterialPlacement, approveMaterialItems } from './material-organization.mjs';
 import { databasePath, deviceKeyPath } from './workspace-layout.mjs';
-import { createReadIndex, selectRecordIds } from './read-index.mjs';
+import { createReadIndex, selectRecordIds, selectNoteNavigation } from './read-index.mjs';
 const GLOBAL_SCOPE = '__all_libraries__';
 
 const COMMON = ['title', 'domain', 'tags', 'sensitive'];
@@ -475,6 +475,7 @@ export class Store {
   }
   folders(domain) { return folderTree(this, domain); }
   noteTree(domain) { return noteTree(this, domain); }
+  noteNavigation(domain) { return buildNoteTree(selectNoteNavigation(this.db, domain, this.deviceId)); }
   migrateNoteHierarchy() { return migrateLegacyHierarchy(this, cleanData); }
   moveNote({ id, parentNoteId = null, parents, data, notePlacement }) {
     return this.transaction(() => {

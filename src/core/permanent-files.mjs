@@ -87,9 +87,8 @@ export function scheduleDeletion(store, ids, files) {
 
 export function deletionStatus(store) {
   const files = store.local('permanentDeletionFiles') || [];
-  const legacy = store.db.prepare(`SELECT e.entity_id, (SELECT count(*) FROM events v WHERE v.entity_id=e.entity_id) AS revisions
-    FROM heads h JOIN events e ON e.id=h.event_id GROUP BY e.entity_id
-    HAVING min(COALESCE(json_extract(e.json,'$.purged'),0))=1`).all();
+  const legacy = store.db.prepare(`SELECT c.entity_id, (SELECT count(*) FROM events v WHERE v.entity_id=c.entity_id) AS revisions
+    FROM (SELECT entity_id FROM head_read_index GROUP BY entity_id HAVING min(purged)=1) c`).all();
   const legacyArchives = ['version-repositories', 'version-staging'].filter(name => fs.existsSync(path.join(store.directory, name)));
   return { files, pending: files.filter(item => item.state !== 'done').length,
     legacyCleared: { count: legacy.length, revisions: legacy.reduce((sum, item) => sum + item.revisions, 0) },

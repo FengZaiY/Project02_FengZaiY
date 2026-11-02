@@ -58,3 +58,31 @@ export function selectRecordIds(db, { type, domain, query, trash = false, limit,
       WHERE h.entity_id=c.entity_id AND fengzaiy_search(e.json,?))` : ''}
     ORDER BY updated DESC,first_head ASC ${bounded ? 'LIMIT ?' : ''}`).all(...args).map(row => row.entity_id);
 }
+
+// Navigation needs every current branch, but never the body or its attachment arrays.
+// Extract in SQLite so large note JSON does not cross into JS or enter the navigation cache.
+export function selectNoteNavigation(db, domain, deviceId) {
+  const ids = selectRecordIds(db, { type: 'note', domain });
+  if (!ids.length) return [];
+  const rows = db.prepare(`SELECT i.entity_id,i.event_id,i.created_at,i.deleted,e.exported,e.received,
+    EXISTS(SELECT 1 FROM receipts r WHERE r.event_id=e.id AND r.device_id<>?) AS acknowledged,
+    json_extract(e.json,'$.data.title') AS title,json_extract(e.json,'$.data.domain') AS domain,
+    json_extract(e.json,'$.data.parentNoteId') AS parent,json_type(e.json,'$.data.parentNoteId') AS parent_type,
+    json_extract(e.json,'$.data.noteOrder') AS note_order,json_type(e.json,'$.data.noteOrder') AS order_type
+    FROM head_read_index i JOIN events e ON e.id=i.event_id
+    WHERE i.entity_id IN (SELECT value FROM json_each(?)) ORDER BY i.event_id`).all(deviceId, JSON.stringify(ids));
+  const grouped = new Map();
+  for (const row of rows) {
+    if (!grouped.has(row.entity_id)) grouped.set(row.entity_id, []);
+    grouped.get(row.entity_id).push(row);
+  }
+  return [...grouped].map(([id, heads]) => {
+    const selected = heads.find(head => !head.deleted) || heads[0];
+    const states = heads.map(head => head.received || head.acknowledged ? 'received' : head.exported ? 'waiting' : 'local');
+    return { id, type: 'note', data: { title: selected.title, domain: selected.domain,
+      parentNoteId: selected.parent_type ? selected.parent : undefined, noteOrder: selected.order_type ? selected.note_order : undefined },
+      heads: heads.map(head => head.event_id), conflict: heads.length > 1, deleted: heads.every(head => head.deleted),
+      updatedAt: heads.map(head => head.created_at).sort().at(-1),
+      status: states.includes('local') ? 'local' : states.includes('waiting') ? 'waiting' : 'received' };
+  }).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+}

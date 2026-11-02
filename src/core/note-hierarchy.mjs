@@ -3,7 +3,11 @@ import { canonical, check, sha } from './util.mjs';
 import { compareNoteOrder } from './note-order.mjs';
 
 export function noteTree(store, domain) {
-  const records = store.list({ type: 'note', domain }), byId = new Map(records.map(record => [record.id, record])), result = new Map();
+  return buildNoteTree(store.list({ type: 'note', domain }));
+}
+
+export function buildNoteTree(records) {
+  const byId = new Map(records.map(record => [record.id, record])), result = new Map();
   function visit(record, trail = []) {
     if (result.has(record.id)) return result.get(record.id);
     if (trail.includes(record.id) || trail.length >= 16) return { issue: '笔记层级循环或超过 16 层', path: [], depth: 0 };

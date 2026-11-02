@@ -4,8 +4,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { Store } from '../src/core/store.mjs';
 import { Service } from '../src/core/service.mjs';
-import { canonical, sha } from '../src/core/util.mjs';
+import { canonical, sha, uuid } from '../src/core/util.mjs';
 import { readFileWork, fileWorkStatus } from '../src/core/file-work.mjs';
+import { deletionStatus } from '../src/core/permanent-files.mjs';
 
 const root = path.resolve('artifacts/performance-tests'); fs.mkdirSync(root, { recursive: true });
 function legacyList(store, { type, domain, query, trash = false, limit } = {}) {
@@ -38,6 +39,82 @@ test('metadata paging preserves full-branch search, scopes, deletion, stable tie
   assert.deepEqual(store.libraries(), libraries);
   assert.equal(store.list({ domain: 'C' }).length, 0);
   const sample = store.libraries(); sample[0].data.title = 'mutable caller'; assert.deepEqual(store.libraries(), libraries);
+});
+
+test('lightweight navigation equals full notes across branches, broken parents, receipts and rollback', async t => {
+  const directory = fs.mkdtempSync(path.join(root, 'navigation-'));
+  const service = new Service(directory); await service.ready; t.after(() => service.close());
+  const store = service.store;
+  const note = (title, extra = {}) => store.write({ type: 'note', data: { title, domain: 'A', content: '大段正文'.repeat(12000), ...extra } });
+  const parent = note('中文上级'), child = note('下级', { parentNoteId: parent.id, noteOrder: '1/3' });
+  const explicitNull = note('同名', { parentNoteId: null, noteOrder: null }), other = note('同名', { domain: 'B' });
+  const deleted = note('普通回收'), cleared = note('旧清空'), conflict = note('并发');
+  store.remove(deleted.id, deleted.heads); const removed = store.remove(cleared.id, cleared.heads);
+  store.transaction(() => store.purgeRaw(cleared.id, removed.heads));
+  const append = (record, data, deleted = false) => {
+    const { hash, ...original } = store.event(record.heads[0]);
+    const event = { ...original, id: uuid(), parents: record.heads, data: { ...original.data, ...data }, deleted };
+    store.importEvents([{ ...event, hash: sha(canonical(event)) }]);
+  };
+  append(conflict, { title: '并发 A' }); append(conflict, { domain: 'B', title: '并发 B' }, true);
+  const orphan = note('缺失上级'), cycleA = note('循环甲'), cycleB = note('循环乙');
+  append(orphan, { parentNoteId: uuid() }); append(cycleA, { parentNoteId: cycleB.id }); append(cycleB, { parentNoteId: cycleA.id });
+  const expected = domain => store.noteTree(domain).map(({ data, versions, ...node }) => ({ ...node,
+    data: { title: data.title, domain: data.domain, parentNoteId: data.parentNoteId, noteOrder: data.noteOrder } }));
+  const compare = () => {
+    for (const domain of [undefined, 'A', 'B', 'missing']) assert.deepEqual(store.noteNavigation(domain), expected(domain));
+  };
+  compare();
+  assert.ok(store.noteNavigation('A').find(node => node.id === orphan.id).issue);
+  assert.equal(store.noteNavigation('A').find(node => node.id === child.id).parentNoteId, parent.id);
+  for (const domain of [undefined, 'A', 'B']) assert.deepEqual(await service.call('noteTree', { domain }), expected(domain));
+  const returned = await service.call('noteTree', {}); returned[0].data.title = 'caller change';
+  assert.deepEqual(await service.call('noteTree', {}), expected());
+  const allHeads = store.noteNavigation().flatMap(node => node.heads);
+  store.markExported(allHeads); compare();
+  assert.deepEqual(await service.call('noteTree', {}), expected());
+  store.receipt(allHeads, store.deviceId, new Date().toISOString()); compare();
+  store.receipt(allHeads, uuid(), new Date().toISOString()); compare();
+  assert.deepEqual(await service.call('noteTree', {}), expected());
+  const before = await service.call('noteTree', {});
+  assert.throws(() => store.transaction(() => {
+    store.writeRaw({ id: explicitNull.id, type: 'note', parents: explicitNull.heads, data: { ...explicitNull.data, title: '临时改名', noteOrder: '-1/3' } });
+    compare(); throw new Error('rollback navigation');
+  }), /rollback navigation/);
+  assert.deepEqual(await service.call('noteTree', {}), before);
+  store.write({ id: other.id, type: 'note', parents: other.heads, data: { ...other.data, title: '保存后的名称' } });
+  assert.deepEqual(await service.call('noteTree', {}), expected());
+  const reopened = new Store(directory); t.after(() => reopened.close());
+  assert.deepEqual(reopened.noteNavigation(), expected());
+});
+
+test('legacy-cleared status counts all history and stays current through rollback, conflicts and physical removal', t => {
+  const store = new Store(fs.mkdtempSync(path.join(root, 'legacy-status-'))); t.after(() => store.close());
+  const note = title => store.write({ type: 'note', data: { title, domain: 'A', content: '历史正文'.repeat(1000) } });
+  const a = note('已清空'), b = note('回滚'), active = note('仍存续');
+  const removedA = store.remove(a.id, a.heads), removedB = store.remove(b.id, b.heads);
+  const compare = () => {
+    const history = store.allEvents(), ids = new Set(history.map(event => event.entityId));
+    const cleared = [...ids].filter(id => { const heads = store.headIds(id).map(head => store.event(head)); return heads.length && heads.every(head => head.purged); });
+    assert.deepEqual(deletionStatus(store).legacyCleared, { count: cleared.length,
+      revisions: history.filter(event => cleared.includes(event.entityId)).length });
+  };
+  compare(); store.transaction(() => store.purgeRaw(a.id, removedA.heads)); compare();
+  assert.equal(deletionStatus(store).legacyCleared.count, 1);
+  assert.throws(() => store.transaction(() => { store.purgeRaw(b.id, removedB.heads); compare(); throw new Error('rollback status'); }), /rollback status/);
+  compare(); assert.equal(deletionStatus(store).legacyCleared.count, 1);
+  const { hash, ...original } = store.event(removedA.heads[0]);
+  const concurrent = { ...original, id: uuid(), parents: removedA.heads, deleted: false, data: { ...original.data, content: '远端新分支' } };
+  store.importEvents([{ ...concurrent, hash: sha(canonical(concurrent)) }]); compare();
+  assert.equal(deletionStatus(store).legacyCleared.count, 0);
+  store.transaction(() => store.purgeRaw(b.id, removedB.heads)); compare();
+  store.transaction(() => {
+    store.db.prepare('DELETE FROM heads WHERE entity_id=?').run(b.id);
+    store.db.prepare('DELETE FROM events WHERE entity_id=?').run(b.id);
+    compare();
+  });
+  assert.equal(deletionStatus(store).legacyCleared.count, 0);
+  assert.equal(store.get(active.id).data.title, '仍存续');
 });
 
 test('incremental projections only rewrite changed notes and propagate parent renames; explicit checks protect edits', async t => {

@@ -28,6 +28,15 @@ function request(store, id, targetId, side = 'before') {
 }
 const names = (store, domain, parent = null) => store.noteTree(domain).filter(node => node.parentNoteId === parent).map(node => node.data.title);
 
+test('reused Chinese title collation preserves mixed-language ordering and deterministic ties', () => {
+  const titles = ['中文', '知识', '重', '重庆', 'A', 'a', 'Ａ', 'é', 'e\u0301', '10', '2', '笔记2', '笔记10', '🙂', '同名', '同名', ''];
+  const records = titles.map((title, index) => ({ id: String(index).padStart(3, '0'), data: { title } }));
+  for (const a of records) for (const b of records) {
+    const previous = a.data.title.localeCompare(b.data.title, 'zh-CN') || a.id.localeCompare(b.id);
+    assert.equal(Math.sign(compareNoteOrder(a, b)), Math.sign(previous));
+  }
+});
+
 test('sibling placement persists, moves whole subtrees and changes only necessary history', t => {
   const f = fixture(t), a = f.note('A'), b = f.note('B'), c = f.note('C'), child = f.note('子', c.id);
   const originalEvents = f.store.allEvents();

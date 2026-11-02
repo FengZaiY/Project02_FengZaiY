@@ -1,4 +1,6 @@
 // Exact fractions avoid float exhaustion when repeatedly inserting between neighbours.
+const titleCollator = new Intl.Collator('zh-CN');
+
 export function validNoteOrder(value) {
   return value === null || typeof value === 'string' && /^(0|-[1-9]\d*|[1-9]\d*)\/[1-9]\d*$/.test(value) && value.length <= 2048;
 }
@@ -11,7 +13,7 @@ export function compareNoteOrder(a, b) {
     return delta < 0n ? -1 : delta > 0n ? 1 : a.id.localeCompare(b.id);
   }
   if (left || right) return left ? -1 : 1;
-  return a.data.title.localeCompare(b.data.title, 'zh-CN') || a.id.localeCompare(b.id);
+  return titleCollator.compare(a.data.title, b.data.title) || a.id.localeCompare(b.id);
 }
 
 export function orderBetween(left, right) {
